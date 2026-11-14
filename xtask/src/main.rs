@@ -1,6 +1,6 @@
 //! ShapeCraft's build and maintenance jobs, in Rust like the app (the Craft apps' `cargo xtask` convention).
 //!
-//!   cargo xtask bundle-mac          ShapeCraft.app + DMG from a release build (macOS)
+//!   cargo xtask bundle-mac [--universal]  ShapeCraft.app + DMG from a release build (macOS; --universal: both chips)
 //!   cargo xtask bundle-linux        self-contained folder + .tar.gz (Linux; BUNDLE_CXX_RUNTIME=1 adds libstdc++)
 //!   cargo xtask appimage            AppImage from bundle-linux's folder (APPIMAGETOOL=path)
 //!   cargo xtask linux-packages      .deb and .rpm from bundle-linux's folder (nfpm)
@@ -34,7 +34,7 @@ fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
     let result = match args.first().map(String::as_str) {
-        Some("bundle-mac") => mac::bundle(),
+        Some("bundle-mac") => mac::bundle(rest),
         Some("bundle-linux") => linux::bundle(),
         Some("appimage") => linux::appimage(),
         Some("linux-packages") => linux::packages(),

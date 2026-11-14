@@ -2,6 +2,12 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.8.6-alpha
+**One Mac download for every Mac.**
+### Changed
+- **The Mac download is now a single universal app** that runs natively on Apple silicon and Intel Macs, so there's
+  no longer a choice to make on the download page. Copies already installed update into it on their own, as usual.
+
 ## 0.8.5-alpha
 **Large projects import, save and select much faster, and .shapr imports bring in more of the model.**
 ### Changed

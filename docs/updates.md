@@ -30,12 +30,18 @@ ShapeCraft keeps itself up to date. Nobody has to visit a download page.
 
 | Installed as | Downloads | Swap |
 |---|---|---|
-| macOS `ShapeCraft.app` (anywhere writable, usually Applications) | `…-macos-<arch>.dmg` | old bundle aside, new one in, old removed |
+| macOS `ShapeCraft.app` (anywhere writable, usually Applications) | `…-macos-universal.dmg` (up to 0.8.5: `…-macos-<arch>.dmg`, see below) | old bundle aside, new one in, old removed |
 | Windows MSI (`installed-by-msi.txt` beside the program) | `…-windows-x64.msi` | `msiexec /i` with a progress bar only (a major upgrade of the same product) |
 | Windows, by the old setup program (up to 0.7.10) | `…-windows-x64.msi` | the MSI into the same folder, then the setup program's uninstaller, Apps & features entry and Start menu folder are removed |
 | Windows portable zip | `…-windows-x64-portable.zip` | new files copied over the folder |
 | Linux AppImage | `…-linux-x86_64.AppImage` | new file moved over the old one |
 | Linux download (`bin/`, `lib/`, unpacked or put in `~/.local/lib/shapecraft` by `install.sh`) | `…-linux-x86_64.tar.gz` | old folder aside, new one in, old removed |
+
+Since 0.8.6 the Mac download is one universal disk image (Apple silicon and Intel). Copies up to 0.8.5 look for
+`-macos-arm64.dmg` or `-macos-x86_64.dmg`, so every release also carries that same image twice more, as
+`shapecraft-<version>-autoupdate-only-macos-arm64.dmg` and `…-autoupdate-only-macos-x86_64.dmg` (the website and
+release notes point people at the universal one). They update into the universal app and look for the universal name
+from then on. Drop the two extra files only once nobody can still be on 0.8.5 or older.
 
 A copy that can't update in place says why and offers the download page instead: one running from its disk image
 or from App Translocation (macOS: move it to Applications), or a build installed by a package manager (the .deb and

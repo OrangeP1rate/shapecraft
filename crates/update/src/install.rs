@@ -81,7 +81,9 @@ impl Install {
             _ => return None,
         };
         match self {
-            Install::MacApp(_) => Some(format!("-macos-{arch}.dmg")),
+            // One disk image for both chips since 0.8.6. Releases also carry it as `…-macos-arm64.dmg` and
+            // `…-macos-x86_64.dmg`, the names copies up to 0.8.5 look for, so they keep updating.
+            Install::MacApp(_) => Some("-macos-universal.dmg".into()),
             // A copy from the old setup program moves to the MSI at its next update (apply.rs).
             Install::WindowsInstalled(_) | Install::WindowsMsi(_) if arch == "x86_64" => Some("-windows-x64.msi".into()),
             Install::WindowsPortable(_) if arch == "x86_64" => Some("-windows-x64-portable.zip".into()),
@@ -250,6 +252,14 @@ pub fn this_install() -> Install {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mac_app_updates_from_the_universal_disk_image() {
+        let mac = Install::MacApp(PathBuf::from("/Applications/ShapeCraft.app"));
+        if matches!(std::env::consts::ARCH, "aarch64" | "x86_64") {
+            assert_eq!(mac.asset_suffix().as_deref(), Some("-macos-universal.dmg"));
+        }
+    }
 
     fn probe(os: &str, exe: &str, vars: &[(&str, &str)], files: &[&str], record: Option<&str>) -> Install {
         let vars: Vec<(String, String)> = vars.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect();

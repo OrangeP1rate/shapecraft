@@ -2,7 +2,14 @@
 //! load that macOS doesn't ship (OpenCASCADE and what it brings), so the Mac needs nothing else installed.
 //!
 //!   cargo build --release -p shapecraft -p shapecraft-cli && cargo xtask bundle-mac
-//!   → target/shapecraft-<version>-macos-<arch>.dmg
+//!   → target/shapecraft-<version>-macos-<arch>.dmg (this Mac's chip only)
+//!
+//!   cargo build --release --target aarch64-apple-darwin … && cargo build --release --target x86_64-apple-darwin …
+//!   OCCT_LIB_DIR_ARM64=… OCCT_LIB_DIR_X86_64=… cargo xtask bundle-mac --universal
+//!   → target/shapecraft-<version>-macos-universal.dmg (Apple silicon and Intel in one app; what releases ship)
+//!
+//! A universal app is put together once per chip, each from its own build and its own OCCT, then every program and
+//! library is merged with `lipo`.
 //!
 //! Libraries are found the way the loader would (absolute paths, @rpath through each file's LC_RPATH, @loader_path),
 //! with OCCT_LIB_DIR and $CONDA_PREFIX/lib as fallbacks, copied into Contents/Frameworks and pointed at from there.
@@ -49,7 +56,8 @@ fn rpaths(path: &Path) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
-fn fallbacks() -> Vec<PathBuf> {
+/// Where a single-chip bundle also looks for libraries.
+fn host_fallbacks() -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Some(d) = std::env::var_os("OCCT_LIB_DIR") {
         v.push(PathBuf::from(d));
@@ -61,10 +69,10 @@ fn fallbacks() -> Vec<PathBuf> {
 }
 
 /// Where the loader would find `name`, asked for by the file at `origin`.
-fn resolve(name: &str, origin: &Path) -> Result<PathBuf> {
+fn resolve(name: &str, origin: &Path, fallbacks: &[PathBuf]) -> Result<PathBuf> {
     let found = |p: PathBuf| p.exists().then(|| p.canonicalize().unwrap_or(p));
     if let Some(rest) = name.strip_prefix("@rpath/") {
-        for d in rpaths(origin)?.into_iter().chain(fallbacks()) {
+        for d in rpaths(origin)?.into_iter().chain(fallbacks.iter().cloned()) {
             if let Some(p) = found(d.join(rest)) {
                 return Ok(p);
             }
@@ -77,7 +85,7 @@ fn resolve(name: &str, origin: &Path) -> Result<PathBuf> {
         return Ok(p);
     }
     let base = Path::new(name).file_name().unwrap_or_default();
-    for d in fallbacks() {
+    for d in fallbacks {
         if let Some(p) = found(d.join(base)) {
             return Ok(p);
         }
@@ -137,22 +145,70 @@ fn plist(version: &str) -> String {
     )
 }
 
-pub fn bundle() -> Result<()> {
+pub fn bundle(args: &[String]) -> Result<()> {
     let version = version()?;
-    let arch = match std::env::consts::ARCH {
-        "aarch64" => "arm64",
-        a => a,
+    let universal = args.iter().any(|a| a == "--universal");
+    if let Some(other) = args.iter().find(|a| *a != "--universal") {
+        bail!("bundle-mac: unknown option {other} (only --universal)");
+    }
+    let stage = target().join("macos-bundle");
+    clear(&stage)?;
+    let app = stage.join("ShapeCraft.app");
+    let (arch, libraries) = if universal {
+        let mut counts = Vec::new();
+        let mut apps = Vec::new();
+        for (triple, var) in [("aarch64-apple-darwin", "OCCT_LIB_DIR_ARM64"), ("x86_64-apple-darwin", "OCCT_LIB_DIR_X86_64")] {
+            let lib = std::env::var_os(var).map(PathBuf::from).with_context(|| format!("--universal needs {var}"))?;
+            let one = target().join(format!("macos-bundle-{triple}"));
+            clear(&one)?;
+            let one_app = one.join("ShapeCraft.app");
+            counts.push(assemble(&one_app, &target().join(triple).join("release"), &version, &[lib])?);
+            apps.push(one_app);
+        }
+        merge(&apps[0], &apps[1], &app)?;
+        ("universal", counts.into_iter().max().unwrap_or(0))
+    } else {
+        let arch = match std::env::consts::ARCH {
+            "aarch64" => "arm64",
+            a => a,
+        };
+        (arch, assemble(&app, &target().join("release"), &version, &host_fallbacks())?)
     };
-    let release = target().join("release");
+    run("codesign", &["--force", "--deep", "--sign", "-", s(&app)])?;
+    applications_link(&stage)?;
+    let dmg = target().join(format!("shapecraft-{version}-macos-{arch}.dmg"));
+    let _ = std::fs::remove_file(&dmg);
+    run(
+        "hdiutil",
+        &[
+            "create",
+            "-quiet",
+            "-volname",
+            &format!("ShapeCraft {version}"),
+            "-srcfolder",
+            s(&stage),
+            "-fs",
+            "HFS+",
+            "-format",
+            "UDZO",
+            "-imagekey",
+            "zlib-level=9",
+            s(&dmg),
+        ],
+    )?;
+    println!("{}  ({libraries} libraries inside, {})", dmg.display(), mb(&dmg));
+    Ok(())
+}
+
+/// ShapeCraft.app at `app` (unsigned) from the programs in `release`, with every library they load copied in from
+/// where the loader would find it or from `fallbacks`. Returns how many libraries went in.
+fn assemble(app: &Path, release: &Path, version: &str, fallbacks: &[PathBuf]) -> Result<usize> {
     let exes = ["shapecraft", "shapecraft-cli"];
     for e in exes {
         if !release.join(e).exists() {
             bail!("no release build at {} (cargo build --release -p shapecraft -p shapecraft-cli)", release.join(e).display());
         }
     }
-    let stage = target().join("macos-bundle");
-    clear(&stage)?;
-    let app = stage.join("ShapeCraft.app");
     let (macos, frameworks, resources) = (app.join("Contents/MacOS"), app.join("Contents/Frameworks"), app.join("Contents/Resources"));
     for d in [&macos, &frameworks, &resources] {
         std::fs::create_dir_all(d)?;
@@ -164,7 +220,7 @@ pub fn bundle() -> Result<()> {
     for lic in ["LICENSE-MIT", "LICENSE-APACHE", "NOTICE"] {
         copy(&root().join(lic), &resources.join(lic))?;
     }
-    std::fs::write(app.join("Contents/Info.plist"), plist(&version))?;
+    std::fs::write(app.join("Contents/Info.plist"), plist(version))?;
 
     // Every non-system library, transitively, copied flat into Frameworks.
     let mut queue: Vec<(PathBuf, PathBuf)> = exes.iter().map(|e| (macos.join(e), release.join(e))).collect();
@@ -176,7 +232,7 @@ pub fn bundle() -> Result<()> {
             }
             let base = Path::new(&name).file_name().map(|b| b.to_string_lossy().into_owned()).context("a library without a name")?;
             if !copied.contains_key(&base) {
-                let src = resolve(&name, &origin)?;
+                let src = resolve(&name, &origin, fallbacks)?;
                 let dst = frameworks.join(&base);
                 copy(&src, &dst)?;
                 set_mode(&dst)?;
@@ -207,30 +263,59 @@ pub fn bundle() -> Result<()> {
     if !leaks.is_empty() {
         bail!("still pointing outside the app:\n  {}", leaks.join("\n  "));
     }
-    run("codesign", &["--force", "--deep", "--sign", "-", s(&app)])?;
-    applications_link(&stage)?;
-    let dmg = target().join(format!("shapecraft-{version}-macos-{arch}.dmg"));
-    let _ = std::fs::remove_file(&dmg);
-    run(
-        "hdiutil",
-        &[
-            "create",
-            "-quiet",
-            "-volname",
-            &format!("ShapeCraft {version}"),
-            "-srcfolder",
-            s(&stage),
-            "-fs",
-            "HFS+",
-            "-format",
-            "UDZO",
-            "-imagekey",
-            "zlib-level=9",
-            s(&dmg),
-        ],
-    )?;
-    println!("{}  ({} libraries inside, {})", dmg.display(), copied.len(), mb(&dmg));
+    Ok(copied.len())
+}
+
+/// The chips a file holds code for (`arm64 x86_64`), or None when it isn't a program or library.
+fn archs(p: &Path) -> Option<String> {
+    output("lipo", &["-archs", s(p)]).ok().map(|o| o.trim().to_string()).filter(|o| !o.is_empty())
+}
+
+/// One app from two single-chip apps: programs and libraries both have are joined with `lipo`; anything only one
+/// has (a library only one chip's OCCT needs) goes in as it is, since only that chip's programs load it.
+fn merge(a: &Path, b: &Path, out: &Path) -> Result<()> {
+    let mut rels = BTreeMap::new();
+    for (i, tree) in [a, b].into_iter().enumerate() {
+        for rel in files_under(tree, tree)? {
+            rels.entry(rel).or_insert(i);
+        }
+    }
+    for (rel, first) in rels {
+        let (pa, pb, dst) = (a.join(&rel), b.join(&rel), out.join(&rel));
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if pa.exists() && pb.exists() && archs(&pa).is_some() {
+            run("lipo", &["-create", s(&pa), s(&pb), "-output", s(&dst)])?;
+            set_mode(&dst)?;
+        } else {
+            if archs(&pa).or_else(|| archs(&pb)).is_some() {
+                println!("  only for {}: {}", if first == 0 { "Apple silicon" } else { "Intel" }, rel.display());
+            }
+            copy(if pa.exists() { &pa } else { &pb }, &dst)?;
+        }
+    }
+    for e in ["shapecraft", "shapecraft-cli"] {
+        let got = archs(&out.join("Contents/MacOS").join(e)).unwrap_or_default();
+        if !(got.contains("arm64") && got.contains("x86_64")) {
+            bail!("{e} isn't universal (has: {got})");
+        }
+    }
     Ok(())
+}
+
+/// Every file under `dir`, relative to `base`.
+fn files_under(dir: &Path, base: &Path) -> Result<Vec<PathBuf>> {
+    let mut v = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let p = entry?.path();
+        if p.is_dir() {
+            v.extend(files_under(&p, base)?);
+        } else {
+            v.push(p.strip_prefix(base)?.to_path_buf());
+        }
+    }
+    Ok(v)
 }
 
 #[cfg(unix)]

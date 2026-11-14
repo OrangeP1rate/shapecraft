@@ -151,105 +151,112 @@ pub(crate) fn edges_key(scene: &SceneInput) -> u64 {
     h.finish()
 }
 
-/// Every visible body's edges.
-pub(crate) fn body_edges(scene: &SceneInput) -> Vec<Segment> {
+/// What one body's edges depend on ([`edges_of`]): its mesh, the picks and the pointer where they are on it, and how
+/// the view draws edges. The renderer keeps each body's edges by this, so the pointer moving from one face to
+/// another makes two bodies' edges again and not every body's.
+pub(crate) fn edges_of_key(scene: &SceneInput, body: &shapecraft_doc::Body, chosen: &Chosen) -> u64 {
+    let mut h = DefaultHasher::new();
+    body.id.hash(&mut h);
+    Arc::as_ptr(&body.mesh).hash(&mut h);
+    chosen.on(body.id).hash(&mut h);
+    scene.hover.filter(|p| p.body() == Some(body.id)).hash(&mut h);
+    scene.ghosts.iter().find(|(id, _)| *id == body.id).hash(&mut h);
+    (scene.active_sketch.is_some(), scene.presentation, scene.show_edges, scene.show_hidden_edges, scene.display).hash(&mut h);
+    (scene.colors.edge, scene.colors.selected, scene.colors.hover).hash(&mut h);
+    h.finish()
+}
+
+/// One body's edges, onto `out`.
+pub(crate) fn edges_of(scene: &SceneInput, body: &shapecraft_doc::Body, chosen: &Chosen, out: &mut Vec<Segment>) {
     let c = &scene.colors;
-    let mut out = Built::default();
-    for body in scene.doc.bodies.iter().filter(|b| b.visible) {
-        // The Visualize look draws no edges, only the outline of what's picked (a picked face isn't filled there).
-        if scene.presentation {
-            for (i, (line, &edge)) in body.mesh.edges.iter().zip(&body.mesh.edge_ids).enumerate() {
-                let picked = scene.selection.contains(&Pick::Edge { body: body.id, edge })
-                    || body.mesh.edge_faces.get(i).is_some_and(|ab| {
-                        ab.iter().any(|f| *f != u32::MAX && scene.selection.contains(&Pick::Face { body: body.id, face: *f }))
-                    });
-                if picked {
-                    for w in line.windows(2) {
-                        let a = DVec3::new(w[0][0] as f64, w[0][1] as f64, w[0][2] as f64);
-                        let b = DVec3::new(w[1][0] as f64, w[1][1] as f64, w[1][2] as f64);
-                        out.segments.push(Segment { a, b, color: c.selected, width: 2.4, overlay: false, clip: true });
-                    }
-                }
-            }
-            continue;
-        }
-        let selected_body = fully_selected(body, scene.selection);
-        let hovered_body = scene.hover == Some(Pick::Body { body: body.id });
-        let hovered_face = match scene.hover {
-            Some(Pick::Face { body: b, face }) if b == body.id => Some(face),
-            _ => None,
-        };
-        let solid_view = scene.display.solid() && scene.active_sketch.is_none();
+    // The Visualize look draws no edges, only the outline of what's picked (a picked face isn't filled there).
+    if scene.presentation {
         for (i, (line, &edge)) in body.mesh.edges.iter().zip(&body.mesh.edge_ids).enumerate() {
-            let pick = Pick::Edge { body: body.id, edge };
-            let around_hovered_face = hovered_face.is_some_and(|f| body.mesh.edge_faces.get(i).is_some_and(|ab| ab.contains(&f)));
-            // Picked edges, the outline of picked faces and of a body hovered in the Items list also show faintly
-            // where faces hide them (a pocket's floor, a body inside another), as the faces do in the renderer.
-            let around_picked_face =
-                body.mesh.edge_faces.get(i).is_some_and(|ab| {
-                    ab.iter().any(|f| *f != u32::MAX && scene.selection.contains(&Pick::Face { body: body.id, face: *f }))
-                });
-            let through = if scene.selection.contains(&pick) {
-                Some((c.selected.with_alpha(150), 2.0))
-            } else if around_picked_face {
-                Some((c.selected.with_alpha(130), 1.4))
-            } else if hovered_body {
-                Some((c.hover.with_alpha(110), 1.2))
-            } else {
-                None
-            };
-            if let Some((color, width)) = through.filter(|_| solid_view) {
+            let picked = chosen.edge(body.id, edge)
+                || body.mesh.edge_faces.get(i).is_some_and(|ab| ab.iter().any(|f| *f != u32::MAX && chosen.face(body.id, *f)));
+            if picked {
                 for w in line.windows(2) {
                     let a = DVec3::new(w[0][0] as f64, w[0][1] as f64, w[0][2] as f64);
                     let b = DVec3::new(w[1][0] as f64, w[1][1] as f64, w[1][2] as f64);
-                    out.segments.push(Segment { a, b, color, width, overlay: true, clip: true });
+                    out.push(Segment { a, b, color: c.selected, width: 2.4, overlay: false, clip: true });
                 }
             }
-            let (color, width) = if scene.selection.contains(&pick) {
-                (c.selected, 3.0)
-            } else if scene.hover == Some(pick) {
-                (c.hover, 3.0)
-            } else if around_hovered_face || hovered_body {
-                // The reference outlines what's under the pointer in cyan.
-                (c.hover, 2.4)
-            } else if let Some((_, g)) = scene.ghosts.iter().find(|(id, _)| *id == body.id) {
-                // Its edges show through it (and through what's in front).
-                for w in line.windows(2) {
-                    let a = DVec3::new(w[0][0] as f64, w[0][1] as f64, w[0][2] as f64);
-                    let b = DVec3::new(w[1][0] as f64, w[1][1] as f64, w[1][2] as f64);
-                    out.segments.push(Segment { a, b, color: g.with_alpha(200), width: 1.4, overlay: true, clip: true });
-                }
-                continue;
-            } else if selected_body {
-                // A selected body's own hidden edges stay hidden: it reads as one solid tinted body.
-                (c.selected, 1.4)
-            } else if scene.display.solid() {
-                (c.edge, 1.5)
-            } else {
-                (Rgba::hex(0xbdbdc0), 1.2)
-            };
-            let highlighted = color != c.edge || !scene.display.solid();
-            if !scene.show_edges && !highlighted {
-                continue;
-            }
-            // Without opaque faces every edge shows, so they go on top.
-            let overlay = !scene.display.solid();
-            if scene.show_hidden_edges && !overlay {
-                // A faint copy on top shows the edges behind faces.
-                for w in line.windows(2) {
-                    let a = DVec3::new(w[0][0] as f64, w[0][1] as f64, w[0][2] as f64);
-                    let b = DVec3::new(w[1][0] as f64, w[1][1] as f64, w[1][2] as f64);
-                    out.segments.push(Segment { a, b, color: color.with_alpha(70), width: 1.0, overlay: true, clip: true });
-                }
-            }
+        }
+        return;
+    }
+    let selected_body = chosen.whole(body);
+    let hovered_body = scene.hover == Some(Pick::Body { body: body.id });
+    let hovered_face = match scene.hover {
+        Some(Pick::Face { body: b, face }) if b == body.id => Some(face),
+        _ => None,
+    };
+    let solid_view = scene.display.solid() && scene.active_sketch.is_none();
+    for (i, (line, &edge)) in body.mesh.edges.iter().zip(&body.mesh.edge_ids).enumerate() {
+        let pick = Pick::Edge { body: body.id, edge };
+        let around_hovered_face = hovered_face.is_some_and(|f| body.mesh.edge_faces.get(i).is_some_and(|ab| ab.contains(&f)));
+        // Picked edges, the outline of picked faces and of a body hovered in the Items list also show faintly
+        // where faces hide them (a pocket's floor, a body inside another), as the faces do in the renderer.
+        let around_picked_face =
+            body.mesh.edge_faces.get(i).is_some_and(|ab| ab.iter().any(|f| *f != u32::MAX && chosen.face(body.id, *f)));
+        let through = if chosen.edge(body.id, edge) {
+            Some((c.selected.with_alpha(150), 2.0))
+        } else if around_picked_face {
+            Some((c.selected.with_alpha(130), 1.4))
+        } else if hovered_body {
+            Some((c.hover.with_alpha(110), 1.2))
+        } else {
+            None
+        };
+        if let Some((color, width)) = through.filter(|_| solid_view) {
             for w in line.windows(2) {
                 let a = DVec3::new(w[0][0] as f64, w[0][1] as f64, w[0][2] as f64);
                 let b = DVec3::new(w[1][0] as f64, w[1][1] as f64, w[1][2] as f64);
-                out.segments.push(Segment { a, b, color, width, overlay, clip: true });
+                out.push(Segment { a, b, color, width, overlay: true, clip: true });
             }
         }
+        let (color, width) = if chosen.edge(body.id, edge) {
+            (c.selected, 3.0)
+        } else if scene.hover == Some(pick) {
+            (c.hover, 3.0)
+        } else if around_hovered_face || hovered_body {
+            // The reference outlines what's under the pointer in cyan.
+            (c.hover, 2.4)
+        } else if let Some((_, g)) = scene.ghosts.iter().find(|(id, _)| *id == body.id) {
+            // Its edges show through it (and through what's in front).
+            for w in line.windows(2) {
+                let a = DVec3::new(w[0][0] as f64, w[0][1] as f64, w[0][2] as f64);
+                let b = DVec3::new(w[1][0] as f64, w[1][1] as f64, w[1][2] as f64);
+                out.push(Segment { a, b, color: g.with_alpha(200), width: 1.4, overlay: true, clip: true });
+            }
+            continue;
+        } else if selected_body {
+            // A selected body's own hidden edges stay hidden: it reads as one solid tinted body.
+            (c.selected, 1.4)
+        } else if scene.display.solid() {
+            (c.edge, 1.5)
+        } else {
+            (Rgba::hex(0xbdbdc0), 1.2)
+        };
+        let highlighted = color != c.edge || !scene.display.solid();
+        if !scene.show_edges && !highlighted {
+            continue;
+        }
+        // Without opaque faces every edge shows, so they go on top.
+        let overlay = !scene.display.solid();
+        if scene.show_hidden_edges && !overlay {
+            // A faint copy on top shows the edges behind faces.
+            for w in line.windows(2) {
+                let a = DVec3::new(w[0][0] as f64, w[0][1] as f64, w[0][2] as f64);
+                let b = DVec3::new(w[1][0] as f64, w[1][1] as f64, w[1][2] as f64);
+                out.push(Segment { a, b, color: color.with_alpha(70), width: 1.0, overlay: true, clip: true });
+            }
+        }
+        for w in line.windows(2) {
+            let a = DVec3::new(w[0][0] as f64, w[0][1] as f64, w[0][2] as f64);
+            let b = DVec3::new(w[1][0] as f64, w[1][1] as f64, w[1][2] as f64);
+            out.push(Segment { a, b, color, width, overlay, clip: true });
+        }
     }
-    out.segments
 }
 
 pub(crate) fn build(scene: &SceneInput, camera: &Camera, size: DVec2) -> Built {
@@ -270,9 +277,10 @@ pub(crate) fn build(scene: &SceneInput, camera: &Camera, size: DVec2) -> Built {
     // Wireframe shows a mesh body by its outline: the edges between a triangle facing the camera and one
     // facing away, plus an open mesh's rim. A mesh body has no edges of its own.
     if scene.display == DisplayMode::Wireframe {
+        let chosen = Chosen::of(scene.selection);
         for body in scene.doc.bodies.iter().filter(|b| b.visible) {
             let Some(f) = &body.facets else { continue };
-            let color = if fully_selected(body, scene.selection) { c.selected } else { Rgba::hex(0xbdbdc0) };
+            let color = if chosen.whole(body) { c.selected } else { Rgba::hex(0xbdbdc0) };
             mesh_outline(&mut out, f, camera, color);
         }
     }
@@ -712,19 +720,67 @@ fn contact_shadow(out: &mut Built, scene: &SceneInput) {
     }
 }
 
-/// The whole body is selected: the body itself, or every one of its faces (Shell and the like select them all).
-pub(crate) fn fully_selected(body: &shapecraft_doc::Body, selection: &[Pick]) -> bool {
-    if selection.contains(&Pick::Body { body: body.id }) {
-        return true;
+/// The selection by body, made once a frame: asking each body in turn whether it is picked would otherwise go
+/// through the whole selection every time (with a couple of thousand bodies picked, millions of looks a frame).
+pub(crate) struct Chosen {
+    bodies: std::collections::HashSet<ItemId>,
+    faces: std::collections::HashMap<ItemId, std::collections::HashSet<u32>>,
+    edges: std::collections::HashMap<ItemId, std::collections::HashSet<u32>>,
+    /// The picks on each body, summed up (in any order) to one number.
+    on: std::collections::HashMap<ItemId, u64>,
+}
+
+impl Chosen {
+    pub(crate) fn of(selection: &[Pick]) -> Self {
+        let mut chosen =
+            Chosen { bodies: Default::default(), faces: Default::default(), edges: Default::default(), on: Default::default() };
+        for pick in selection {
+            match *pick {
+                Pick::Body { body } => {
+                    chosen.bodies.insert(body);
+                }
+                Pick::Face { body, face } => {
+                    chosen.faces.entry(body).or_default().insert(face);
+                }
+                Pick::Edge { body, edge } => {
+                    chosen.edges.entry(body).or_default().insert(edge);
+                }
+                _ => {}
+            }
+            if let Some(body) = pick.body() {
+                let mut h = DefaultHasher::new();
+                pick.hash(&mut h);
+                let sum = chosen.on.entry(body).or_default();
+                *sum = sum.wrapping_add(h.finish());
+            }
+        }
+        chosen
     }
-    let picked = selection.iter().filter(|p| matches!(p, Pick::Face { body: b, .. } if *b == body.id)).count();
-    if picked == 0 {
-        return false;
+
+    fn face(&self, body: ItemId, face: u32) -> bool {
+        self.faces.get(&body).is_some_and(|f| f.contains(&face))
     }
-    let mut faces = body.mesh.triangle_faces.clone();
-    faces.sort_unstable();
-    faces.dedup();
-    picked >= faces.len() && faces.iter().all(|f| selection.contains(&Pick::Face { body: body.id, face: *f }))
+
+    fn edge(&self, body: ItemId, edge: u32) -> bool {
+        self.edges.get(&body).is_some_and(|e| e.contains(&edge))
+    }
+
+    /// The picks on a body as one number (0 with none), for a key.
+    fn on(&self, body: ItemId) -> u64 {
+        self.on.get(&body).copied().unwrap_or(0)
+    }
+
+    /// The whole body is selected: the body itself, or every one of its faces (Shell and the like select them all).
+    pub(crate) fn whole(&self, body: &shapecraft_doc::Body) -> bool {
+        if self.bodies.contains(&body.id) {
+            return true;
+        }
+        let Some(picked) = self.faces.get(&body.id) else { return false };
+        let mut faces = body.mesh.triangle_faces.clone();
+        faces.sort_unstable();
+        faces.dedup();
+        picked.len() >= faces.len() && faces.iter().all(|f| picked.contains(f))
+    }
 }
 
 /// A mesh body's outline as seen by `camera`.

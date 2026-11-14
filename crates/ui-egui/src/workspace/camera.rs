@@ -7,6 +7,9 @@ use shapecraft_render::{Camera, StandardView};
 
 use super::{Anim, Workspace};
 
+/// A selection's box and a key for the picked bodies and meshes it was worked out from.
+pub(crate) type KeptBox = Option<(u64, Option<(DVec3, DVec3)>)>;
+
 const STANDARD_VIEWS: [StandardView; 7] = [
     StandardView::Default,
     StandardView::Front,
@@ -100,18 +103,38 @@ impl Workspace {
     }
 
     /// The selected bodies' (and their faces' and edges' bodies') box, from their display meshes.
+    ///
+    /// Asked every frame (for the "Zoom to Selection" pill), so the box is kept for as long as the picked bodies and
+    /// their meshes stay the same: going over every vertex of a couple of thousand picked bodies costs a frame.
     pub(super) fn selection_bounds(&self) -> Option<(DVec3, DVec3)> {
+        use std::hash::{Hash, Hasher};
+        let picked: std::collections::HashSet<_> = self.session.selection.iter().filter_map(|p| p.body()).collect();
+        if picked.is_empty() {
+            return None;
+        }
+        let bodies: Vec<_> = self.session.doc.bodies.iter().filter(|b| picked.contains(&b.id)).collect();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for b in &bodies {
+            (b.id.0, std::sync::Arc::as_ptr(&b.mesh) as usize).hash(&mut hasher);
+        }
+        let key = hasher.finish();
+        if let Some((was, found)) = self.selection_box.get()
+            && was == key
+        {
+            return found;
+        }
         let mut lo = DVec3::splat(f64::INFINITY);
         let mut hi = DVec3::splat(f64::NEG_INFINITY);
-        for pick in &self.session.selection {
-            let Some(b) = pick.body().and_then(|id| self.session.doc.body(id)) else { continue };
+        for b in bodies {
             for p in &b.mesh.positions {
                 let q = DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64);
                 lo = lo.min(q);
                 hi = hi.max(q);
             }
         }
-        (lo.x.is_finite() && hi.x.is_finite()).then_some((lo, hi))
+        let found = (lo.x.is_finite() && hi.x.is_finite()).then_some((lo, hi));
+        self.selection_box.set(Some((key, found)));
+        found
     }
 
     /// Whether a box shows entirely in the free part of the view (between the sidebars).

@@ -53,7 +53,7 @@ fn context_tools(ws: &Workspace) -> (Vec<ToolDef>, Option<String>) {
         SelectionKind::Faces => toolbar::FACE,
         SelectionKind::Edges if many => toolbar::EDGES,
         SelectionKind::Edges => toolbar::EDGE,
-        SelectionKind::Bodies if ws.session.selection.iter().any(|p| is_mesh(ws, p)) => {
+        SelectionKind::Bodies if any_mesh_picked(ws) => {
             if many {
                 toolbar::MESHES
             } else {
@@ -789,7 +789,9 @@ impl Workspace {
     }
 }
 
-/// A pick on a mesh body.
-fn is_mesh(ws: &crate::workspace::Workspace, p: &Pick) -> bool {
-    p.body().and_then(|b| ws.session.doc.body(b)).is_some_and(|b| b.is_mesh())
+/// Whether a mesh body is among the picks. From the mesh bodies (few, usually none) rather than from each pick:
+/// finding every pick's body in turn goes through all the bodies for each.
+fn any_mesh_picked(ws: &crate::workspace::Workspace) -> bool {
+    let meshes: Vec<_> = ws.session.doc.bodies.iter().filter(|b| b.is_mesh()).map(|b| b.id).collect();
+    !meshes.is_empty() && ws.session.selection.iter().any(|p| p.body().is_some_and(|b| meshes.contains(&b)))
 }

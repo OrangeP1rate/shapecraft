@@ -8,7 +8,7 @@ use shapecraft_kernel::Mesh;
 use wgpu::util::DeviceExt;
 
 use crate::blur::Blur;
-use crate::scene::{Built, Segment, body_edges, build, edges_key};
+use crate::scene::{Built, Chosen, Segment, build, edges_key, edges_of, edges_of_key};
 use crate::{Camera, DisplayMode, SceneInput};
 
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -199,6 +199,11 @@ fn line_vertices(segments: &[Segment]) -> (Vec<LineVertex>, Vec<LineVertex>) {
     (lines, overlays)
 }
 
+/// One body's edges as vertices (those drawn, and those on top), with the key they were made for.
+type BodyLines = (u64, Vec<LineVertex>, Vec<LineVertex>);
+/// A body and how many vertices its edges have in the two edge streams.
+type BodySpan = (shapecraft_doc::ItemId, usize, usize);
+
 /// A vertex buffer that grows as needed.
 struct Stream {
     buf: Option<wgpu::Buffer>,
@@ -231,6 +236,15 @@ impl Stream {
         }
         if let Some(buf) = &self.buf {
             queue.write_buffer(buf, 0, bytes);
+        }
+    }
+
+    /// Writes over part of what was uploaded, from vertex `at` on: for a piece that changed without growing.
+    fn patch<T: Pod>(&self, queue: &wgpu::Queue, at: usize, data: &[T]) {
+        let bytes: &[u8] = bytemuck::cast_slice(data);
+        let offset = (at * std::mem::size_of::<T>()) as u64;
+        if let Some(buf) = self.buf.as_ref().filter(|_| !bytes.is_empty() && offset + bytes.len() as u64 <= self.cap) {
+            queue.write_buffer(buf, offset, bytes);
         }
     }
 
@@ -295,6 +309,11 @@ pub struct Renderer {
     edges: Stream,
     edge_overlays: Stream,
     edges_key: Option<u64>,
+    /// Each body's edges as vertices (drawn, and on top), with what they were made for (`scene::edges_of_key`).
+    body_lines: HashMap<shapecraft_doc::ItemId, BodyLines>,
+    /// The bodies in the order their edges were last uploaded whole, with how many vertices each has in the two
+    /// streams: while that stays the same, a body whose edges change is written over in place.
+    body_spans: Vec<BodySpan>,
     /// The grid and axes: under the edges, so an axis along an edge doesn't show over it.
     under: Stream,
     under_overlays: Stream,
@@ -752,6 +771,8 @@ impl Renderer {
             edges: Stream::new("edges"),
             edge_overlays: Stream::new("edge overlays"),
             edges_key: None,
+            body_lines: HashMap::new(),
+            body_spans: Vec::new(),
             under: Stream::new("lines under edges"),
             under_overlays: Stream::new("overlays under edges"),
             lines: Stream::new("lines"),
@@ -973,6 +994,7 @@ impl Renderer {
         let mut ghost_draws = Vec::new();
         let mut see_draws = Vec::new();
         let mut through_draws = Vec::new();
+        let chosen = crate::scene::Chosen::of(scene.selection);
         for body in scene.doc.bodies.iter().filter(|b| b.visible) {
             let key = body.id.0 as usize;
             let mut color = c.body.linear();
@@ -989,10 +1011,7 @@ impl Renderer {
             // A selected body is drawn a little see-through cyan (only its nearest surface).
             // A tint with alpha (a face growing out under Extrude) is see-through the same way, at its own alpha.
             let tinted_through = color[3] < 0.999;
-            let see_through = ghost.is_none()
-                && !sketching
-                && scene.display.solid()
-                && (tinted_through || crate::scene::fully_selected(body, scene.selection));
+            let see_through = ghost.is_none() && !sketching && scene.display.solid() && (tinted_through || chosen.whole(body));
             if let Some(g) = ghost {
                 color = [g[0], g[1], g[2], 0.3];
             } else if see_through {
@@ -1081,9 +1100,57 @@ impl Renderer {
         let key = edges_key(scene);
         if self.edges_key != Some(key) {
             self.edges_key = Some(key);
-            let (lines, overlays) = line_vertices(&body_edges(scene));
-            self.edges.upload(&self.device, &self.queue, &lines);
-            self.edge_overlays.upload(&self.device, &self.queue, &overlays);
+            // Body by body: most keep the edges they had (only what's picked or under the pointer changes them).
+            let chosen = Chosen::of(scene.selection);
+            let mut kept = std::mem::take(&mut self.body_lines);
+            let mut spans = Vec::with_capacity(self.body_spans.len());
+            let mut remade = Vec::new();
+            let mut segments = Vec::new();
+            for body in scene.doc.bodies.iter().filter(|b| b.visible) {
+                let key = edges_of_key(scene, body, &chosen);
+                let made = match kept.remove(&body.id) {
+                    Some(made) if made.0 == key => made,
+                    _ => {
+                        segments.clear();
+                        edges_of(scene, body, &chosen, &mut segments);
+                        let (drawn, on_top) = line_vertices(&segments);
+                        remade.push(spans.len());
+                        (key, drawn, on_top)
+                    }
+                };
+                spans.push((body.id, made.1.len(), made.2.len()));
+                self.body_lines.insert(body.id, made);
+            }
+            // With every body where it was and as long as it was, only the remade ones go to the graphics card: the
+            // whole of a big model's edges is hundreds of megabytes to send again for one face under the pointer.
+            for on_top in [false, true] {
+                let len = |span: &BodySpan| if on_top { span.2 } else { span.1 };
+                let stream = if on_top { &mut self.edge_overlays } else { &mut self.edges };
+                let same =
+                    spans.len() == self.body_spans.len() && spans.iter().zip(&self.body_spans).all(|(a, b)| a.0 == b.0 && len(a) == len(b));
+                if same {
+                    let mut at = 0;
+                    let mut next = remade.iter().copied().peekable();
+                    for (i, span) in spans.iter().enumerate() {
+                        if next.peek() == Some(&i) {
+                            next.next();
+                            if let Some(made) = self.body_lines.get(&span.0) {
+                                stream.patch(&self.queue, at, if on_top { &made.2 } else { &made.1 });
+                            }
+                        }
+                        at += len(span);
+                    }
+                } else {
+                    let mut all: Vec<LineVertex> = Vec::new();
+                    for span in &spans {
+                        if let Some(made) = self.body_lines.get(&span.0) {
+                            all.extend_from_slice(if on_top { &made.2 } else { &made.1 });
+                        }
+                    }
+                    stream.upload(&self.device, &self.queue, &all);
+                }
+            }
+            self.body_spans = spans;
         }
         let built = build(scene, camera, px);
         self.upload(&built);

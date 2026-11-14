@@ -2288,8 +2288,6 @@ fn picture(ws: &mut Workspace, doc: &shapecraft_doc::Document, px: (u32, u32)) -
     Some((w, h, crate::workspace::unmix(&black, &white)))
 }
 
-/// The project card's picture: see-through around the model (rendered over black and over white, then unmixed),
-/// so the card shows it on either theme's background.
 /// A save on its way to disk: the folder, the project's folder when it began (none for a first save), the revision
 /// that was saved, and the result when it came at once.
 struct Saving {
@@ -2300,6 +2298,8 @@ struct Saving {
     revision: u64,
 }
 
+/// The project card's picture: see-through around the model (rendered over black and over white, then unmixed),
+/// so the card shows it on either theme's background.
 fn write_thumbnail(ws: &mut Workspace, dir: &std::path::Path) {
     let camera = ws.thumbnail_camera();
     let mut over = |background: u32| {

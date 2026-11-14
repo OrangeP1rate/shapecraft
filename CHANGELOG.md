@@ -2,6 +2,19 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.8.5-alpha
+**Large projects import, save and select much faster, and .shapr imports bring in more of the model.**
+### Changed
+- **Big projects are much quicker to work with.** A .shapr import rebuilds its bodies on several cores (157 s to 38 s
+  on a project of about 1,700 bodies), saving no longer slows down with the square of the body count (over ten
+  minutes to about 14 s), picking something with History open no longer replays the whole history on every click,
+  and autosave writes in the background so the window keeps answering. Thanks
+  [@chickey](https://github.com/chickey) (#28).
+### Fixed
+- **.shapr imports bring in imported bodies that nothing changed afterwards,** which could be missing before, give
+  bodies that a later step changed the names they have in the file, and accept a face on the offset of a sweep whose
+  path changes speed (it was refused as a crease). Thanks [@chickey](https://github.com/chickey) (#27).
+
 ## 0.8.4-alpha
 **.shapr imports with slow free-form bodies finish in seconds, not minutes.**
 ### Fixed

@@ -179,8 +179,9 @@ jobs:
 
   ios:
     # An .ipa for sideloading (docs/ios.md): ad-hoc signed, so AltStore, Sideloadly and the like sign it with the
-    # user's own Apple account. OpenCASCADE for iOS is built from pinned source and cached (cold: the longest step).
-    # It needs the iOS 27.1 SDK or newer: iOS runs an app built with an older SDK letterboxed on the iPhone Duo.
+    # user's own Apple account. It needs the iOS 27.1 SDK or newer: iOS runs an app built with an older SDK
+    # letterboxed on the iPhone Duo. While the runners' newest Xcode is older than that, the .ipa is built on a Mac
+    # with `cargo xtask ios-stage` (a private draft release "ipa-<version>") and checked and taken from there.
     runs-on: macos-26
     timeout-minutes: 120
     defaults:
@@ -189,24 +190,32 @@ jobs:
     env:
       OCCT_TAG: V7_9_3
       OCCT_SHA256: 5ecf094ec6b12d5413dfb851d8c3590c354058aee556e32e408bdfbf8c357d57
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-      - name: Newest Xcode (iOS SDK 27.1 or newer)
+      - name: Newest Xcode (iOS SDK 27.1 or newer builds here)
+        id: xcode
         run: |
-          ls -d /Applications/Xcode*.app
           x=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
-          echo "DEVELOPER_DIR=$x/Contents/Developer" >> "$GITHUB_ENV"
           v=$(DEVELOPER_DIR="$x/Contents/Developer" xcrun --sdk iphoneos --show-sdk-version)
           echo "$x: iOS SDK $v"
-          printf '27.1\n%s\n' "$v" | sort -V -C || { echo "::error::iOS SDK $v is older than 27.1 (the iPhone Duo would run it letterboxed)"; exit 1; }
+          if printf '27.1\n%s\n' "$v" | sort -V -C; then
+            echo "DEVELOPER_DIR=$x/Contents/Developer" >> "$GITHUB_ENV"
+            echo "build=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::iOS SDK $v is older than 27.1: taking the .ipa staged from a Mac"
+          fi
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.xcode.outputs.build
         with: { targets: aarch64-apple-ios }
       - uses: actions/cache@v4
+        if: steps.xcode.outputs.build
         with:
           path: target/ios/occt-device
           key: occt-ios-device-V7_9_3-macos26-${{ hashFiles('crates/kernel-occt/build.rs', 'xtask/src/ios.rs', 'xtask/src/android.rs') }}
           restore-keys: occt-ios-device-V7_9_3-macos26-
       - name: OCCT for iOS
+        if: steps.xcode.outputs.build
         run: |
           if [ ! -f target/ios/occt-device/lib/libTKernel.a ]; then
             command -v ninja > /dev/null || brew install ninja
@@ -218,10 +227,27 @@ jobs:
             OCCT_SRC="$RUNNER_TEMP/occt/OCCT-${OCCT_TAG#V}" cargo xtask ios-occt device
           fi
       - name: Sideload build (.ipa)
+        if: steps.xcode.outputs.build
         run: |
           cargo xtask ios-ipa
-          unzip -l target/shapecraft-*-ios-arm64.ipa | grep -q 'Payload/ShapeCraft.app/ShapeCraft$'
           mkdir -p dist && cp target/shapecraft-*-ios-arm64.ipa dist/
+      - name: The .ipa staged from a Mac
+        if: ${{ !steps.xcode.outputs.build }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          gh release download "ipa-$version" -p "shapecraft-$version-ios-arm64.ipa" -D dist
+      - name: Check the .ipa (version, SDK 27.1 or newer, arm64)
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          ipa="dist/shapecraft-$version-ios-arm64.ipa"
+          mkdir -p "$RUNNER_TEMP/ipa" && unzip -q "$ipa" -d "$RUNNER_TEMP/ipa"
+          app="$RUNNER_TEMP/ipa/Payload/ShapeCraft.app"
+          v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")
+          sdk=$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformVersion' "$app/Info.plist")
+          echo "version $v, iOS SDK $sdk, $(lipo -archs "$app/ShapeCraft")"
+          [ "$v" = "$version" ] || { echo "::error::the .ipa is $v, not $version"; exit 1; }
+          printf '27.1\n%s\n' "$sdk" | sort -V -C || { echo "::error::the .ipa was built with iOS SDK $sdk (older than 27.1)"; exit 1; }
+          [ "$(lipo -archs "$app/ShapeCraft")" = arm64 ]
       - uses: actions/upload-artifact@v4
         with: { name: ios, path: dist/*.ipa, if-no-files-found: error }
 
@@ -270,3 +296,5 @@ jobs:
             echo "Check a download against SHA256SUMS.txt: \`shasum -a 256 FILE\` (macOS, Linux) or \`Get-FileHash FILE\` (Windows)."
           } >> notes.md
           gh release create "$tag" dist/* --title "ShapeCraft ${tag#v}" --notes-file notes.md --latest
+          # The staging draft for the .ipa (if there was one) has done its job.
+          gh release delete "ipa-${tag#v}" --yes 2>/dev/null || true

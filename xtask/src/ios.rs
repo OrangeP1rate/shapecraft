@@ -200,6 +200,39 @@ pub fn ipa(_rest: &[String]) -> Result<PathBuf> {
     Ok(out)
 }
 
+/// Builds the sideload .ipa here (Xcode 27.1+, which the CI runners don't have yet) and puts it in a private draft
+/// release "ipa-<version>" for release.yml's ios job to check and publish with the rest (needs `gh`, signed in).
+pub fn stage(rest: &[String]) -> Result<()> {
+    let ipa = ipa(rest)?;
+    let sdk = crate::util::output("xcrun", &["--sdk", "iphoneos", "--show-sdk-version"])?.trim().to_string();
+    let newer = |v: &str| v.split('.').map(|p| p.parse::<u32>().unwrap_or(0)).collect::<Vec<_>>();
+    if newer(&sdk) < vec![27, 1] {
+        bail!("iOS SDK {sdk} is older than 27.1: the iPhone Duo would run this .ipa letterboxed");
+    }
+    let tag = format!("ipa-{}", crate::util::version()?);
+    let exists = std::process::Command::new("gh").args(["release", "view", &tag]).output()?.status.success();
+    if exists {
+        run("gh", &["release", "upload", &tag, s(&ipa), "--clobber"])?;
+    } else {
+        run(
+            "gh",
+            &[
+                "release",
+                "create",
+                &tag,
+                s(&ipa),
+                "--draft",
+                "--title",
+                &tag,
+                "--notes",
+                "Staging for release.yml (iOS SDK 27.1+); deleted when the release publishes.",
+            ],
+        )?;
+    }
+    println!("staged {} in draft release {tag} (iOS SDK {sdk})", ipa.display());
+    Ok(())
+}
+
 /// Builds ShapeCraft.app for `k`: signed for the team's devices, or (no team) ad-hoc for a sideloading tool to sign.
 fn build_app(k: &Kind, bundle: &str, team: Option<&str>) -> Result<PathBuf> {
     let dev = developer_dir()?;

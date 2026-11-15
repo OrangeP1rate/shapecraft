@@ -148,7 +148,9 @@ impl Workspace {
         }
         // Measure's point modes pick points on the model (two for a distance, three for an angle), starting over after.
         if self.measuring && matches!(self.tool, Tool::Idle) && self.variant("Measure mode") > 0 {
-            if let Some((_, at)) = self.pick_at(c) {
+            // Snapped to a notable point (corner, edge middle, circle center) near the pointer, as the reference's
+            // Measure does, so a distance is exact (#33); elsewhere on the model as before.
+            if let Some(at) = self.snap_point(c) {
                 let need = if self.variant("Measure mode") == 1 { 2 } else { 3 };
                 if self.measure_points.len() >= need {
                     self.measure_points.clear();

@@ -457,6 +457,16 @@ fn selection_radius_of_round_faces() {
     let (r, others) = check(&mut s, cyl);
     assert!((r.expect("the wall has a radius") - 3.0).abs() < 1e-4, "{r:?}");
     assert_eq!(others, 2, "the two caps have none");
+    // The wall also reads how tall it is (#35); a cap reads no height.
+    let faces = s.doc.bodies.iter().find(|b| b.id.0 == cyl).unwrap().mesh.triangle_faces.iter().max().copied().unwrap() + 1;
+    let heights: Vec<f64> = (0..faces)
+        .filter_map(|face| {
+            s.selection = vec![Pick::Face { body: shapecraft_doc::ItemId(cyl), face }];
+            s.selection_height()
+        })
+        .collect();
+    assert_eq!(heights.len(), 1, "only the wall: {heights:?}");
+    assert!((heights[0] - 10.0).abs() < 1e-3, "{heights:?}");
     let cone = tube(&mut s, 10.0);
     assert_eq!(check(&mut s, cone).0, None, "a drafted wall is a cone");
     s.selection.clear();

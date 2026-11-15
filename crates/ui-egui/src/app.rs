@@ -2121,6 +2121,9 @@ impl ShapeCraftApp {
                         continue;
                     }
                     match other {
+                        // Undo and Redo from the menus (Ctrl+Z in the window menu on Linux and Windows) put the running
+                        // tool down first, as ⌘Z and the on-screen buttons do (#38).
+                        MenuAction::Command(id @ ("undo" | "redo")) => ws.act(crate::workspace::toolbar::Action::Command(id), id),
                         MenuAction::Command(id) => {
                             let _ = ws.run(id, json!({}));
                         }

@@ -917,7 +917,10 @@ impl Document {
             Some((b, n)) if n.strip_suffix(')').is_some_and(|d| d.parse::<u32>().is_ok()) => b,
             _ => of,
         };
-        (1..).map(|i| format!("{base} ({i})")).find(|n| !self.bodies.iter().any(|b| b.name == *n)).unwrap_or_else(|| format!("{base} (1)"))
+        (1..)
+            .map(|i| format!("{base} ({i})"))
+            .find(|n| !self.bodies.iter().any(|b| b.name == *n) && !self.sketches.iter().any(|k| k.name == *n))
+            .unwrap_or_else(|| format!("{base} (1)"))
     }
 
     pub fn next_sketch_name(&mut self) -> String {

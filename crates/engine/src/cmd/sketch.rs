@@ -24,6 +24,17 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: new_sketch,
         },
         CommandSpec {
+            id: "duplicate_sketch",
+            label: "Duplicate Sketch",
+            menu: "",
+            shortcut: None,
+            help: "A copy of a whole sketch in place, on the same plane and in the same folder (Paste of a copied sketch)",
+            params: r#"{"sketch": id}  (returns the copy's id and name; the copy ends up selected)"#,
+            modifies: true,
+            enabled: |s| !s.doc.sketches.is_empty(),
+            run: duplicate_sketch,
+        },
+        CommandSpec {
             id: "change_sketch_plane",
             label: "Change Sketch Plane",
             menu: "",
@@ -455,6 +466,28 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             },
         },
     ]
+}
+
+/// A whole sketch copied in place (#37): its curves, constraints, construction marks and patterns, on its plane,
+/// named like a copied body ("Sketch 01 (1)"), right after it in its folder, and selected.
+fn duplicate_sketch(s: &mut Session, p: &Params) -> Result<Value> {
+    let from = p.id("sketch")?;
+    let mut copy = s.doc.sketch(from).cloned().ok_or_else(|| EngineError::BadParams(format!("no sketch {}", from.0)))?;
+    let id = s.doc.alloc_id();
+    copy.id = id;
+    copy.name = s.doc.copy_name(&copy.name);
+    copy.visible = true;
+    let name = copy.name.clone();
+    let at = s.doc.sketches.iter().position(|k| k.id == from).map_or(s.doc.sketches.len(), |i| i + 1);
+    s.doc.sketches.insert(at, copy);
+    for f in &mut s.doc.folders {
+        if let Some(i) = f.items.iter().position(|it| *it == from) {
+            f.items.insert(i + 1, id);
+            break;
+        }
+    }
+    s.selection = vec![Pick::Sketch { sketch: id }];
+    Ok(json!({ "sketch": id.0, "name": name }))
 }
 
 fn new_sketch(s: &mut Session, p: &Params) -> Result<Value> {

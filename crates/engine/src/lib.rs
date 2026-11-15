@@ -555,6 +555,30 @@ impl Session {
         (hi >= lo && lo > 1e-6 && hi - lo <= 1e-4 * hi.max(1.0)).then_some((lo + hi) / 2.0)
     }
 
+    /// One round face picked (a cylinder's wall, a hole): how far it runs along its axis, for the selection pill
+    /// beside its diameter (#35).
+    pub fn selection_height(&self) -> Option<f64> {
+        let [Pick::Face { body, face }] = self.selection[..] else { return None };
+        self.face_radius(body, face)?;
+        let b = self.doc.body(body)?;
+        let axis = self.kernel.axis_of(&b.shape, shapecraft_kernel::SubShape::Face(face)).ok().flatten()?;
+        let dir = axis.dir.try_normalize()?;
+        let m = &b.mesh;
+        let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+        for (t, f) in m.triangle_faces.iter().enumerate() {
+            if *f != face {
+                continue;
+            }
+            for k in 0..3 {
+                let p = glam::DVec3::from(m.positions[*m.indices.get(t * 3 + k)? as usize].map(f64::from));
+                let h = (p - axis.origin).dot(dir);
+                lo = lo.min(h);
+                hi = hi.max(h);
+            }
+        }
+        (hi - lo > 1e-6).then_some(hi - lo)
+    }
+
     /// "1 face", "2 edges", "3 items" for the selection pill.
     pub fn selection_summary(&self) -> Option<String> {
         let n = self.selection.len();

@@ -434,6 +434,14 @@ impl Workspace {
                 }
                 self.preview = None;
             }
+            // + and - zoom in and out, about the pointer when it's over the view (as the wheel does), else the view's
+            // middle (#34). Not while a value is being typed or a tool takes one: there "-" starts a negative number.
+            Key::Minus | Key::Plus | Key::Equals if !cmd && !typing && !self.tool.takes_numbers() && self.dim_edit.is_none() => {
+                let at = self.cursor.filter(|c| self.viewport_rect.contains(*c)).unwrap_or(self.viewport_rect.center());
+                self.anim = None;
+                let size = self.size();
+                self.camera.zoom_at(if key == Key::Minus { 1.25 } else { 0.8 }, self.local(at), size);
+            }
             Key::V
                 if self.session.active_sketch.is_none() || self.session.selection_kind() == shapecraft_engine::SelectionKind::Regions =>
             {
@@ -627,5 +635,117 @@ mod tests {
         assert!((shapecraft_doc::expr::eval(&w.expr, &[]).unwrap() - 25.4).abs() < 1e-9, "a bare 1 is an inch: {}", w.expr);
         assert!(matches!(ws.tool, Tool::Idle), "the pattern applied");
         assert_eq!(ws.session.doc.bodies.len(), 3);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod undo_in_visualization {
+    use super::*;
+    use egui::{Rect, pos2, vec2};
+    use std::sync::Arc;
+
+    fn frame(ctx: &egui::Context, ws: &mut Workspace, events: Vec<egui::Event>) {
+        let input =
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 900.0))), events, ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| ws.ui(ui, None));
+        out.textures_delta.clear();
+    }
+
+    fn undo_key(pressed: bool) -> egui::Event {
+        egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::COMMAND }
+    }
+
+    /// ⌘Z in Visualization takes the last modeling step back and stays in Visualization, the window still drawing
+    /// (#38: the body went, every panel stayed hidden and the window stopped answering).
+    #[test]
+    fn undo_in_visualization_keeps_working() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "Vis");
+            let mut ws = Workspace::new(session, crate::settings::Settings::default());
+            ws.session.execute("sketch", &serde_json::json!({"plane": "xy"})).unwrap();
+            ws.session.execute("circle", &serde_json::json!({"center": [0, 0], "radius": 5})).unwrap();
+            let k = ws.session.active_sketch.unwrap().0;
+            ws.session.execute("extrude", &serde_json::json!({"sketch": k, "region": 0, "distance": 10})).unwrap();
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut ws, Vec::new());
+            ws.visualizing = true;
+            for _ in 0..3 {
+                frame(&ctx, &mut ws, Vec::new());
+            }
+            let bodies = ws.session.doc.bodies.len();
+            frame(&ctx, &mut ws, vec![undo_key(true), undo_key(false)]);
+            for _ in 0..5 {
+                frame(&ctx, &mut ws, Vec::new());
+            }
+            let _ = tx.send((bodies, ws.session.doc.bodies.len(), ws.visualizing, matches!(ws.tool, Tool::Idle)));
+        });
+        let (before, after, still, idle) =
+            rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the window kept drawing frames after ⌘Z in Visualization");
+        assert_eq!((before, after), (1, 0), "⌘Z took the extrude back");
+        assert!(still, "and stayed in Visualization");
+        assert!(idle);
+    }
+    /// The same through the window menu's Ctrl+Z (Linux and Windows have no native menu), with the body picked as
+    /// when giving it a color: the menu's undo goes through `run`, not the key handler.
+    #[test]
+    fn menu_undo_in_visualization_with_the_body_picked() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "Vis");
+            let mut ws = Workspace::new(session, crate::settings::Settings::default());
+            ws.session.execute("sketch", &serde_json::json!({"plane": "xy"})).unwrap();
+            ws.session.execute("circle", &serde_json::json!({"center": [0, 0], "radius": 5})).unwrap();
+            let k = ws.session.active_sketch.unwrap().0;
+            ws.session.execute("extrude", &serde_json::json!({"sketch": k, "region": 0, "distance": 10})).unwrap();
+            let body = ws.session.doc.bodies[0].id;
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut ws, Vec::new());
+            ws.visualizing = true;
+            ws.session.selection = vec![shapecraft_doc::Pick::Body { body }];
+            for _ in 0..3 {
+                frame(&ctx, &mut ws, Vec::new());
+            }
+            // The first takes the pick back (a change of selection is a step of its own), the second the extrude.
+            ws.act(crate::workspace::toolbar::Action::Command("undo"), "Undo");
+            frame(&ctx, &mut ws, Vec::new());
+            ws.act(crate::workspace::toolbar::Action::Command("undo"), "Undo");
+            for _ in 0..5 {
+                frame(&ctx, &mut ws, Vec::new());
+            }
+            let _ = tx.send((ws.session.doc.bodies.len(), ws.visualizing));
+        });
+        let (after, still) = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the window kept drawing frames");
+        assert_eq!(after, 0);
+        assert!(still);
+    }
+
+    fn key(k: egui::Key) -> [egui::Event; 2] {
+        let e = |pressed| egui::Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+        [e(true), e(false)]
+    }
+
+    /// + and - zoom the view in and out (#34); while a circle waits for its size, "-" is the start of a typed value
+    /// and leaves the view alone.
+    #[test]
+    fn plus_and_minus_zoom() {
+        let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "Zoom");
+        let mut ws = Workspace::new(session, crate::settings::Settings::default());
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut ws, Vec::new());
+        let d0 = ws.camera.distance;
+        frame(&ctx, &mut ws, key(egui::Key::Plus).to_vec());
+        let d1 = ws.camera.distance;
+        assert!(d1 < d0 * 0.95, "+ zooms in: {d0} -> {d1}");
+        frame(&ctx, &mut ws, key(egui::Key::Minus).to_vec());
+        frame(&ctx, &mut ws, key(egui::Key::Minus).to_vec());
+        let d2 = ws.camera.distance;
+        assert!(d2 > d1 * 1.2, "- zooms out: {d1} -> {d2}");
+        ws.session.execute("sketch", &serde_json::json!({"plane": "xy", "look": false})).unwrap();
+        ws.tool = Tool::Circle { center: Some(glam::DVec2::ZERO) };
+        let d3 = ws.camera.distance;
+        frame(&ctx, &mut ws, key(egui::Key::Minus).to_vec());
+        assert_eq!(ws.camera.distance, d3, "a circle waiting for its size keeps the view");
     }
 }

@@ -1661,3 +1661,43 @@ mod cull_tests {
         assert_eq!(at(0, 0), at(w - 1, h - 1), "the backdrop is uniform where no body draws");
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod empty_scene_tests {
+    /// The Visualize look (shadow, contact shadow, environment) with no bodies at all, as after ⌘Z took the only body
+    /// back in Visualization (#38), renders the backdrop instead of panicking. Skipped without a graphics adapter.
+    #[test]
+    fn visualize_with_no_bodies_renders() {
+        let Ok(mut r) = crate::Renderer::headless() else { return };
+        let doc = shapecraft_doc::Document::new("t");
+        for (presentation, shadow) in [(true, 1.0), (true, 0.0), (false, 0.0)] {
+            let scene = crate::SceneInput {
+                doc: &doc,
+                selection: &[],
+                hover: None,
+                active_sketch: None,
+                plane_tiles: &[],
+                overlays: &[],
+                colors: crate::SceneColors::default(),
+                show_axes: false,
+                show_edges: true,
+                show_hidden_edges: false,
+                show_decals: true,
+                grid: None,
+                display: crate::DisplayMode::Visualized,
+                section: None,
+                presentation,
+                backdrop: crate::Rgba::hex(0x101010),
+                shadow,
+                ghosts: &[],
+                tints: &[],
+                drawn: &[],
+                defined: &[],
+                boxing: false,
+            };
+            let camera = crate::Camera::standard(crate::StandardView::Front, glam::DVec3::ZERO, 50.0);
+            r.render(&scene, &camera, (64, 48)).expect("an empty Visualize scene renders");
+        }
+    }
+}

@@ -454,6 +454,8 @@ pub struct Workspace {
     pub(super) items_dragging: Option<shapecraft_doc::ItemId>,
     /// Measure: points picked in the point modes, Include X, Y, Z Deltas, and the pinned measurements.
     pub(super) measure_points: Vec<DVec3>,
+    /// The placed measure point being dragged to a new spot (#36).
+    pub(super) measure_drag: Option<usize>,
     pub(super) measure_deltas: bool,
     pub(super) pinned: Vec<measure::Measured>,
     hint_collapsed: bool,
@@ -781,6 +783,7 @@ impl Workspace {
             items_expanded: std::collections::HashSet::new(),
             items_dragging: None,
             measure_points: Vec::new(),
+            measure_drag: None,
             measure_deltas: false,
             pinned: Vec::new(),
             hint_collapsed: false,

@@ -2,6 +2,14 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.9.3-alpha
+**Offset Face no longer freezes the window on big parts or slow computers.**
+### Changed
+- **Offset Face works in the background when it takes a while.** A quick offset lands at once as before; a long one
+  shows a small card with how long it has been working and **Cancel**, while the window keeps drawing (so the
+  desktop no longer says ShapeCraft is not responding). Its live preview is worked out in the background too and
+  gives up after 20 seconds instead of holding the window. Thanks [@jan-tdy](https://github.com/jan-tdy) (#59, #52).
+
 ## 0.9.2-alpha
 **More from your reports: a built-in log, a real-size view, and whole texts picked in one go.**
 ### New

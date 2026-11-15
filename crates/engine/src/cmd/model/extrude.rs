@@ -183,9 +183,10 @@ pub(crate) fn resting_body(s: &Session, faces: &[Shape], normal: DVec3) -> Resul
     let mut best: Option<(ItemId, f64, f64)> = None;
     for b in &s.doc.bodies {
         let mut share = [0.0; 2];
+        // A body without extent (an empty one from an older project) can't hold the profile (#50).
+        let Ok(o) = crate::cmd::model::body_box(s, b) else { continue };
         for (i, (_, slab, volume)) in slabs.iter().enumerate() {
             let bb = s.kernel.bounds(slab)?;
-            let o = crate::cmd::model::body_box(s, b)?;
             if !(o.min.cmple(bb.max).all() && bb.min.cmple(o.max).all()) {
                 continue;
             }
@@ -261,7 +262,8 @@ pub(super) fn boolean_targets(s: &Session, block: &Shape, op: BoolOp) -> Result<
     let mut touching = Vec::new();
     // Mesh bodies aren't merged into or cut by a feature: they take part only through the boolean tools.
     for b in s.doc.bodies.iter().filter(|b| !b.is_mesh()) {
-        let o = crate::cmd::model::body_box(s, b)?;
+        // Nor can an empty body be a target (#50).
+        let Ok(o) = crate::cmd::model::body_box(s, b) else { continue };
         if o.min.cmple(bb.max).all() && bb.min.cmple(o.max).all() {
             touching.push(b.id);
         }

@@ -301,6 +301,13 @@ pub(super) fn commands() -> Vec<CommandSpec> {
 
 /// Replaces a body's shape and re-meshes it for display.
 pub fn set_body_shape(s: &mut Session, id: ItemId, shape: Shape) -> Result<()> {
+    // A change that leaves nothing of an exact body (a cut through all of it) is refused: an empty body has no
+    // box, and every later feature that measures the bodies would fail on it (#50).
+    if let Some(b) = s.doc.body(id).filter(|b| !b.is_mesh())
+        && s.kernel.bounds(&shape).is_err()
+    {
+        return Err(EngineError::NotAvailable(format!("nothing of {} would be left", b.name)));
+    }
     let mesh = Arc::new(s.kernel.tessellate(&shape, shapecraft_doc::project::deflection())?);
     let body = s.doc.body_mut(id).ok_or_else(|| EngineError::BadParams(format!("no body {}", id.0)))?;
     body.shape = shape;

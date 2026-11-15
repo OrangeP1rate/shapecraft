@@ -494,3 +494,104 @@ fn sketch_hides_only_once_every_profile_is_used() {
     s.execute("extrude", &json!({"sketch": sketch.0, "region": 1, "distance": 5})).unwrap();
     assert!(s.doc.sketches[0].visible, "region 2 still unused");
 }
+
+/// #50: extruding text, letter by letter or all at once, never leaves a body without extent behind, and a
+/// circle extruded after it still works ("bounds failed: shape has no extent").
+#[test]
+fn text_extrusions_leave_no_empty_body() {
+    for (text, all) in [("Hi 8%@&", true), ("ABO", false), ("B&@", false)] {
+        let mut s = session();
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("text", &json!({"at": [0, 0], "text": text, "size": 10})).unwrap();
+        let sketch = s.active_sketch.unwrap();
+        let n = s.doc.sketches[0].regions().len() as u32;
+        assert!(n > 0);
+        if all {
+            let regions: Vec<u32> = (0..n).collect();
+            let _ = s.execute("extrude", &json!({"sketch": sketch.0, "regions": regions, "distance": 2}));
+        } else {
+            for r in 0..n {
+                let _ = s.execute("extrude", &json!({"sketch": sketch.0, "region": r, "distance": 2}));
+            }
+        }
+        for b in &s.doc.bodies {
+            assert!(s.kernel.bounds(&b.shape).is_ok(), "{text}: {} has no extent", b.name);
+        }
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("circle", &json!({"center": [0, -40], "radius": 5})).unwrap();
+        let k = s.active_sketch.unwrap();
+        s.execute("extrude", &json!({"sketch": k.0, "region": 0, "distance": 3})).unwrap();
+    }
+}
+
+/// #50 as reported: text on a cylinder's top face, its letters running over the face's edge, each letter pulled
+/// up or cut down. No body may be left without extent, and later extrusions keep working.
+#[test]
+fn text_over_a_face_edge_extrudes_and_cuts() {
+    for dist in [2.0, -2.0, 12.0, -12.0] {
+        let mut s = session();
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("circle", &json!({"center": [0, 0], "radius": 20})).unwrap();
+        s.execute("circle", &json!({"center": [0, 0], "radius": 8})).unwrap();
+        let out = s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 10})).unwrap();
+        let body = out.value["body"].as_u64().unwrap();
+        let top = out.value["face"].as_u64().unwrap();
+        s.execute("sketch", &json!({"body": body, "face": top})).unwrap();
+        s.execute("text", &json!({"at": [-30, 10], "text": "0000 B", "size": 12, "angle": -20})).unwrap();
+        let sketch = s.active_sketch.unwrap();
+        let n = s.doc.sketch(sketch).unwrap().regions().len() as u32;
+        let mut errors = Vec::new();
+        for r in 0..n {
+            if let Err(e) = s.execute("extrude", &json!({"sketch": sketch.0, "region": r, "distance": dist})) {
+                errors.push(format!("region {r}: {e}"));
+            }
+        }
+        for b in &s.doc.bodies {
+            assert!(s.kernel.bounds(&b.shape).is_ok(), "d={dist}: {} has no extent", b.name);
+        }
+        assert!(!errors.iter().any(|e| e.contains("extent")), "d={dist}: {errors:?}");
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("circle", &json!({"center": [0, -60], "radius": 5})).unwrap();
+        let k = s.active_sketch.unwrap();
+        s.execute("extrude", &json!({"sketch": k.0, "region": 0, "distance": 3})).unwrap();
+    }
+}
+
+/// #50: a cut that takes away all of a body leaves no empty body behind, and one empty body (from an older file
+/// or a kernel slip) never blocks extruding elsewhere.
+#[test]
+fn a_cut_through_everything_leaves_no_empty_body() {
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("rectangle", &json!({"corner": [0, 0], "opposite": [10, 10]})).unwrap();
+    let out = s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 2})).unwrap();
+    let body = out.value["body"].as_u64().unwrap();
+    let top = out.value["face"].as_u64().unwrap();
+    s.execute("sketch", &json!({"body": body, "face": top})).unwrap();
+    s.execute("rectangle", &json!({"corner": [-20, -20], "opposite": [20, 20]})).unwrap();
+    let k = s.active_sketch.unwrap();
+    let n = s.doc.sketch(k).unwrap().regions().len() as u32;
+    let before = volume(&mut s);
+    for r in 0..n {
+        let _ = s.execute("extrude", &json!({"sketch": k.0, "region": r, "distance": -5}));
+    }
+    for b in &s.doc.bodies {
+        assert!(s.kernel.bounds(&b.shape).is_ok(), "{} has no extent", b.name);
+    }
+    assert!((volume(&mut s) - before).abs() < 1e-6, "the cut that would leave nothing is refused");
+    // An empty body in the project anyway: a new sketch's extrusion still works.
+    let mut empty = s.doc.bodies.first().cloned().unwrap_or_else(|| panic!("a body is left"));
+    let cube = s.kernel.make_box(glam::DVec3::new(100.0, 0.0, 0.0), glam::DVec3::splat(5.0)).unwrap();
+    empty.shape = s.kernel.boolean(shapecraft_kernel::BoolOp::Subtract, &cube, &cube).unwrap();
+    assert!(s.kernel.bounds(&empty.shape).is_err(), "the stand-in body is empty");
+    empty.id = s.doc.alloc_id();
+    s.doc.bodies.push(empty);
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("circle", &json!({"center": [40, 40], "radius": 5})).unwrap();
+    let k = s.active_sketch.unwrap();
+    s.execute("extrude", &json!({"sketch": k.0, "region": 0, "distance": 3})).unwrap();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("circle", &json!({"center": [80, 40], "radius": 5})).unwrap();
+    let k = s.active_sketch.unwrap();
+    s.execute("extrude", &json!({"sketch": k.0, "region": 0, "distance": 3, "result": "union"})).unwrap_err();
+}

@@ -373,3 +373,35 @@ fn a_steps_profile_can_be_picked_again() {
     assert!((bb.max.z - 6.0).abs() < 1e-6);
     assert!(s.execute("set_variable", &json!({"name": "x", "value": "1", "kind": "volume"})).is_err());
 }
+
+/// Changing a late step rebuilds from the step before it, not from an empty document: an import's file isn't read
+/// again (here it's gone by then, and the import still stands), while changing the import itself does read it.
+#[test]
+fn editing_a_late_step_leaves_the_steps_before_it_alone() {
+    let dir = std::env::temp_dir().join(format!("sc-replay-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("block.step");
+    let mut a = session();
+    a.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    a.execute("rectangle", &json!({"corner": [0, 0], "opposite": [10, 10]})).unwrap();
+    a.execute("extrude", &json!({"sketch": a.active_sketch.unwrap().0, "region": 0, "distance": 4})).unwrap();
+    a.execute("export_step", &json!({"path": file})).unwrap();
+
+    let mut s = session();
+    s.execute("import_file", &json!({"path": file})).unwrap();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("rectangle", &json!({"corner": [20, 0], "opposite": [30, 10]})).unwrap();
+    s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 2})).unwrap();
+    let last = s.doc.history.len() - 1;
+    // The model after each step was kept as the steps were made: even the first change doesn't read the file.
+    std::fs::remove_file(&file).unwrap();
+    s.execute("edit_step", &json!({"step": last, "params": {"distance": 3}})).unwrap();
+    s.execute("edit_step", &json!({"step": last, "params": {"distance": 5}})).unwrap();
+    assert!(s.doc.history.iter().all(|h| h.error.is_none()), "{:?}", s.doc.history.iter().map(|h| &h.error).collect::<Vec<_>>());
+    assert_eq!(s.doc.bodies.len(), 2);
+    assert!((volume(&mut s) - (400.0 + 500.0)).abs() < 1e-6);
+    // The import changed: it runs again and its file is gone, so the change is refused and the model stays.
+    assert!(s.execute("edit_step", &json!({"step": 0, "params": {"heal": "speed"}})).is_err());
+    assert_eq!(s.doc.bodies.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}

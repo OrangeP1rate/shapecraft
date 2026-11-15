@@ -68,6 +68,9 @@ pub struct Session {
     /// What the History keeps for the command that just ran, when that isn't its params (an Unlinked Copy keeps
     /// the copies' geometry, so later edits of what it copied leave it alone).
     pub(crate) log_params: Option<Value>,
+    /// The model as it stood after each step of the last rebuild, so the next one starts after the steps that
+    /// didn't change instead of from an empty document (an import's step reads its whole file again).
+    pub(crate) replayed: Arc<Vec<history::Replayed>>,
 }
 
 #[derive(Clone)]
@@ -104,6 +107,7 @@ impl Session {
             shapr_steps: Vec::new(),
             replaying: false,
             log_params: None,
+            replayed: Arc::new(Vec::new()),
         }
     }
 
@@ -125,6 +129,7 @@ impl Session {
             shapr_steps: Vec::new(),
             replaying: false,
             log_params: None,
+            replayed: self.replayed.clone(),
         }
     }
 
@@ -152,6 +157,7 @@ impl Session {
             shapr_steps: Vec::new(),
             replaying: false,
             log_params: None,
+            replayed: self.replayed.clone(),
         }
     }
 
@@ -233,6 +239,9 @@ impl Session {
                     changed = true;
                 }
                 if changed {
+                    if !self.replaying {
+                        self.keep_replayed();
+                    }
                     self.revision += 1;
                     self.undo.push(before);
                     if self.undo.len() > UNDO_LIMIT {

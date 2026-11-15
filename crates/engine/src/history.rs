@@ -3,6 +3,8 @@
 //! numbered step ("Extrude 01", 26.200), and changing a step's parameters rebuilds the model by replaying every step
 //! from an empty document.
 
+use std::hash::{Hash, Hasher};
+
 use serde_json::{Map, Value};
 use shapecraft_doc::{HistoryStep, ItemId, LogEntry, Pick};
 
@@ -536,8 +538,28 @@ impl Session {
         self.rebuild(self.all_steps(), Strict::No)
     }
 
+    /// After a command ran outside a rebuild: the model as it stands now is what a rebuild would make after the
+    /// latest step, so it's kept as that step's when the earlier steps' are already kept (the first change to a
+    /// step after an import then needn't read its file again).
+    pub(crate) fn keep_replayed(&mut self) {
+        let n = self.doc.history.len();
+        let Some(step) = self.doc.history.last() else { return };
+        if self.editing_past() || n > REPLAYS_KEPT || self.replayed.len() + 1 < n {
+            return;
+        }
+        let root = replay_root(&self.doc);
+        let mut kept: Vec<Replayed> = self.replayed.iter().take(n - 1).cloned().collect();
+        let key = step_key(kept.last().map_or(root, |r| r.key), step);
+        kept.push(Replayed { key, doc: self.doc.clone(), active_sketch: self.active_sketch, error: None, ids: step.ids });
+        self.replayed = std::sync::Arc::new(kept);
+    }
+
     /// Rebuilds the document by running every step's commands from an empty document. A suppressed step is
     /// skipped; a step that fails is undone, marked with its error and skipped too.
+    ///
+    /// The steps at the start that are the same as last time, with the same settings before them, aren't run again:
+    /// the model as it stood after them is taken from the last rebuild, so changing a late step doesn't read an
+    /// imported file again.
     pub(crate) fn replay(&mut self, mut steps: Vec<HistoryStep>) -> Result<()> {
         if let Some(old) = steps.iter().find(|h| h.entries.is_empty()) {
             return Err(EngineError::NotAvailable(format!("the history can't be rebuilt: {} was made by an older version", old.label)));
@@ -547,7 +569,25 @@ impl Session {
         fresh.doc.units = self.doc.units;
         fresh.doc.legacy_face_axes = self.doc.legacy_face_axes;
         fresh.doc.variables = self.doc.variables.clone();
-        for step in &mut steps {
+        let root = replay_root(&fresh.doc);
+        let before = std::sync::Arc::clone(&self.replayed);
+        let mut kept: Vec<Replayed> = Vec::new();
+        let mut key = root;
+        for (step, was) in steps.iter_mut().zip(before.iter()) {
+            let k = step_key(key, step);
+            if k != was.key {
+                break;
+            }
+            step.error = was.error.clone();
+            step.ids = was.ids;
+            key = k;
+            kept.push(was.clone());
+        }
+        if let Some(last) = kept.last() {
+            fresh.doc = last.doc.clone();
+            fresh.active_sketch = last.active_sketch;
+        }
+        for step in &mut steps[kept.len()..] {
             step.error = None;
             if !step.suppressed {
                 let saved = (fresh.doc.clone(), fresh.active_sketch);
@@ -568,7 +608,19 @@ impl Session {
                 step.ids = step.ids.max(fresh.doc.next_id());
             }
             fresh.doc.reserve_ids(step.ids);
+            // Kept for the next rebuild, keyed on the step as it ran (its picks pointed at what they found).
+            if kept.len() < REPLAYS_KEPT {
+                key = step_key(key, step);
+                kept.push(Replayed {
+                    key,
+                    doc: fresh.doc.clone(),
+                    active_sketch: fresh.active_sketch,
+                    error: step.error.clone(),
+                    ids: step.ids,
+                });
+            }
         }
+        self.replayed = std::sync::Arc::new(kept);
         let mut doc = fresh.doc;
         doc.history = steps;
         doc.name = self.doc.name.clone();
@@ -579,6 +631,36 @@ impl Session {
         }
         Ok(())
     }
+}
+
+/// Steps a rebuild keeps the model after (from the first): a long history's later steps run again each time.
+const REPLAYS_KEPT: usize = 256;
+
+/// The model as it stood after one step of a rebuild, and what the step came out as.
+#[derive(Clone)]
+pub(crate) struct Replayed {
+    /// The step and everything before it (and the settings the rebuild started from), hashed.
+    key: u64,
+    doc: shapecraft_doc::Document,
+    active_sketch: Option<ItemId>,
+    error: Option<String>,
+    ids: u64,
+}
+
+/// What a rebuild starts from, hashed: the settings every step sees.
+fn replay_root(doc: &shapecraft_doc::Document) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(&(doc.units, doc.legacy_face_axes, &doc.variables)).unwrap_or_default().hash(&mut h);
+    h.finish()
+}
+
+/// `before` with one more step: its commands as they ran and whether it was suppressed.
+fn step_key(before: u64, step: &HistoryStep) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    before.hash(&mut h);
+    serde_json::to_string(&step.entries).unwrap_or_default().hash(&mut h);
+    step.suppressed.hash(&mut h);
+    h.finish()
 }
 
 /// Decals and the Visualization settings aren't history steps: they move to the rebuilt document, decals only while
@@ -615,6 +697,9 @@ impl Session {
         if self.editing_past() || steps.iter().any(|h| h.entries.is_empty()) {
             return None;
         }
+        if let Some(touches) = self.touches_kept() {
+            return Some(touches);
+        }
         let mut fresh = Session::new(self.kernel.clone(), &self.doc.name);
         fresh.replaying = true;
         fresh.doc.units = self.doc.units;
@@ -642,6 +727,34 @@ impl Session {
                     .map(|b| b.id)
                     .collect(),
             );
+        }
+        Some(touches)
+    }
+
+    /// [`Session::step_touches`] read off the models kept after each step, when they're kept for every step of this
+    /// history as it is: each step touched the bodies whose display mesh it changed.
+    fn touches_kept(&self) -> Option<Vec<Vec<ItemId>>> {
+        let steps = &self.doc.history;
+        if self.replayed.len() < steps.len() {
+            return None;
+        }
+        let mut key = replay_root(&self.doc);
+        let mut touches = Vec::with_capacity(steps.len());
+        let mut before: std::collections::HashMap<ItemId, std::sync::Arc<shapecraft_kernel::Mesh>> = std::collections::HashMap::new();
+        for (step, kept) in steps.iter().zip(self.replayed.iter()) {
+            key = step_key(key, step);
+            if key != kept.key {
+                return None;
+            }
+            touches.push(
+                kept.doc
+                    .bodies
+                    .iter()
+                    .filter(|b| !before.get(&b.id).is_some_and(|m| std::sync::Arc::ptr_eq(m, &b.mesh)))
+                    .map(|b| b.id)
+                    .collect(),
+            );
+            before = kept.doc.bodies.iter().map(|b| (b.id, b.mesh.clone())).collect();
         }
         Some(touches)
     }

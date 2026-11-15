@@ -268,8 +268,7 @@ jobs:
         id: occt-cache
         with:
           path: target/windows-occt-arm64
-          key: occt-windows-arm64-V7_9_3-${{ hashFiles('crates/kernel-occt/build.rs') }}
-          restore-keys: occt-windows-arm64-V7_9_3-
+          key: occt-windows-arm64-V7_9_3-${{ hashFiles('crates/kernel-occt/build.rs', 'xtask/src/windows.rs') }}
       - name: OCCT for Windows on Arm
         shell: pwsh
         run: |
@@ -288,7 +287,7 @@ jobs:
         if: steps.occt-cache.outputs.cache-hit != 'true'
         with:
           path: target/windows-occt-arm64
-          key: occt-windows-arm64-V7_9_3-${{ hashFiles('crates/kernel-occt/build.rs') }}
+          key: occt-windows-arm64-V7_9_3-${{ hashFiles('crates/kernel-occt/build.rs', 'xtask/src/windows.rs') }}
       - name: Point the build at OCCT
         shell: pwsh
         run: |
@@ -371,5 +370,7 @@ jobs:
             echo "Check a download against SHA256SUMS.txt: \`shasum -a 256 FILE\` (macOS, Linux) or \`Get-FileHash FILE\` (Windows)."
           } >> notes.md
           gh release create "$tag" dist/* --title "ShapeCraft ${tag#v}" --notes-file notes.md --latest
-          # The staging draft for the .ipa (if there was one) has done its job.
-          gh release delete "ipa-${tag#v}" --yes 2>/dev/null || true
+          # The staging draft for the .ipa (if there was one) has done its job. It's named by the Cargo.toml version
+          # (ipa-0.9.3), not the tag (v0.9.3-alpha).
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          gh release delete "ipa-$version" --yes 2>/dev/null || true

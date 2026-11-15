@@ -66,16 +66,13 @@ pub fn occt() -> Result<()> {
             copy(&found, &install.join(into).join(&name))?;
         }
     }
-    // Headers: where the configure step laid them out (it does on Linux and Android), else gathered flat from the
-    // source tree as `install` would (on Windows the build folder has none).
+    // Headers: gathered flat from the source tree, as `install` would. Never from the build folder: on Windows the
+    // configure step writes one-line stubs there that #include the source tree by its absolute path, so a cached
+    // copy breaks as soon as that source tree is gone (the v0.9.3 release build).
     let into = install.join("include").join("opencascade");
     std::fs::create_dir_all(&into)?;
-    let from = match find(&build, "Standard.hxx").and_then(|p| p.parent().map(Path::to_path_buf)) {
-        Some(dir) => vec![dir],
-        None => vec![src.join("src")],
-    };
     let mut copied = 0usize;
-    let mut stack = from;
+    let mut stack = vec![src.join("src")];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).with_context(|| format!("no headers in {}", dir.display()))? {
             let path = entry?.path();
@@ -90,8 +87,12 @@ pub fn occt() -> Result<()> {
             }
         }
     }
-    if !into.join("Standard.hxx").exists() {
+    let standard = into.join("Standard.hxx");
+    if !standard.exists() {
         bail!("no OCCT headers found ({copied} files copied)");
+    }
+    if std::fs::read_to_string(&standard)?.lines().count() < 10 {
+        bail!("{} is a stub, not OCCT's header", standard.display());
     }
     println!("OCCT for Windows {} ({} toolkits) → {}", arch(), toolkits.len(), install.display());
     Ok(())

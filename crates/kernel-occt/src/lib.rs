@@ -537,6 +537,12 @@ impl Kernel for OcctKernel {
         unsafe { ffi::sk_cancel(i32::from(on)) }
     }
 
+    fn time_limit(&self, seconds: Option<f64>) {
+        let s = seconds.filter(|s| s.is_finite() && *s > 0.0).unwrap_or(0.0);
+        // SAFETY: sets a value of the calling thread.
+        unsafe { ffi::sk_time_limit(s) }
+    }
+
     fn scale(&self, shape: &Shape, center: DVec3, factors: DVec3) -> Result<Shape> {
         finite("scale", &[center.x, center.y, center.z, factors.x, factors.y, factors.z])?;
         if factors.min_element() <= 0.0 || factors.max_element() > 1e6 || factors.min_element() < 1e-6 {
@@ -572,9 +578,12 @@ impl Kernel for OcctKernel {
         let before = (self.volume_of(shape)?, self.bounds(shape)?);
         for way in 0..3 {
             // SAFETY: `faces` outlives the call.
-            let Ok(r) = blend_out("offset", |out| unsafe { ffi::sk_offset_faces_way(s, faces.as_ptr(), faces.len(), distance, way, out) })
-            else {
-                continue;
+            let r = match blend_out("offset", |out| unsafe { ffi::sk_offset_faces_way(s, faces.as_ptr(), faces.len(), distance, way, out) })
+            {
+                Ok(r) => r,
+                // Stopped (Cancel or the time limit): the other ways would only be stopped too.
+                Err(e) if e.to_string().contains("time limit") || e.to_string().contains("canceled") => return Err(e),
+                Err(_) => continue,
             };
             if offset_check::plausible(before, &levels, distance, (self.volume_of(&r)?, self.bounds(&r)?)) {
                 return Ok(r);

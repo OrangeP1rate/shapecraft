@@ -270,6 +270,9 @@ const char* sk_last_error() { return g_error.c_str(); }
 // This thread's long OCCT work may be stopped by sk_cancel (an import on its own thread).
 void sk_cancellable(int on) { g_cancellable = on != 0; }
 
+// Gives this thread's long OCCT work (offsets) a time limit of `seconds` from now; 0 takes it away.
+void sk_time_limit(double seconds) { g_deadline = seconds > 0.0 ? now_s() + seconds : 0.0; }
+
 // Asks cancellable work to stop at its next check (1), or clears that (0) before the next import.
 void sk_cancel(int on) { g_cancel.store(on != 0); }
 
@@ -1978,8 +1981,10 @@ TopoDS_Shape offset_some(const TopoDS_Shape& shape, const std::vector<TopoDS_Fac
   BRepOffset_MakeOffset mo;
   mo.Initialize(shape, 0.0, 1.0e-6, BRepOffset_Skin, Standard_False, Standard_False, GeomAbs_Intersection, Standard_False);
   for (const auto& f : faces) mo.SetOffsetOnFace(f, distance);
-  mo.MakeOffsetShape();
-  if (!mo.IsDone()) return TopoDS_Shape();
+  // Stoppable: Cancel, or this thread's time limit (an offset can run for hours on some parts, #52/#59).
+  Handle(SkProgress) progress = new SkProgress();
+  mo.MakeOffsetShape(progress->Start());
+  if (stop_now() || !mo.IsDone()) return TopoDS_Shape();
   TopoDS_Shape r = mo.Shape();
   if (r.IsNull()) return r;
   // The result can come back as a shell; close it into a solid.
@@ -2084,8 +2089,9 @@ TopoDS_Shape offset_keeping_fillets(const TopoDS_Shape& shape, const std::vector
   df.AddFacesToRemove(remove);
   df.SetRunParallel(Standard_False);
   df.SetToFillHistory(Standard_True);
-  df.Build();
-  if (!df.IsDone() || df.HasErrors()) return TopoDS_Shape();
+  Handle(SkProgress) progress = new SkProgress();
+  df.Build(progress->Start());
+  if (stop_now() || !df.IsDone() || df.HasErrors()) return TopoDS_Shape();
   TopoDS_Shape bare = df.Shape();
   // The moved faces in the defeatured shape (they grew to fill where the fillets were).
   std::vector<TopoDS_Face> targets;
@@ -2137,9 +2143,9 @@ TopoDS_Shape offset_keeping_fillets(const TopoDS_Shape& shape, const std::vector
       }
     }
   }
-  if (added == 0) return TopoDS_Shape();
-  mk.Build();
-  if (!mk.IsDone()) return TopoDS_Shape();
+  if (added == 0 || stop_now()) return TopoDS_Shape();
+  mk.Build(progress->Start());
+  if (stop_now() || !mk.IsDone()) return TopoDS_Shape();
   // Join faces and edges the round trip cut into pieces.
   ShapeUpgrade_UnifySameDomain unify(mk.Shape(), Standard_True, Standard_True, Standard_False);
   unify.Build();
@@ -2172,8 +2178,9 @@ TopoDS_Shape offset_past_collapse(const TopoDS_Shape& shape, const std::vector<T
   df.SetShape(shape);
   df.AddFacesToRemove(remove);
   df.SetRunParallel(Standard_False);
-  df.Build();
-  if (!df.IsDone() || df.HasErrors()) return TopoDS_Shape();
+  Handle(SkProgress) progress = new SkProgress();
+  df.Build(progress->Start());
+  if (stop_now() || !df.IsDone() || df.HasErrors()) return TopoDS_Shape();
   TopoDS_Shape r = df.Shape();
   for (TopExp_Explorer ex(r, TopAbs_VERTEX); ex.More(); ex.Next()) {
     gp_Pnt q = BRep_Tool::Pnt(TopoDS::Vertex(ex.Current()));
@@ -2242,6 +2249,7 @@ int sk_offset_faces_way(const SkShape* s, const uint32_t* ids, size_t n, double 
     else if (way == 1) r = offset_some(s->shape, faces, distance);
     else if (way == 2) r = offset_past_collapse(s->shape, faces, distance);
     else return fail("no such offset method");
+    if (stop_now()) return fail(g_cancel.load() ? "canceled" : "stopped: it took longer than its time limit");
     if (r.IsNull()) return fail("offset failed for this distance");
     return put(out, r);
   });

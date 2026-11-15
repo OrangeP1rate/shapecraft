@@ -38,6 +38,7 @@ mod tools;
 pub mod tutorial;
 mod viewport;
 mod visual;
+mod working;
 
 use std::sync::Arc;
 
@@ -196,6 +197,12 @@ pub struct Workspace {
     pub import_file_go: Option<(std::path::PathBuf, serde_json::Value)>,
     /// An import running on its own thread (#22).
     pub importing: Option<importing::Importing>,
+    /// A heavy step finishing in the background (#59).
+    pub working: Option<working::Working>,
+    /// A heavy step's live preview being worked out in the background.
+    pub(crate) preview_job: Option<working::PreviewJob>,
+    /// How long a heavy step may hold the window before it goes on in the background (tests set it to zero).
+    pub(crate) heavy_wait: std::time::Duration,
     /// Set when Export was pressed: the app asks where to save, then writes each format.
     pub wants_export: Option<export::ExportDialog>,
     /// The Visualization workspace: materials on, edges off.
@@ -652,6 +659,13 @@ impl Workspace {
             prefs_picks: Default::default(),
             import_file_go: None,
             importing: None,
+            working: None,
+            preview_job: None,
+            // SHAPECRAFT_HEAVY_WAIT_MS: how long a heavy step holds the window first (0 shows the card at once).
+            heavy_wait: std::env::var("SHAPECRAFT_HEAVY_WAIT_MS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map_or(working::WAIT_INLINE, |ms| std::time::Duration::from_millis(ms.min(60_000))),
             wants_export: None,
             visualizing: false,
             vis_sidebar: true,
@@ -1009,6 +1023,10 @@ impl Workspace {
         shapecraft_doc::set_display_formats(self.feet_architectural, self.degrees_fractional);
         self.now = ui.input(|i| i.time);
         self.poll_import(ui.ctx());
+        self.poll_working(ui.ctx());
+        if self.preview_pending() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+        }
         self.note_selection();
         if self.step_animation() {
             ui.ctx().request_repaint();
@@ -1153,6 +1171,7 @@ impl Workspace {
             || self.import_sheet.is_some()
             || self.import_prefs.is_some()
             || self.importing.is_some()
+            || self.working.is_some()
             || self.prefs_open
             || self.nav_presets.is_some()
             || self.variables_dialog.is_some()
@@ -1176,6 +1195,7 @@ impl Workspace {
                     import_prefs::dialog(self, ui, full);
                 }
                 importing::card(self, ui, full);
+                working::card(self, ui, full);
                 prefs::modals(self, ui, full);
             });
         }

@@ -1286,3 +1286,22 @@ fn mass_props_within_a_budget_falls_back_to_triangles() {
     }
     assert_eq!(overrunning(), 0);
 }
+
+/// #59: an offset past its thread's time limit stops with a reason instead of running on; without one it works.
+#[test]
+fn offset_stops_at_its_time_limit() {
+    let a = k().make_box(DVec3::ZERO, DVec3::new(10.0, 10.0, 10.0)).unwrap();
+    let top = (0..k().face_count(&a).unwrap()).find(|f| k().face_plane(&a, *f).unwrap().is_some_and(|p| p.normal.z > 0.9)).unwrap();
+    let job = std::thread::spawn(move || {
+        let k = k();
+        k.time_limit(Some(1e-9));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let late = k.offset_faces(&a, &[top], 2.0);
+        k.time_limit(None);
+        let fine = k.offset_faces(&a, &[top], 2.0);
+        (late.err().map(|e| e.to_string()), fine.is_ok())
+    });
+    let (late, fine) = job.join().unwrap();
+    assert!(late.as_deref().is_some_and(|e| e.contains("time limit")), "{late:?}");
+    assert!(fine);
+}

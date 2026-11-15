@@ -2193,7 +2193,7 @@ impl ShapeCraftApp {
                 other => {
                     let Some(ws) = self.ws.as_deref_mut() else { continue };
                     // The project waits while an import runs on its own thread (#22).
-                    if ws.importing.is_some() {
+                    if ws.importing.is_some() || ws.working.is_some() {
                         continue;
                     }
                     match other {

@@ -128,6 +128,33 @@ impl Session {
         }
     }
 
+    /// A fork for a live preview on another thread: only the last undo step comes along (what
+    /// [`Session::preview_amend`] reads), so making one every few frames stays cheap.
+    pub fn fork_for_preview(&self) -> Self {
+        let mut s = Self { undo: Vec::new(), redo: Vec::new(), ..self.fork_empty() };
+        s.undo.extend(self.undo.last().cloned());
+        s
+    }
+
+    fn fork_empty(&self) -> Self {
+        Self {
+            doc: self.doc.clone(),
+            kernel: self.kernel.clone(),
+            selection: self.selection.clone(),
+            active_sketch: self.active_sketch,
+            path: self.path.clone(),
+            dirty: self.dirty,
+            revision: self.revision,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            followups: Vec::new(),
+            adopt: None,
+            shapr_steps: Vec::new(),
+            replaying: false,
+            log_params: None,
+        }
+    }
+
     pub fn with_document(kernel: Arc<dyn Kernel>, doc: Document, path: Option<PathBuf>) -> Self {
         let mut s = Self::new(kernel, "");
         s.doc = doc;

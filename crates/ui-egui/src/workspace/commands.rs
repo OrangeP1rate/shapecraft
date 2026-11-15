@@ -23,6 +23,27 @@ impl Workspace {
             self.live_step = None;
             return true;
         }
+        // Heavy steps (Offset Face) work on another thread; a long one finishes in the background (#59).
+        if super::working::HEAVY.contains(&id) {
+            if self.importing.is_some() || self.working.is_some() {
+                return false;
+            }
+            return match self.run_heavy(id, params, self.is_live()) {
+                Some(Ok(_)) => {
+                    self.remember(id);
+                    self.live_step = Some(self.session.revision);
+                    true
+                }
+                Some(Err(e)) => {
+                    self.toast(match e {
+                        EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
+                        other => other.to_string(),
+                    });
+                    false
+                }
+                None => true,
+            };
+        }
         let ok = if self.is_live() {
             match self.session.amend(id, &params) {
                 Ok(_) => true,
@@ -54,7 +75,7 @@ impl Workspace {
             map.insert("construction".into(), Value::Bool(true));
         }
         // While an import runs on its own thread, its result replaces the project: nothing else may change it.
-        if self.importing.is_some() {
+        if self.importing.is_some() || self.working.is_some() {
             return None;
         }
         match self.session.execute(id, &params) {
@@ -146,9 +167,16 @@ impl Workspace {
         };
         let Some((id, params)) = request else {
             self.preview = None;
+            self.preview_job = None;
             return;
         };
         let key = format!("{id}{params}");
+        if super::working::HEAVY.contains(&id) {
+            if self.working.is_none() {
+                self.heavy_preview(id, &params, key);
+            }
+            return;
+        }
         if let Some(p) = &self.preview
             && (p.key == key || self.now - p.computed_at < 0.03)
         {

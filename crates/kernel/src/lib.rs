@@ -506,6 +506,12 @@ pub trait Kernel: Send + Sync {
         let _ = on;
     }
 
+    /// Gives the calling thread's long work (offsets) a time limit from now, after which it stops with an error;
+    /// `None` takes it away.
+    fn time_limit(&self, seconds: Option<f64>) {
+        let _ = seconds;
+    }
+
     /// STEP with its product structure: each solid placed, with the name, color and assembly path it had in the
     /// file. Kernels without that fall back to the bare shapes.
     fn read_step_parts(&self, path: &Path) -> Result<Vec<(Shape, PartInfo)>> {

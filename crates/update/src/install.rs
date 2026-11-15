@@ -87,6 +87,9 @@ impl Install {
             // A copy from the old setup program moves to the MSI at its next update (apply.rs).
             Install::WindowsInstalled(_) | Install::WindowsMsi(_) if arch == "x86_64" => Some("-windows-x64.msi".into()),
             Install::WindowsPortable(_) if arch == "x86_64" => Some("-windows-x64-portable.zip".into()),
+            // Windows on Arm (#61). An x64 copy running there under emulation reports x86_64 and stays on x64.
+            Install::WindowsInstalled(_) | Install::WindowsMsi(_) if arch == "arm64" => Some("-windows-arm64.msi".into()),
+            Install::WindowsPortable(_) if arch == "arm64" => Some("-windows-arm64-portable.zip".into()),
             Install::AppImage(_) => Some(format!("-linux-{}.AppImage", std::env::consts::ARCH)),
             Install::LinuxFolder(_) => Some(format!("-linux-{}.tar.gz", std::env::consts::ARCH)),
             _ => None,

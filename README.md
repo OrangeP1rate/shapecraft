@@ -139,7 +139,9 @@ Needs Rust (stable) and Open CASCADE 7.8 or newer, linked dynamically. Set `OCCT
   development libraries (xkbcommon, wayland, X11, Xcursor, Xrandr, Xi, GL).
 - Nix (Linux): `nix develop`, or `direnv allow` with nix-direnv, sets all of the above up.
 - Windows (MSVC): OCCT from conda-forge (`Library\include\opencascade`, `Library\lib`) or vcpkg; put the OCCT DLLs
-  on `PATH` to run.
+  on `PATH` to run. Windows on Arm (conda-forge has no Arm build): in a Visual Studio Arm64 developer shell,
+  `OCCT_SRC=<OCCT 7.9 source> cargo xtask windows-occt` builds just the toolkits ShapeCraft uses into
+  `target\windows-occt-arm64`; point `OCCT_INCLUDE_DIR`, `OCCT_LIB_DIR` and `PATH` there.
 
 ```sh
 git clone https://github.com/jackharvest/shapecraft

@@ -5,6 +5,7 @@
 //!   cargo xtask appimage            AppImage from bundle-linux's folder (APPIMAGETOOL=path)
 //!   cargo xtask linux-packages      .deb and .rpm from bundle-linux's folder (nfpm)
 //!   cargo xtask bundle-windows      portable zip, Inno Setup installer, MSI (Windows, in a VS developer shell)
+//!   cargo xtask windows-occt        OpenCASCADE DLLs for this Windows machine's chip (OCCT_SRC; Arm64, #61)
 //!   cargo xtask ios-occt [device|sim] OpenCASCADE for iOS with Xcode (OCCT_SRC)
 //!   cargo xtask ios-provision UDID     a signing profile naming the device (SHAPECRAFT_IOS_TEAM/BUNDLE)
 //!   cargo xtask ios-app [device|sim]   ShapeCraft.app, signed (target/ios/<kind>)
@@ -46,6 +47,7 @@ fn main() -> std::process::ExitCode {
         Some("appimage") => linux::appimage(),
         Some("linux-packages") => linux::packages(),
         Some("bundle-windows") => windows::bundle(),
+        Some("windows-occt") => windows::occt(),
         Some("android-occt") => android::occt(rest),
         Some("ios-occt") => ios::occt(rest),
         Some("ios-provision") => ios::provision(rest),

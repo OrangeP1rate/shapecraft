@@ -6,8 +6,10 @@
 //!   cargo xtask bundle-windows          (in a Visual Studio developer shell, for dumpbin)
 //!   → target\shapecraft-<version>-windows-x64-portable.zip, …-windows-x64-setup.exe and …-windows-x64.msi
 //!
-//! DLLs are looked up in OCCT_BIN (default: CONDA_PREFIX\Library\bin), then CONDA_PREFIX; anything not found there
-//! is treated as part of Windows. The installer needs Inno Setup 6 (iscc on PATH or in Program Files), the MSI WiX 5
+//! DLLs are looked up in OCCT_BIN (default: CONDA_PREFIX\Library\bin), then CONDA_PREFIX, then the Visual C++ runtime
+//! that comes with the build tools (VCToolsRedistDir); anything not found there is treated as part of Windows. The
+//! files are named for the chip they're built on: `windows-x64`, or `windows-arm64` on Windows on Arm (#61), whose
+//! OpenCASCADE comes from `cargo xtask windows-occt` (conda-forge has none for Arm). The installer needs Inno Setup 6 (iscc on PATH or in Program Files), the MSI WiX 5
 //! (`wix` on PATH); either is skipped with a warning when its tool is missing.
 
 use std::collections::{BTreeSet, VecDeque};
@@ -17,6 +19,65 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::util::{clear, copy, output, root, s, target, version};
+
+/// The chip the files are named for, as Windows names it: the one this build runs on.
+fn arch() -> &'static str {
+    if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" }
+}
+
+/// Builds OpenCASCADE for this machine's chip as DLLs: only the toolkits the shim links and none of the optional
+/// third-party products, as for Android. For Windows on Arm, where conda-forge has no OCCT (#61). Run it in a Visual
+/// Studio developer shell for the chip (cl, cmake and ninja on PATH), with OCCT_SRC an OCCT 7.9 source tree:
+///   cargo xtask windows-occt   → target\windows-occt-<arch>\{bin,lib,include\opencascade}
+/// then point the build at it with OCCT_BIN, OCCT_LIB_DIR and OCCT_INCLUDE_DIR.
+pub fn occt() -> Result<()> {
+    use crate::android::{find, linked_toolkits};
+    use crate::util::run;
+    let src = PathBuf::from(std::env::var_os("OCCT_SRC").context("set OCCT_SRC to an OCCT 7.9 source tree")?);
+    let build = target().join(format!("windows-occt-build-{}", arch()));
+    let install = target().join(format!("windows-occt-{}", arch()));
+    let mut args = vec![
+        "-S".to_string(),
+        s(&src).to_string(),
+        "-B".to_string(),
+        s(&build).to_string(),
+        "-G".to_string(),
+        "Ninja".to_string(),
+        "-DCMAKE_BUILD_TYPE=Release".to_string(),
+        "-DBUILD_LIBRARY_TYPE=Shared".to_string(),
+        "-DBUILD_DOC_Overview=OFF".to_string(),
+        "-DBUILD_SAMPLES_QT=OFF".to_string(),
+        "-DBUILD_MODULE_Draw=OFF".to_string(),
+    ];
+    for off in ["FREETYPE", "OPENGL", "GLES2", "D3D", "TK", "FREEIMAGE", "RAPIDJSON", "TBB", "VTK", "DRACO", "OPENVR", "FFMPEG"] {
+        args.push(format!("-DUSE_{off}=OFF"));
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    run("cmake", &args)?;
+    let toolkits = linked_toolkits()?;
+    let mut build_args = vec!["--build", s(&build), "--target"];
+    build_args.extend(toolkits.iter().map(String::as_str));
+    run("cmake", &build_args)?;
+    // `install` would build every toolkit, so copy the DLLs, their import libraries and the headers.
+    clear(&install)?;
+    for tk in &toolkits {
+        for (name, into) in [(format!("{tk}.dll"), "bin"), (format!("{tk}.lib"), "lib")] {
+            let found = find(&build, &name).with_context(|| format!("{name} wasn't built"))?;
+            copy(&found, &install.join(into).join(&name))?;
+        }
+    }
+    let headers = build.join("include").join("opencascade");
+    let into = install.join("include").join("opencascade");
+    std::fs::create_dir_all(&into)?;
+    for entry in std::fs::read_dir(&headers).with_context(|| format!("no headers in {}", headers.display()))? {
+        let path = entry?.path();
+        if let Some(name) = path.file_name() {
+            std::fs::copy(&path, into.join(name)).with_context(|| format!("copying {}", path.display()))?;
+        }
+    }
+    println!("OCCT for Windows {} ({} toolkits) → {}", arch(), toolkits.len(), install.display());
+    Ok(())
+}
 
 /// The DLLs a file imports (dumpbin /dependents).
 fn imports(file: &Path) -> Result<Vec<String>> {
@@ -57,7 +118,7 @@ fn zip_folder(dir: &Path, out: &Path) -> Result<()> {
 pub fn bundle() -> Result<()> {
     let version = version()?;
     let release = target().join("release");
-    let name = format!("shapecraft-{version}-windows-x64");
+    let name = format!("shapecraft-{version}-windows-{}", arch());
     let stage = target().join("windows-bundle").join("ShapeCraft");
     let mut search: Vec<PathBuf> = Vec::new();
     if let Some(b) = std::env::var_os("OCCT_BIN") {
@@ -69,6 +130,16 @@ pub fn bundle() -> Result<()> {
     }
     if search.is_empty() {
         bail!("set OCCT_BIN or activate the conda environment with OCCT");
+    }
+    // The C++ runtime (msvcp140, vcruntime140…): conda's copy where there is one, else the build tools' own
+    // redistributable folder, so a machine without the VC++ Redistributable still starts the app.
+    if let Some(redist) = std::env::var_os("VCToolsRedistDir") {
+        let dir = PathBuf::from(redist).join(arch());
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            search.extend(entries.filter_map(Result::ok).map(|e| e.path()).filter(|p| {
+                p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("Microsoft.VC") && n.to_string_lossy().ends_with(".CRT"))
+            }));
+        }
     }
     clear(&target().join("windows-bundle"))?;
     std::fs::create_dir_all(&stage)?;
@@ -162,7 +233,7 @@ fn msi(stage: &Path, version: &str, name: &str) -> Result<()> {
         .args([
             "build".to_string(),
             "-arch".into(),
-            "x64".into(),
+            arch().into(),
             "-d".into(),
             format!("Version={numeric}"),
             "-d".into(),

@@ -34,6 +34,7 @@ ShapeCraft keeps itself up to date. Nobody has to visit a download page.
 | Windows MSI (`installed-by-msi.txt` beside the program) | `…-windows-x64.msi` | `msiexec /i` with a progress bar only (a major upgrade of the same product) |
 | Windows, by the old setup program (up to 0.7.10) | `…-windows-x64.msi` | the MSI into the same folder, then the setup program's uninstaller, Apps & features entry and Start menu folder are removed |
 | Windows portable zip | `…-windows-x64-portable.zip` | new files copied over the folder |
+| Windows on Arm (native Arm64 build, MSI or portable) | `…-windows-arm64.msi` / `…-windows-arm64-portable.zip` | as above (an x64 copy running under emulation keeps updating from x64) |
 | Linux AppImage | `…-linux-x86_64.AppImage` | new file moved over the old one |
 | Linux download (`bin/`, `lib/`, unpacked or put in `~/.local/lib/shapecraft` by `install.sh`) | `…-linux-x86_64.tar.gz` | old folder aside, new one in, old removed |
 

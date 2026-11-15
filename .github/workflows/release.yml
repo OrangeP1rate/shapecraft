@@ -251,10 +251,77 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: ios, path: dist/*.ipa, if-no-files-found: error }
 
+  windows-arm64:
+    # Windows on Arm (Surface and other Snapdragon machines, #61). conda-forge has no OpenCASCADE for Arm, so it's
+    # built here from source (only our toolkits, as DLLs) and cached. Never holds the release back.
+    runs-on: windows-11-arm
+    timeout-minutes: 150
+    env:
+      OCCT_TAG: V7_9_3
+      OCCT_SHA256: 5ecf094ec6b12d5413dfb851d8c3590c354058aee556e32e408bdfbf8c357d57
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ilammy/msvc-dev-cmd@v1
+        with: { arch: arm64 }
+      - uses: actions/cache@v4
+        with:
+          path: target/windows-occt-arm64
+          key: occt-windows-arm64-V7_9_3-${{ hashFiles('crates/kernel-occt/build.rs', 'xtask/src/windows.rs', 'xtask/src/android.rs') }}
+          restore-keys: occt-windows-arm64-V7_9_3-
+      - name: OCCT for Windows on Arm
+        shell: pwsh
+        run: |
+          if (-not (Test-Path target\windows-occt-arm64\bin\TKernel.dll)) {
+            New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\occt" | Out-Null
+            $tgz = "$env:RUNNER_TEMP\occt\occt.tar.gz"
+            Invoke-WebRequest -Uri "https://github.com/Open-Cascade-SAS/OCCT/archive/refs/tags/$env:OCCT_TAG.tar.gz" -OutFile $tgz
+            if ((Get-FileHash $tgz -Algorithm SHA256).Hash.ToLower() -ne $env:OCCT_SHA256) { throw "OCCT source checksum mismatch" }
+            tar -xzf $tgz -C "$env:RUNNER_TEMP\occt"
+            $env:OCCT_SRC = "$env:RUNNER_TEMP\occt\OCCT-$($env:OCCT_TAG.Substring(1))"
+            cargo xtask windows-occt
+            if ($LASTEXITCODE -ne 0) { throw "windows-occt failed" }
+          }
+      - name: Point the build at OCCT
+        shell: pwsh
+        run: |
+          $root = "$env:GITHUB_WORKSPACE\target\windows-occt-arm64"
+          "$root\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          "OCCT_BIN=$root\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "OCCT_INCLUDE_DIR=$root\include\opencascade" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "OCCT_LIB_DIR=$root\lib" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Build
+        shell: pwsh
+        run: |
+          $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER = Join-Path $env:VCToolsInstallDir 'bin\Hostarm64\arm64\link.exe'
+          if (-not (Test-Path $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER)) { throw "MSVC link.exe not found" }
+          cargo build --release --locked -p shapecraft -p shapecraft-cli
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+      - name: Smoke test (the kernel on Arm)
+        shell: pwsh
+        run: |
+          $d = "$env:RUNNER_TEMP\smoke"
+          New-Item -ItemType Directory -Force $d | Out-Null
+          (Get-Content packaging\android\smoke.jsonl) -replace 'OUT', ($d -replace '\\', '/') | Set-Content "$d\smoke.jsonl"
+          target\release\shapecraft-cli.exe run "$d\smoke.jsonl"
+          if ($LASTEXITCODE -ne 0) { throw "smoke test failed" }
+      - name: WiX
+        shell: pwsh
+        run: dotnet tool install --global wix --version 5.0.2
+      # Portable zip and MSI (no setup.exe: Windows goes MSI-only).
+      - name: Bundle
+        shell: pwsh
+        run: |
+          $env:CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER = Join-Path $env:VCToolsInstallDir 'bin\Hostarm64\arm64\link.exe'
+          cargo xtask bundle-windows
+          if ($LASTEXITCODE -ne 0) { throw "bundle failed" }
+      - uses: actions/upload-artifact@v4
+        with: { name: windows-arm64, path: "target/*-windows-arm64-portable.zip\ntarget/*-windows-arm64.msi", if-no-files-found: error }
+
   publish:
-    # The desktop downloads must all be there; the APK and the .ipa join them when they built (neither holds the
-    # release back).
-    needs: [macos, windows, linux, android, ios]
+    # The desktop downloads must all be there; the APK, the .ipa and the Windows on Arm files join them when they
+    # built (none of them holds the release back).
+    needs: [macos, windows, windows-arm64, linux, android, ios]
     if: always() && needs.macos.result == 'success' && needs.windows.result == 'success' && needs.linux.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -285,6 +352,7 @@ jobs:
             echo "copies are the same file, there for copies of ShapeCraft up to 0.8.5 to update from."
             echo
             echo "**First launch:** macOS asks once: System Settings ▸ Privacy & Security ▸ Open Anyway."
+            echo "**Windows on Arm** (Surface and other Snapdragon PCs): the \`-windows-arm64\` MSI or portable zip, when present."
             echo "Windows SmartScreen: More info ▸ Run anyway. Linux: make the AppImage executable, then double-click it,"
             echo "or install the .deb (Debian, Ubuntu) or .rpm (Fedora, openSUSE) package."
             echo "Android (test build, arm64, Android 8.0+): open the APK on the device and allow installs from that app."

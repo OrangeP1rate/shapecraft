@@ -2,6 +2,33 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.9.4-alpha
+**Big boards come in with their colours, sketching on them is fast, and editing an early import no longer means
+waiting for it all over again.**
+### New
+- **Imports keep colours set on single faces.** STEP files and .shapr projects that colour faces one by one (a PCB's
+  solder mask, pads and sockets) come in with those colours, any number of them per body, and STEP exports write
+  them back out. Thanks [@chickey](https://github.com/chickey) (#65).
+- **Offset Edge on a face's outline.** Sketching on a face, pick edges of the body lying on the sketch and Offset
+  Edge them (Chain grows them to the whole outline); clicking the lit button of the running sketch tool puts it down
+  so you can pick. Double-clicking the body there now leaves the sketch with the body selected. Thanks
+  [@chickey](https://github.com/chickey) (#67).
+- **Windows on Arm download.** The native Arm64 MSI and portable zip that missed 0.9.3 are in this release. Thanks
+  [@Hobbesdcc](https://github.com/Hobbesdcc) (#61).
+### Changed
+- **Changing a History step only reruns that step and the ones after it.** On a big import, changing a later
+  extrude went from about a minute (the whole file was read again) to a fraction of a second. Thanks
+  [@chickey](https://github.com/chickey) (#68).
+- **Sketching on a face of a big model is smooth**, and the model stays solid while you sketch on it, its colours
+  softened, so a dark board doesn't vanish. Thanks [@chickey](https://github.com/chickey) (#67).
+- **Shell, Fillet and Chamfer work in the background with Cancel** when they take a while, as Offset Face does, so
+  the window keeps drawing on a slow computer. Thanks [@jan-tdy](https://github.com/jan-tdy) (#59).
+### Fixed
+- **.shapr import: closed walls stored as rim rings come in whole.** A body whose wall lost a strip and turned
+  invalid now imports with the right volume and size. Thanks [@pablohc](https://github.com/pablohc) (#63, #64).
+- **.shapr import: bodies sharing a name land in their own folders**, and a hidden folder hides the bodies it holds,
+  not others. Thanks [@pablohc](https://github.com/pablohc) (#66).
+
 ## 0.9.3-alpha
 **Offset Face no longer freezes the window on big parts or slow computers, and Windows on Arm gets its own download.**
 ### New

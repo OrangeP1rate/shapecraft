@@ -213,7 +213,7 @@ pub(super) fn context_menu(ws: &mut Workspace, ui: &mut Ui, at: Pos2, under: Opt
     // (label, checked); "" is a separator. As observed (L11): everything shows enabled, and the Sketch on Face /
     // Section View pair is left out over a sketch.
     let mut rows: Vec<(&str, bool)> = vec![("Select All", false), ("Select Through This Point…", false), ("", false)];
-    // A letter of a text: all of its letters in one go (#49; ours, the reference picks them one by one).
+    // A letter of a text: all of its letters in one go (#49).
     let text_letter = match under {
         Some(Pick::Region { sketch, region }) => {
             ws.session.doc.sketch(sketch).and_then(|k| k.text_regions(region)).map(|_| (sketch, region))

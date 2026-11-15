@@ -2,6 +2,21 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.9.2-alpha
+**More from your reports: a built-in log, a real-size view, and whole texts picked in one go.**
+### New
+- **Help ▸ Show Log…** shows what ShapeCraft said while it ran (each step and how long it took, warnings, errors),
+  with Copy All and Show in Folder. It's also kept as `shapecraft.log` next to your settings, so you no longer need a
+  terminal to see it. Thanks [@jan-tdy](https://github.com/jan-tdy) (#54).
+- **View ▸ Actual Size** zooms so 1 mm of your model is 1 mm on the screen, to hold a part or a ruler against. The
+  first time, a bank card drawn on screen is matched to a real one (View ▸ Calibrate Actual Size… to redo it).
+  Thanks [@jan-tdy](https://github.com/jan-tdy) (#62).
+- **Right-click a letter ▸ Select Whole Text** picks every letter of a text at once, leaving out the insides of
+  letters like O and B, ready to extrude. Thanks [@jan-tdy](https://github.com/jan-tdy) (#49).
+### Changed
+- **Tutorials: a new instruction swells and glows for a moment** at the top of the window, so it isn't missed next to
+  the picture at the bottom left. Thanks [@jan-tdy](https://github.com/jan-tdy) (#48).
+
 ## 0.9.1-alpha
 **Fixes from your reports: sketches stay out while they still have profiles to use, text is easier to set up, and an
 emptied body can't block extruding any more.**

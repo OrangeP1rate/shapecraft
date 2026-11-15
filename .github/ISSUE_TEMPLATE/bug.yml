@@ -38,7 +38,8 @@ body:
       label: Project, screenshots or a recording
       description: |
         Drag in a zipped project folder, a screenshot or a short recording. Leave out anything private.
-        After a crash, `crash.log` beside your settings helps too.
+        After a crash, `crash.log` beside your settings helps too. Help ▸ Show Log… shows what ShapeCraft said while
+        it ran (Copy All, then paste it here).
   - type: textarea
     id: extra
     attributes:

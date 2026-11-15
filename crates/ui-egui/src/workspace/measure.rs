@@ -22,8 +22,8 @@ pub struct Measured {
 
 impl Workspace {
     /// The point modes' placed points can be moved: a press on one (within reach on screen) picks it up, it follows
-    /// the pointer over the model, and it stays where it's let go (#36; as the reference's manual says: "Move already
-    /// placed points to new notable points"). True while it has the drag, so the view doesn't turn under it.
+    /// the pointer over the model (snapping to notable points), and it stays where it's let go (#36). True while it
+    /// has the drag, so the view doesn't turn under it.
     pub(super) fn measure_point_drag(&mut self, ui: &Ui, resp: &egui::Response) -> bool {
         if !(self.measuring && matches!(self.tool, super::Tool::Idle) && mode(self) > 0) {
             self.measure_drag = None;

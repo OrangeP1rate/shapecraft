@@ -37,7 +37,7 @@ ShapeCraft keeps itself up to date. Nobody has to visit a download page.
 | Linux AppImage | `…-linux-x86_64.AppImage` | new file moved over the old one |
 | Linux download (`bin/`, `lib/`, unpacked or put in `~/.local/lib/shapecraft` by `install.sh`) | `…-linux-x86_64.tar.gz` | old folder aside, new one in, old removed |
 
-Since 0.8.6 the Mac download is one universal disk image (Apple silicon and Intel). Copies up to 0.8.5 look for
+Since 0.8.7 the Mac download is one universal disk image (Apple silicon and Intel). Copies up to 0.8.5 look for
 `-macos-arm64.dmg` or `-macos-x86_64.dmg`, so every release also carries that same image twice more, as
 `shapecraft-<version>-autoupdate-only-macos-arm64.dmg` and `…-autoupdate-only-macos-x86_64.dmg` (the website and
 release notes point people at the universal one). They update into the universal app and look for the universal name

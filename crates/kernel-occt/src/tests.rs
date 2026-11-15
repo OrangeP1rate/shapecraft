@@ -834,6 +834,60 @@ fn used_offset_accepts_a_sweep_that_changes_speed_at_a_full_knot() {
     assert!(err.contains("offset of a C0 surface"), "{err}");
 }
 
+/// Faces painted their own colour go out in a STEP file and come back on the same faces (told apart by which way
+/// they face), beside the part's own colour.
+#[test]
+fn step_keeps_colours_set_on_single_faces() {
+    let k = k();
+    let block = k.extrude_polygon(&rect(20.0, 10.0), DVec3::new(0.0, 0.0, 8.0)).unwrap();
+    let normal = |s: &Shape, f: u32| k.face_plane(s, f).unwrap().unwrap().normal;
+    let (red, blue) = ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let info = PartInfo { name: Some("Block".into()), color: Some([0.5, 0.5, 0.5]), path: vec![], face_colors: vec![(0, red), (3, blue)] };
+    let path = std::env::temp_dir().join(format!("sc-step-face-colours-{}.step", std::process::id()));
+    k.write_step_parts(&[(block.clone(), info)], &path, 214).unwrap();
+    let back = k.read_step_parts(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let [(shape, read)] = back.as_slice() else { panic!("{} parts", back.len()) };
+    assert_eq!(read.face_colors.len(), 2);
+    for (want_face, want) in [(0, red), (3, blue)] {
+        let (face, got) = read.face_colors.iter().find(|(f, _)| normal(shape, *f).dot(normal(&block, want_face)) > 0.999).unwrap();
+        assert!(got.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-3), "face {face}: {got:?}");
+    }
+}
+
+/// A repaired shape's faces are traced back to the faces they came from, even when every face was made anew.
+#[test]
+fn match_faces_traces_rebuilt_faces_back() {
+    let k = k();
+    let block = k.extrude_polygon(&rect(20.0, 10.0), DVec3::new(0.0, 0.0, 8.0)).unwrap();
+    let rebuilt = k.from_brep(&k.to_brep(&block).unwrap().remove(0)).unwrap();
+    let from = k.match_faces(&block, &rebuilt).unwrap();
+    assert_eq!(from.len(), 6);
+    let normal = |s: &Shape, f: u32| k.face_plane(s, f).unwrap().unwrap().normal;
+    for (face, was) in from.iter().enumerate() {
+        let was = was.unwrap();
+        assert!(normal(&rebuilt, face as u32).dot(normal(&block, was)) > 0.999, "face {face} from {was}");
+    }
+}
+
+/// Each face of the stream is told apart in the shape it builds: the faces a filleted block comes back with all map, each
+/// to a face of its own.
+#[test]
+fn from_brep_faces_says_which_face_each_became() {
+    let k = k();
+    let block = k.extrude_polygon(&rect(20.0, 10.0), DVec3::new(0.0, 0.0, 8.0)).unwrap();
+    let rounded = k.fillet_all_edges(&block, 2.0).unwrap();
+    let brep = k.to_brep(&rounded).unwrap().remove(0);
+    let (shape, faces) = k.from_brep_faces(&brep).unwrap();
+    assert_eq!(faces.len(), brep.faces.len());
+    let mut seen: Vec<u32> = faces.iter().map(|f| f.unwrap()).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), brep.faces.len());
+    assert_eq!(k.face_count(&shape).unwrap() as usize, brep.faces.len());
+    assert!(seen.iter().all(|&f| (f as usize) < brep.faces.len()));
+}
+
 #[test]
 fn brep_round_trip_keeps_curved_solids() {
     let k = k();

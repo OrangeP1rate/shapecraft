@@ -139,6 +139,8 @@ pub struct PartInfo {
     pub color: Option<[f32; 3]>,
     /// The assemblies it sits in, outermost first.
     pub path: Vec<String>,
+    /// Faces with a colour of their own (face index as tessellation numbers them, sRGB 0..1).
+    pub face_colors: Vec<(u32, [f32; 3])>,
 }
 
 /// The exact shape of an edge, in world space.
@@ -538,6 +540,20 @@ pub trait Kernel: Send + Sync {
     #[allow(clippy::wrong_self_convention)] // the kernel instance builds it
     fn from_brep(&self, _brep: &brep::Brep) -> Result<Shape> {
         Err(KernelError::Operation { op: "from_brep", message: "not supported by this kernel".into() })
+    }
+
+    /// [`Kernel::from_brep`], and which of the shape's faces (as tessellation numbers them) each of `brep.faces`
+    /// became; `None` where that isn't known (the repair split, merged or dropped it, or the kernel can't tell).
+    #[allow(clippy::wrong_self_convention)] // the kernel instance builds it
+    fn from_brep_faces(&self, brep: &brep::Brep) -> Result<(Shape, Vec<Option<u32>>)> {
+        Ok((self.from_brep(brep)?, vec![None; brep.faces.len()]))
+    }
+
+    /// For each face of `after` (a repair of `before`), the face of `before` it came from: the same face, one on the
+    /// same surface, or the one a point of it lies on. `None` where none is found (or the kernel can't tell).
+    fn match_faces(&self, before: &Shape, after: &Shape) -> Result<Vec<Option<u32>>> {
+        let _ = before;
+        Ok(vec![None; self.face_count(after)? as usize])
     }
 
     /// The shape as text the same kernel reads back exactly ([`Kernel::shape_from_text`]): frozen geometry kept in

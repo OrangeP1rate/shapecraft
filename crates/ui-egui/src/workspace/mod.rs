@@ -188,6 +188,8 @@ pub struct Workspace {
     import_go: bool,
     /// Import Preferences, open over a file waiting to come in; then the file and its "heal" to import (app.rs).
     pub import_prefs: Option<import_prefs::ImportPrefs>,
+    /// The Sync tab's Work Folder and backup folders being asked for while the window keeps answering.
+    pub prefs_picks: prefs::SyncPicks,
     pub import_file_go: Option<(std::path::PathBuf, serde_json::Value)>,
     /// An import running on its own thread (#22).
     pub importing: Option<importing::Importing>,
@@ -629,6 +631,7 @@ impl Workspace {
             import_sheet: None,
             import_go: false,
             import_prefs: None,
+            prefs_picks: Default::default(),
             import_file_go: None,
             importing: None,
             wants_export: None,

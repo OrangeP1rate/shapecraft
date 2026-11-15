@@ -97,3 +97,113 @@ mod android {
         }
     }
 }
+
+/// One system dialog open while the window keeps answering. `taken` answers `None` while it is open, then
+/// `Some(None)` when it was cancelled or `Some(path)` when a path was chosen.
+#[derive(Default)]
+pub struct Pick {
+    rx: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
+}
+
+impl std::fmt::Debug for Pick {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.is_open() { "Pick(open)" } else { "Pick(idle)" })
+    }
+}
+
+impl Pick {
+    /// Opens the dialog that `wait` drives, replacing an answer not yet taken. On Linux the wait happens on
+    /// another thread: a portal dialog blocks the thread that waits for it, and that thread is the one that has to
+    /// keep answering the compositor — left blocked, the desktop declares the app not responding ten seconds in.
+    /// macOS wants its dialogs on the main thread (and pumps its own events there), and Win32 dialogs pump
+    /// messages too, so those run where they always did and answer at once.
+    pub fn start(&mut self, wait: impl FnOnce() -> Option<std::path::PathBuf> + Send + 'static) {
+        self.rx = Self::open(wait).rx;
+    }
+
+    /// The dialog opened and its wait begun, on whichever thread waits for it.
+    fn open(wait: impl FnOnce() -> Option<std::path::PathBuf> + Send + 'static) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        #[cfg(target_os = "linux")]
+        std::thread::spawn(move || {
+            let _ = tx.send(wait());
+        });
+        #[cfg(not(target_os = "linux"))]
+        let _ = tx.send(wait());
+        Self { rx: Some(rx) }
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.rx.is_some()
+    }
+
+    /// The dialog's answer, read once it has closed.
+    pub fn taken(&mut self) -> Option<Option<std::path::PathBuf>> {
+        match self.rx.as_ref()?.try_recv() {
+            Ok(answer) => {
+                self.rx = None;
+                Some(answer)
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.rx = None;
+                Some(None)
+            }
+        }
+    }
+}
+
+/// Files and folders being asked for while the window keeps answering, each with what carries on when its dialog
+/// closes. Polled once a frame.
+pub struct Pending<A> {
+    picks: Vec<(Pick, Box<dyn FnOnce(&mut A, Option<std::path::PathBuf>) + Send>)>,
+}
+
+impl<A> Default for Pending<A> {
+    fn default() -> Self {
+        Self { picks: Vec::new() }
+    }
+}
+
+impl<A> Pending<A> {
+    /// Asks for a file to open. `build` shapes the dialog; `done` runs when it closes, with the path (None when it
+    /// was cancelled).
+    pub fn open_file(
+        &mut self,
+        build: impl FnOnce(FileDialog) -> FileDialog + Send + 'static,
+        done: impl FnOnce(&mut A, Option<std::path::PathBuf>) + Send + 'static,
+    ) {
+        self.push(Pick::open(move || build(FileDialog::new()).pick_file()), done);
+    }
+
+    /// Asks for a folder, the same way.
+    pub fn open_folder(
+        &mut self,
+        build: impl FnOnce(FileDialog) -> FileDialog + Send + 'static,
+        done: impl FnOnce(&mut A, Option<std::path::PathBuf>) + Send + 'static,
+    ) {
+        self.push(Pick::open(move || build(FileDialog::new()).pick_folder()), done);
+    }
+
+    /// Asks where to save a file, the same way.
+    pub fn save_file(
+        &mut self,
+        build: impl FnOnce(FileDialog) -> FileDialog + Send + 'static,
+        done: impl FnOnce(&mut A, Option<std::path::PathBuf>) + Send + 'static,
+    ) {
+        self.push(Pick::open(move || build(FileDialog::new()).save_file()), done);
+    }
+
+    fn push(&mut self, pick: Pick, done: impl FnOnce(&mut A, Option<std::path::PathBuf>) + Send + 'static) {
+        self.picks.push((pick, Box::new(done)));
+    }
+
+    /// Carries on what the user answered.
+    pub fn poll(&mut self, app: &mut A) {
+        for i in (0..self.picks.len()).rev() {
+            let Some(answer) = self.picks[i].0.taken() else { continue };
+            let (_, done) = self.picks.remove(i);
+            done(app, answer);
+        }
+    }
+}

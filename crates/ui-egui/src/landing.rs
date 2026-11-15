@@ -1352,6 +1352,8 @@ const ART: &[(&str, &[u8])] = &[
     ("new-copies", include_bytes!("../../../assets/home/new-copies.png")),
     ("new-languages", include_bytes!("../../../assets/home/new-languages.png")),
     ("new-shapr", include_bytes!("../../../assets/home/new-shapr.png")),
+    ("new-meshes", include_bytes!("../../../assets/home/new-meshes.png")),
+    ("new-iphone", include_bytes!("../../../assets/home/new-iphone.png")),
 ];
 
 thread_local! {
@@ -2082,6 +2084,13 @@ fn decode_png(source: impl std::io::BufRead + std::io::Seek) -> Option<egui::Col
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_whats_new_card_has_its_picture() {
+        for e in crate::whats_new::ENTRIES {
+            assert!(super::ART.iter().any(|(n, _)| *n == e.art), "What's new '{}' has no picture '{}' in ART", e.title, e.art);
+        }
+    }
+
     #[test]
     fn dates_format_like_the_reference() {
         let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_790_000_000);

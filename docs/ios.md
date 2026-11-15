@@ -3,7 +3,20 @@
 ShapeCraft runs as a native app on iPhone, including the iPhone Duo, with the full modeler: the same
 OpenCASCADE kernel and the same interface as on a computer, laid out for a phone.
 
-There's no App Store or TestFlight build yet. For now, build it yourself on a Mac and install it on your own phone.
+There's no App Store or TestFlight build. Put it on your own phone one of two ways:
+
+## The easy way: sideload the .ipa
+
+1. Download `shapecraft-<version>-ios-arm64.ipa` from the [latest release](https://github.com/jackharvest/shapecraft/releases/latest).
+2. Open it with the sideloading tool you like ([AltStore](https://altstore.io), [Sideloadly](https://sideloadly.io)
+   or similar) and install it with your own Apple account. A free account works.
+3. The first time, iOS asks you to trust the developer: Settings ▸ General ▸ VPN & Device Management ▸ your Apple ID ▸
+   Trust, then open ShapeCraft again.
+
+A free Apple account's signature lasts 7 days: refresh it in your sideloading tool (AltStore can do it on its own).
+Installing a newer .ipa over it keeps your projects.
+
+## Build it yourself
 
 ## What's different on a phone
 
@@ -18,8 +31,6 @@ There's no App Store or TestFlight build yet. For now, build it yourself on a Ma
 - **Files.** Import and Export go through the Files app. Projects live in the app's Documents folder, which the
   Files app shows under On My iPhone ▸ ShapeCraft.
 - Menus open as iOS sheets, and the interface uses the system font.
-
-## Build and install
 
 You need a Mac with Xcode 27.1 or newer, Rust (`rustup target add aarch64-apple-ios aarch64-apple-ios-sim`), CMake
 and Ninja, an OpenCASCADE 7.9 source tree, and an Apple ID signed in to Xcode (a free account works).
@@ -40,12 +51,12 @@ cargo xtask ios-provision <UDID>
 cargo xtask ios-run device <UDID>
 # or, in a booted simulator:
 cargo xtask ios-run sim <SIMULATOR-UDID>
+
+# The release's sideload .ipa (ad-hoc signed; no team needed): target/shapecraft-<version>-ios-arm64.ipa
+cargo xtask ios-ipa
 ```
 
-The first time, iOS asks you to trust the developer: Settings ▸ General ▸ VPN & Device Management ▸ your Apple ID ▸
-Trust, then open ShapeCraft again.
-
-With a free Apple account, the signing profile lasts 7 days. After that, run step 2 and 3 again to keep using it
+Trust the developer on the phone as above. With a free Apple account, the signing profile lasts 7 days. After that, run step 2 and 3 again to keep using it
 (your projects stay).
 
 ## Driving the simulator from scripts

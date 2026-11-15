@@ -2,6 +2,27 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.9.0-alpha
+**ShapeCraft on iPhone: the whole modeler as a native app, laid out for a phone, iPhone Duo included.**
+### New
+- **A native iPhone app.** The same modeler, kernel and files as on a computer, in a layout made for a phone: icon
+  columns down the sides, menus as iOS sheets, the system font, and buttons kept clear of the status corner and the
+  home bar. Download the `-ios-arm64.ipa` from the release and sideload it with AltStore, Sideloadly or a similar
+  tool, signed with your own Apple account, or build it yourself ([docs/ios.md](docs/ios.md)).
+- **Fingers move the view, a stylus works the model.** One finger turns the view, two pan and pinch, a double tap
+  zooms to a face and a three-finger swipe undoes or redoes. A stylus taps, draws and drags handles, and a drag on
+  empty space draws a selection box. The stylus never moves the camera.
+- **Made for the iPhone Duo.** Folded, the front screen holds your projects upright. Open it up to model on the inside
+  screen. A project started on the front screen waits with an "Open up to model" card and picks up when you unfold.
+  The projects screen puts its buttons in iOS's vertical bar, and its pages scroll and glide like iOS.
+- **On other iPhones** projects show upright, and a project turns the phone sideways.
+- **Import and Export use the Files app** on iPhone, and projects live where the Files app can see them.
+### Changed
+- **On every touch screen a stylus works the model and never moves the view** (Android and the iPad page too): a
+  stylus drag on empty space draws a selection box instead of turning the view. Fingers move the view.
+### Fixed
+- **The "STLs stay light" card on the home screen shows its picture.**
+
 ## 0.8.7-alpha
 **One Mac download for every Mac, sturdier .shapr and STEP imports, and a round of everyday fixes: Measure snaps and
 moves its points, + and - zoom, and sketches can be copied.**

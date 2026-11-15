@@ -170,9 +170,40 @@ const PBXPROJ: &str = r#"// !$*UTF8*$!
 /// the newest provisioning profile for the bundle id on a device, ad hoc on the simulator.
 pub fn app(rest: &[String]) -> Result<PathBuf> {
     let k = kind(rest)?;
-    let dev = developer_dir()?;
     let (team, bundle) = identity()?;
-    let occt = occt_dir(&k);
+    build_app(&k, &bundle, Some(&team))
+}
+
+/// The bundle id a sideload build carries. Sideloading tools give it one of the user's own as they sign it.
+const SIDELOAD_BUNDLE: &str = "com.jackharvest.shapecraft";
+
+/// An .ipa for sideloading (AltStore, Sideloadly and the like): the phone build with an ad-hoc signature, which the
+/// tool replaces with the user's own Apple account's. → target/shapecraft-<version>-ios-arm64.ipa
+pub fn ipa(_rest: &[String]) -> Result<PathBuf> {
+    let k = kind(&[])?;
+    let bundle = std::env::var("SHAPECRAFT_IOS_BUNDLE").unwrap_or_else(|_| SIDELOAD_BUNDLE.to_string());
+    let app = build_app(&k, &bundle, None)?;
+    let stage = target().join("ios").join("ipa");
+    clear(&stage)?;
+    run("ditto", &[s(&app), s(&stage.join("Payload/ShapeCraft.app"))])?;
+    let out = target().join(format!("shapecraft-{}-ios-arm64.ipa", crate::util::version()?));
+    let _ = std::fs::remove_file(&out);
+    // An .ipa is a zip of Payload/; ditto keeps the bundle's symlinks and permissions as iOS expects.
+    let status = std::process::Command::new("ditto")
+        .args(["-c", "-k", "--sequesterRsrc", "--keepParent", "Payload", s(&out)])
+        .current_dir(&stage)
+        .status()?;
+    if !status.success() {
+        bail!("zipping the .ipa failed");
+    }
+    println!("sideload build → {}", out.display());
+    Ok(out)
+}
+
+/// Builds ShapeCraft.app for `k`: signed for the team's devices, or (no team) ad-hoc for a sideloading tool to sign.
+fn build_app(k: &Kind, bundle: &str, team: Option<&str>) -> Result<PathBuf> {
+    let dev = developer_dir()?;
+    let occt = occt_dir(k);
     if !occt.join("lib/libTKernel.a").exists() {
         bail!("no OCCT for iOS {} yet: OCCT_SRC=… cargo xtask ios-occt {}", k.name, k.name);
     }
@@ -203,20 +234,18 @@ pub fn app(rest: &[String]) -> Result<PathBuf> {
     let sdk_version = crate::util::output("xcrun", &["--sdk", k.sdk, "--show-sdk-version"])?.trim().to_string();
     let platform = if k.name == "sim" { "iPhoneSimulator" } else { "iPhoneOS" };
     let plist = INFO_PLIST
-        .replace("@BUNDLE@", &bundle)
+        .replace("@BUNDLE@", bundle)
         .replace("@VERSION@", &crate::util::version()?)
         .replace("@MIN@", MIN_IOS)
         .replace("@PLATFORM@", platform)
         .replace("@SDK@", &format!("{}{}", k.sdk, sdk_version))
         .replace("@SDKVER@", &sdk_version);
     std::fs::write(app.join("Info.plist"), plist)?;
-    if k.name == "sim" {
-        run("codesign", &["--force", "--sign", "-", s(&app)])?;
-    } else {
-        let profile = newest_profile(&bundle)?;
+    if let (Some(team), "device") = (team, k.name) {
+        let profile = newest_profile(bundle)?;
         copy(&profile, &app.join("embedded.mobileprovision"))?;
         let ents = target().join("ios").join("entitlements.plist");
-        std::fs::write(&ents, ENTITLEMENTS.replace("@TEAM@", &team).replace("@BUNDLE@", &bundle))?;
+        std::fs::write(&ents, ENTITLEMENTS.replace("@TEAM@", team).replace("@BUNDLE@", bundle))?;
         let identity = crate::util::output("security", &["find-identity", "-v", "-p", "codesigning"])?;
         let hash = identity
             .lines()
@@ -225,6 +254,8 @@ pub fn app(rest: &[String]) -> Result<PathBuf> {
             .context("no Apple Development signing identity in the keychain")?
             .to_string();
         run("codesign", &["--force", "--sign", &hash, "--entitlements", s(&ents), "--timestamp=none", s(&app)])?;
+    } else {
+        run("codesign", &["--force", "--sign", "-", s(&app)])?;
     }
     let _ = dev;
     println!("ShapeCraft.app for iOS {} → {}", k.name, app.display());

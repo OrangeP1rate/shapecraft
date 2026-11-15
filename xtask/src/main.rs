@@ -9,6 +9,7 @@
 //!   cargo xtask ios-provision UDID     a signing profile naming the device (SHAPECRAFT_IOS_TEAM/BUNDLE)
 //!   cargo xtask ios-app [device|sim]   ShapeCraft.app, signed (target/ios/<kind>)
 //!   cargo xtask ios-run device|sim UDID  builds, installs and starts it
+//!   cargo xtask ios-ipa                an .ipa for sideloading tools to sign (target/shapecraft-<v>-ios-arm64.ipa)
 //!   cargo xtask android-occt [ABI]  OpenCASCADE for Android with the NDK (ANDROID_NDK_HOME, OCCT_SRC)
 //!   cargo xtask android-cli [ABI]   shapecraft-cli for Android (arm64 or x86_64), checked for 16 KB pages
 //!   cargo xtask android-smoke [ABI] kernel smoke test on the adb device
@@ -49,6 +50,7 @@ fn main() -> std::process::ExitCode {
         Some("ios-provision") => ios::provision(rest),
         Some("ios-app") => ios::app(rest).map(|_| ()),
         Some("ios-run") => ios::run_app(rest),
+        Some("ios-ipa") => ios::ipa(rest).map(|_| ()),
         Some("android-cli") => android::cli(rest),
         Some("android-smoke") => android::smoke(rest),
         Some("android-apk") => android::apk(rest),

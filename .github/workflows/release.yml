@@ -1,7 +1,7 @@
 # Pushing a tag like v0.4.0-alpha builds every download and publishes them as a GitHub release:
 #   a universal macOS DMG (Apple silicon and Intel), a Windows installer, MSI and portable zip, a Linux AppImage, .deb, .rpm and
 #   tar.gz, an Android APK
-#   (arm64, signed with the release key from the repository's secrets), SHA256SUMS.txt.
+#   (arm64, signed with the release key from the repository's secrets), an iPhone .ipa for sideloading, SHA256SUMS.txt.
 # File names follow the Craft App Suite's (shapecraft-<version>-<os>-<arch>[-portable].<ext>); the app's updater and
 # the website pick their files by those names. OCCT comes from conda-forge on every platform and goes inside each
 # download. Builds are unsigned for now. SHAPECRAFT_RELEASE=1 marks these builds as releases, which check for updates.
@@ -177,9 +177,49 @@ jobs:
         if: steps.key.outputs.present
         with: { name: android, path: dist/*.apk, if-no-files-found: error }
 
+  ios:
+    # An .ipa for sideloading (docs/ios.md): ad-hoc signed, so AltStore, Sideloadly and the like sign it with the
+    # user's own Apple account. OpenCASCADE for iOS is built from pinned source and cached (cold: the longest step).
+    runs-on: macos-15
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      OCCT_TAG: V7_9_3
+      OCCT_SHA256: 5ecf094ec6b12d5413dfb851d8c3590c354058aee556e32e408bdfbf8c357d57
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-ios }
+      - uses: actions/cache@v4
+        with:
+          path: target/ios/occt-device
+          key: occt-ios-device-V7_9_3-${{ hashFiles('crates/kernel-occt/build.rs', 'xtask/src/ios.rs', 'xtask/src/android.rs') }}
+          restore-keys: occt-ios-device-V7_9_3-
+      - name: OCCT for iOS
+        run: |
+          if [ ! -f target/ios/occt-device/lib/libTKernel.a ]; then
+            command -v ninja > /dev/null || brew install ninja
+            mkdir -p "$RUNNER_TEMP/occt" && cd "$RUNNER_TEMP/occt"
+            curl -sfL -o occt.tar.gz "https://github.com/Open-Cascade-SAS/OCCT/archive/refs/tags/$OCCT_TAG.tar.gz"
+            echo "$OCCT_SHA256  occt.tar.gz" | shasum -a 256 -c
+            tar xzf occt.tar.gz
+            cd "$GITHUB_WORKSPACE"
+            OCCT_SRC="$RUNNER_TEMP/occt/OCCT-${OCCT_TAG#V}" cargo xtask ios-occt device
+          fi
+      - name: Sideload build (.ipa)
+        run: |
+          cargo xtask ios-ipa
+          unzip -l target/shapecraft-*-ios-arm64.ipa | grep -q 'Payload/ShapeCraft.app/ShapeCraft$'
+          mkdir -p dist && cp target/shapecraft-*-ios-arm64.ipa dist/
+      - uses: actions/upload-artifact@v4
+        with: { name: ios, path: dist/*.ipa, if-no-files-found: error }
+
   publish:
-    # The desktop downloads must all be there; the APK joins them when it built (it never holds the release back).
-    needs: [macos, windows, linux, android]
+    # The desktop downloads must all be there; the APK and the .ipa join them when they built (neither holds the
+    # release back).
+    needs: [macos, windows, linux, android, ios]
     if: always() && needs.macos.result == 'success' && needs.windows.result == 'success' && needs.linux.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -214,6 +254,9 @@ jobs:
             echo "or install the .deb (Debian, Ubuntu) or .rpm (Fedora, openSUSE) package."
             echo "Android (test build, arm64, Android 8.0+): open the APK on the device and allow installs from that app."
             echo "A copy installed from an earlier test build (debug-signed) has to be uninstalled once first."
+            echo "iPhone (test build, iOS 17+, iPhone Duo included): sideload the \`-ios-arm64.ipa\` with AltStore,"
+            echo "Sideloadly or a similar tool, signed with your own Apple account (a free one re-signs every 7 days)."
+            echo "Or build it from source: docs/ios.md."
             echo
             echo "Check a download against SHA256SUMS.txt: \`shasum -a 256 FILE\` (macOS, Linux) or \`Get-FileHash FILE\` (Windows)."
           } >> notes.md

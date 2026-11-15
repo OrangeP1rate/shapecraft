@@ -19,6 +19,14 @@ pub struct Entry {
 
 pub const ENTRIES: &[Entry] = &[
     Entry {
+        version: "0.9.0",
+        title: "ShapeCraft on iPhone",
+        text: "The whole modeler runs as a native iPhone app, laid out for a phone: fingers move the view, a stylus \
+               draws and picks. On iPhone Duo the front screen holds your projects and opening it up takes you into \
+               the model. Build it from the source and sideload it onto your own phone (docs/ios.md).",
+        art: "new-iphone",
+    },
+    Entry {
         version: "0.8.0",
         title: "STLs stay light",
         text: "STL and OBJ files come in as mesh bodies, the way they are: in a second, however many triangles. Move, \

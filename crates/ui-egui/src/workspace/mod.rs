@@ -248,6 +248,8 @@ pub struct Workspace {
     pub(crate) through: Option<(Pos2, Vec<Pick>)>,
     pub(crate) menu_hover: Option<Pick>,
     pub camera: Camera,
+    /// The selection's box as last worked out, with what it was worked out for ([`Workspace::selection_bounds`]).
+    pub(crate) selection_box: std::cell::Cell<camera::KeptBox>,
     pub(crate) anim: Option<Anim>,
     pub tool: Tool,
     /// A sketch tool chosen before a plane was picked; started once there is one.
@@ -666,6 +668,7 @@ impl Workspace {
             session,
             camera,
             anim: None,
+            selection_box: Default::default(),
             tool: Tool::Idle,
             pending_tool: None,
             items_focus: false,

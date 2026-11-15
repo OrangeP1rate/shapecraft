@@ -798,33 +798,58 @@ fn body(f: &XtFile, n: &Node) -> Result<Body> {
     Ok(Body { node: n.index, brep: cx.b, name, color, attributes, mesh })
 }
 
-/// A clamped B-spline curve value at `t`.
-fn nurbs_point(n: &Nurbs<DVec3>, t: f64) -> DVec3 {
+/// A clamped, well-formed B-spline curve's full knot vector, or `None` (counts that don't add up, a periodic curve,
+/// weights that don't match): file data is checked before anything indexes by it.
+fn checked_knots(n: &Nurbs<DVec3>) -> Option<Vec<f64>> {
+    let p = n.degree as usize;
+    if n.periodic || p == 0 || p > 25 || n.knots.len() != n.mults.len() || n.poles.len() <= p || n.poles.len() > 100_000 {
+        return None;
+    }
+    if n.weights.as_ref().is_some_and(|w| w.len() != n.poles.len() || w.iter().any(|w| !(w.is_finite() && *w > 0.0))) {
+        return None;
+    }
+    if n.mults.iter().any(|&m| m == 0 || m as usize > p + 1) || n.knots.iter().any(|k| !k.is_finite()) {
+        return None;
+    }
     let full = expanded(&n.knots, &n.mults);
-    let basis = blend::basis(&full, n.degree as usize, t);
-    let weight = |i: usize| n.weights.as_ref().map_or(1.0, |w| w[i]);
+    let clamped = n.mults.first() == Some(&(n.degree + 1)) && n.mults.last() == Some(&(n.degree + 1));
+    let sorted = full.windows(2).all(|w| w[0] <= w[1]);
+    (full.len() == n.poles.len() + p + 1 && clamped && sorted && full[full.len() - 1] > full[0]).then_some(full)
+}
+
+/// A clamped B-spline curve's value at the knot parameter `u`.
+fn nurbs_point(n: &Nurbs<DVec3>, u: f64) -> Option<DVec3> {
+    let full = checked_knots(n)?;
+    let basis = blend::basis(&full, n.degree as usize, u);
+    let weight = |i: usize| n.weights.as_ref().and_then(|w| w.get(i).copied()).unwrap_or(1.0);
     let (mut p, mut w) = (DVec3::ZERO, 0.0);
     for (i, b) in basis.iter().enumerate() {
         let k = b * weight(i);
-        p += k * n.poles[i];
+        p += k * *n.poles.get(i)?;
         w += k;
     }
-    if w != 0.0 { p / w } else { p }
+    (w != 0.0).then(|| p / w)
 }
 
 fn expanded(knots: &[f64], mults: &[u32]) -> Vec<f64> {
     knots.iter().zip(mults).flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize)).collect()
 }
 
-/// A point along a curve at parameter `t` (0..1 of its natural span).
+/// A B-spline's knot parameter at `t` (0..1 of its span).
+fn nurbs_param(n: &Nurbs<DVec3>, t: f64) -> Option<f64> {
+    let (a, b) = (*n.knots.first()?, *n.knots.last()?);
+    Some(a + (b - a) * t)
+}
+
+/// A point along a curve at parameter `t` (0..1 of its natural span; a line's own parameter).
 fn curve_point(c: &Curve, t: f64) -> Option<DVec3> {
     Some(match c {
         Curve::Line { origin, dir } => origin + *dir * t,
-        Curve::BSpline(n) => nurbs_point(n, t),
+        Curve::BSpline(n) => nurbs_point(n, nurbs_param(n, t)?)?,
         Curve::Through(pts) => {
-            let last = pts.len().checked_sub(1)?;
-            let x = t * last as f64;
-            let i = (x.floor() as usize).min(last.saturating_sub(1));
+            let last = pts.len().checked_sub(1).filter(|&l| l >= 1)?;
+            let x = t.clamp(0.0, 1.0) * last as f64;
+            let i = (x.floor() as usize).min(last - 1);
             let f = x - i as f64;
             pts[i] * (1.0 - f) + pts[i + 1] * f
         }
@@ -837,7 +862,7 @@ fn curve_nearest(c: &Curve, p: DVec3) -> Option<(f64, f64)> {
     // A line spans its whole infinite length; its parameter is the projection (the vertices trim it).
     if let Curve::Line { origin, dir } = c {
         let l2 = dir.length_squared();
-        if !(l2 > 0.0) {
+        if l2.is_nan() || l2 <= 0.0 {
             return None;
         }
         let t = (p - *origin).dot(*dir) / l2;
@@ -868,105 +893,112 @@ fn curve_nearest(c: &Curve, p: DVec3) -> Option<(f64, f64)> {
     Some((t, curve_point(c, t)?.distance(p)))
 }
 
-/// Splits a clamped B-spline at `t`: the piece before and the piece after it.
-fn nurbs_split(n: &Nurbs<DVec3>, t: f64) -> Option<(Nurbs<DVec3>, Nurbs<DVec3>)> {
+/// Splits a clamped B-spline at the knot parameter `u` (strictly inside it): the piece before and the piece after,
+/// each clamped. Knot insertion up to the degree (NURBS book A5.1), on homogeneous poles for a rational curve.
+fn nurbs_split(n: &Nurbs<DVec3>, u: f64) -> Option<(Nurbs<DVec3>, Nurbs<DVec3>)> {
     let p = n.degree as usize;
-    let mut full = expanded(&n.knots, &n.mults);
-    let mut poles = n.poles.clone();
-    let mut weights = n.weights.clone();
-    if poles.len() <= p || full.len() != poles.len() + p + 1 {
+    let mut full = checked_knots(n)?;
+    let eps = 1e-12 * (1.0 + full[full.len() - 1].abs().max(full[0].abs()));
+    if !(u > full[0] + eps && u < full[full.len() - 1] - eps) {
         return None;
     }
-    // Insert `t` up to multiplicity `p` (NURBS book A4.1).
-    let have = full.iter().filter(|&&k| (k - t).abs() < 1e-12).count();
-    for _ in have..p {
-        let k = span(&full, p, t);
-        let np = poles.len();
-        let mut q = Vec::with_capacity(np + 1);
-        let mut wq = Vec::with_capacity(np + 1);
-        for i in 0..np + 1 {
-            if i <= k - p {
-                q.push(poles[i]);
-                wq.push(weights.as_ref().map_or(1.0, |w| w[i]));
-            } else if i >= k + 1 {
-                q.push(poles[i - 1]);
-                wq.push(weights.as_ref().map_or(1.0, |w| w[i - 1]));
-            } else {
-                let a = if full[i + p] - full[i] > 1e-12 { (t - full[i]) / (full[i + p] - full[i]) } else { 0.0 };
-                let (pa, wa) = (&poles[i - 1], weights.as_ref().map_or(1.0, |w| w[i - 1]));
-                let (pb, wb) = (&poles[i], weights.as_ref().map_or(1.0, |w| w[i]));
-                q.push(*pa * (1.0 - a) + *pb * a);
-                wq.push(wa * (1.0 - a) + wb * a);
-            }
-        }
-        full.insert(k + 1, t);
-        poles = q;
-        weights = if n.weights.is_some() { Some(wq) } else { None };
+    // Homogeneous poles: (w·P, w).
+    let mut hp: Vec<(DVec3, f64)> = (0..n.poles.len())
+        .map(|i| {
+            let w = n.weights.as_ref().map_or(1.0, |w| w[i]);
+            (n.poles[i] * w, w)
+        })
+        .collect();
+    let have = full.iter().filter(|&&k| (k - u).abs() <= eps).count();
+    if have > p {
+        return None;
     }
-    // With `t` at multiplicity `p`, the split point is pole `k`.
-    let k = span(&full, p, t);
-    let compress = |v: &[f64]| -> Vec<(f64, u32)> {
-        let mut out: Vec<(f64, u32)> = Vec::new();
-        for &k in v {
-            match out.last_mut() {
-                Some((value, count)) if (*value - k).abs() < 1e-12 => *count += 1,
-                _ => out.push((k, 1)),
+    for _ in have..p {
+        let k = span(&full, p, u)?;
+        let mut q = Vec::with_capacity(hp.len() + 1);
+        for i in 0..=hp.len() {
+            if i + p <= k {
+                q.push(hp[i]);
+            } else if i > k {
+                q.push(hp[i - 1]);
+            } else {
+                let d = full[i + p] - full[i];
+                let a = if d > 0.0 { (u - full[i]) / d } else { 0.0 };
+                let (pa, pb) = (hp[i - 1], hp[i]);
+                q.push((pa.0 * (1.0 - a) + pb.0 * a, pa.1 * (1.0 - a) + pb.1 * a));
             }
         }
-        out
-    };
-    let part = |poles: &[DVec3], knots: &[f64], weights: &Option<Vec<f64>>| -> Option<Nurbs<DVec3>> {
-        let mut k2 = knots.to_vec();
-        let runs = compress(&k2);
-        let kn: Vec<f64> = runs.iter().map(|(k, _)| *k).collect();
-        let mu: Vec<u32> = runs.iter().map(|(_, m)| *m).collect();
-        let np = kn.len() - 1 - p;
-        if np != poles.len() || np < p + 1 {
+        full.insert(k + 1, u);
+        hp = q;
+    }
+    // `u` now sits p times from index `s`; the curve passes through homogeneous pole s - 1 there.
+    let s = full.iter().position(|&k| k >= u - eps)?;
+    if s < p + 1 || s + p > full.len() || s > hp.len() {
+        return None;
+    }
+    let piece = |poles: &[(DVec3, f64)], knots: Vec<f64>| -> Option<Nurbs<DVec3>> {
+        let mut kn: Vec<f64> = Vec::new();
+        let mut mu: Vec<u32> = Vec::new();
+        for k in knots {
+            match kn.last() {
+                Some(&last) if (last - k).abs() <= eps => *mu.last_mut()? += 1,
+                _ => {
+                    kn.push(k);
+                    mu.push(1);
+                }
+            }
+        }
+        if poles.len() <= p || poles.iter().any(|(_, w)| *w <= 0.0) {
             return None;
         }
-        Some(Nurbs { degree: n.degree, poles: poles.to_vec(), weights: weights.clone(), knots: kn, mults: mu, periodic: false })
+        let out = Nurbs {
+            degree: n.degree,
+            poles: poles.iter().map(|(q, w)| *q / *w).collect(),
+            weights: n.weights.as_ref().map(|_| poles.iter().map(|(_, w)| *w).collect()),
+            knots: kn,
+            mults: mu,
+            periodic: false,
+        };
+        checked_knots(&out).map(|_| out)
     };
-    // Left: poles 0..=k over knots ..=t (end clamped), right: poles k.. over knots t.. (start clamped).
-    let left = {
-        let mut kk = full[..k + p + 1].to_vec();
-        kk.push(t);
-        part(&poles[..=k], &kk, &weights.as_ref().map(|w| w[..=k].to_vec()))?
-    };
-    let right = {
-        let mut kk = full[k..].to_vec();
-        kk.insert(0, t);
-        part(&poles[k..], &kk, &weights.as_ref().map(|w| w[k..].to_vec()))?
-    };
-    Some((left, right))
+    let mut left_knots = full[..s + p].to_vec();
+    left_knots.push(u);
+    let mut right_knots = vec![u];
+    right_knots.extend_from_slice(&full[s..]);
+    Some((piece(&hp[..s], left_knots)?, piece(&hp[s - 1..], right_knots)?))
 }
 
-/// The knot span index holding `t`.
-fn span(full: &[f64], p: usize, t: f64) -> usize {
-    let n = full.len() - 1;
-    if t >= full[n] - 1e-12 {
-        return n - p - 1;
+/// The knot span index holding `u` (the last span takes the end), or `None` for a vector too short.
+fn span(full: &[f64], p: usize, u: f64) -> Option<usize> {
+    let n = full.len().checked_sub(1)?;
+    let last = n.checked_sub(p + 1)?;
+    if last < p {
+        return None;
+    }
+    if u >= full[n] {
+        return Some(last);
     }
     let mut k = p;
-    while k < n - p - 1 && t >= full[k + 1] - 1e-12 {
+    while k < last && u >= full[k + 1] {
         k += 1;
     }
-    k
+    Some(k)
 }
 
-/// Cuts a curve at parameter `t` into the piece before and after it. `pa` and `pb` are the curve's own endpoints
-/// in curve order, so line pieces can be rebuilt exactly through them and the cut point.
+/// Cuts a curve at parameter `t` (as [`curve_point`] takes it) into the piece before and after it. `pa` and `pb`
+/// are the curve's own endpoints in curve order, so line pieces can be rebuilt exactly through them and the cut point.
 fn curve_split(c: &Curve, t: f64, pa: DVec3, pb: DVec3) -> Option<(Curve, Curve)> {
     let corner = curve_point(c, t)?;
     Some(match c {
         Curve::Line { .. } => (Curve::Line { origin: pa, dir: corner - pa }, Curve::Line { origin: corner, dir: pb - corner }),
         Curve::BSpline(n) => {
-            let (a, b) = nurbs_split(n, t)?;
+            let (a, b) = nurbs_split(n, nurbs_param(n, t)?)?;
             (Curve::BSpline(a), Curve::BSpline(b))
         }
         Curve::Through(pts) => {
-            let last = pts.len().checked_sub(1)?;
-            let x = t * last as f64;
-            let i = (x.floor() as usize).min(last.saturating_sub(1));
+            let last = pts.len().checked_sub(1).filter(|&l| l >= 1)?;
+            let x = t.clamp(0.0, 1.0) * last as f64;
+            let i = (x.floor() as usize).min(last - 1);
             let f = x - i as f64;
             let mid = pts[i] * (1.0 - f) + pts[i + 1] * f;
             let mut a = pts[..=i].to_vec();
@@ -989,17 +1021,25 @@ fn split_wall_rings(b: &mut Brep) {
     }
 }
 
+/// One face's plan: the seam's two corners, the rim ring each sits on, and the parameter of the cut there.
+type RingPlan = ([DVec3; 2], [usize; 2], [f64; 2]);
+
+/// The surface of a face, when it's a B-spline whose pole grid holds what its counts say.
+fn grid_surface(b: &Brep, fi: usize) -> Option<&NurbsSurface> {
+    let Surface::BSpline(s) = b.surfaces.get(b.faces.get(fi)?.surface)? else { return None };
+    let weights_fit = s.weights.as_ref().is_none_or(|w| w.len() == s.poles.len());
+    (s.nu >= 2 && s.nv >= 2 && s.nu.checked_mul(s.nv) == Some(s.poles.len()) && weights_fit).then_some(s)
+}
+
 /// The plan for one face: the ring to cut at each seam corner, and the parameter of the cut on the fin that
 /// carries it. `None` when the face is not a closed-wall face or anything refuses.
-fn ring_plan(b: &Brep, fi: usize) -> Option<(usize, [DVec3; 2], [usize; 2], [f64; 2])> {
-    let face = &b.faces[fi];
-    if face.loops.len() < 3 {
+fn ring_plan(b: &Brep, fi: usize) -> Option<RingPlan> {
+    let face = b.faces.get(fi)?;
+    // Two rims, and any number of cutouts.
+    if face.loops.len() < 2 {
         return None;
     }
-    let Surface::BSpline(s) = &b.surfaces[face.surface] else { return None };
-    if s.nv < 2 {
-        return None;
-    }
+    let s = grid_surface(b, fi)?;
     // The surface must be exactly closed in u: its end pole columns coincide.
     let scale = s.poles.iter().fold(1.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()).max(p.z.abs()));
     let mut gap = 0.0f64;
@@ -1012,7 +1052,6 @@ fn ring_plan(b: &Brep, fi: usize) -> Option<(usize, [DVec3; 2], [usize; 2], [f64
     // Each seam corner must sit on exactly one closed ring (the rims run along the surface's v ends).
     let corners = [s.poles[0], s.poles[s.nv - 1]];
     let mut rings = [None; 2];
-    let mut holes = 0;
     for (li, l) in face.loops.iter().enumerate() {
         if !loop_closes(b, l) {
             return None;
@@ -1026,7 +1065,7 @@ fn ring_plan(b: &Brep, fi: usize) -> Option<(usize, [DVec3; 2], [usize; 2], [f64
                     samplable = false;
                     break;
                 };
-                let Some((_, d)) = curve_nearest(&b.curves[curve_index], c) else {
+                let Some((_, d)) = b.curves.get(curve_index).and_then(|curve| curve_nearest(curve, c)) else {
                     samplable = false;
                     break;
                 };
@@ -1047,7 +1086,7 @@ fn ring_plan(b: &Brep, fi: usize) -> Option<(usize, [DVec3; 2], [usize; 2], [f64
             Some(0) if rings[0].is_none() => rings[0] = Some(li),
             Some(1) if rings[1].is_none() => rings[1] = Some(li),
             Some(_) => return None,
-            None => holes += 1,
+            None => {}
         }
     }
     let (ra, rb) = (rings[0]?, rings[1]?);
@@ -1071,17 +1110,14 @@ fn ring_plan(b: &Brep, fi: usize) -> Option<(usize, [DVec3; 2], [usize; 2], [f64
         }
         cuts[ci] = best.2;
     }
-    Some((fi, corners, [ra, rb], cuts))
+    Some((corners, [ra, rb], cuts))
 }
 
 /// Applies one face's ring plan: cuts its rim rings at the seam corners, adds the two seam edges, and rebuilds
 /// the face's loops as one outer wire over both rims plus the kept holes.
 fn split_face_rings(b: &mut Brep, fi: usize) -> Option<()> {
-    let (_, corners, rings, cuts) = ring_plan(b, fi)?;
-    let surface = match &b.surfaces[b.faces[fi].surface] {
-        Surface::BSpline(s) => s.clone(),
-        _ => return None,
-    };
+    let (corners, rings, cuts) = ring_plan(b, fi)?;
+    let surface = grid_surface(b, fi)?.clone();
     // The seam's 3D curve is the surface's own u iso: its pole column.
     let iso = Nurbs {
         degree: surface.v_degree,
@@ -1091,6 +1127,7 @@ fn split_face_rings(b: &mut Brep, fi: usize) -> Option<()> {
         mults: surface.v_mults.clone(),
         periodic: false,
     };
+    checked_knots(&iso)?;
     // Plan everything with the new vertices' and edges' future indices, so nothing mutates before the checks pass.
     let vi = [b.vertices.len(), b.vertices.len() + 1];
     let mut all_edges = b.edges.clone();
@@ -1110,20 +1147,24 @@ fn split_face_rings(b: &mut Brep, fi: usize) -> Option<()> {
             .map(|(_, ki)| ki)?;
         let fin = ring[k];
         let e = &b.edges[fin.edge];
-        let curve = &b.curves[e.curve?];
-        let Some((sv, ev)) = e.start.zip(e.end) else { return None };
-        let (ps, pe) = (b.vertices[sv], b.vertices[ev]);
-        // Per the edge's sense against its curve, the half at the walked-from end comes first.
+        let curve = b.curves.get(e.curve?)?;
+        let (sv, ev) = e.start.zip(e.end)?;
+        let (ps, pe) = (*b.vertices.get(sv)?, *b.vertices.get(ev)?);
+        // The curve's own start and end: an edge runs from its start vertex to its end, its curve reversed when
+        // `reversed`, so a reversed edge's curve starts at the end vertex.
         let (pa, pb) = if e.reversed { (pe, ps) } else { (ps, pe) };
         let (before, after) = curve_split(curve, cuts[ci], pa, pb)?;
-        // Both halves keep the edge's own sense: the shim reverses their curve for a reversed edge.
+        // Both halves keep the edge's sense against their curve. The piece before the cut (in curve order) touches
+        // the start vertex, or the end vertex when the edge is reversed.
         let e1 = all_edges.len();
         let e2 = all_edges.len() + 1;
         let c0i = b.curves.len() + new_curves.len();
         new_curves.push(before);
         new_curves.push(after);
-        all_edges.push(Edge { curve: Some(c0i), reversed: e.reversed, start: e.start, end: Some(vi[ci]), tolerance: e.tolerance });
-        all_edges.push(Edge { curve: Some(c0i + 1), reversed: e.reversed, start: Some(vi[ci]), end: e.end, tolerance: e.tolerance });
+        let (first, second) =
+            if e.reversed { ((Some(vi[ci]), e.end), (e.start, Some(vi[ci]))) } else { ((e.start, Some(vi[ci])), (Some(vi[ci]), e.end)) };
+        all_edges.push(Edge { curve: Some(c0i), reversed: e.reversed, start: first.0, end: first.1, tolerance: e.tolerance });
+        all_edges.push(Edge { curve: Some(c0i + 1), reversed: e.reversed, start: second.0, end: second.1, tolerance: e.tolerance });
         let halves = if fin.forward { [e1, e2] } else { [e2, e1] };
         ring[k] = Fin { edge: halves[0], forward: fin.forward, pcurve: None };
         ring.insert(k + 1, Fin { edge: halves[1], forward: fin.forward, pcurve: None });
@@ -1162,8 +1203,8 @@ fn split_face_rings(b: &mut Brep, fi: usize) -> Option<()> {
 /// Walks a closed ring of fins from `start` (a vertex the ring passes once), orienting each fin along the walk.
 fn walk_chain(edges: &[Edge], fins: &[Fin], start: usize) -> Option<Vec<Fin>> {
     let ends = |f: &Fin| {
-        let e = &edges[f.edge];
-        let (s, t) = if e.reversed { (e.end, e.start) } else { (e.start, e.end) };
+        let Some(e) = edges.get(f.edge) else { return (None, None) };
+        let (s, t) = (e.start, e.end);
         if f.forward { (s, t) } else { (t, s) }
     };
     let mut cur = start;
@@ -1199,8 +1240,8 @@ fn loop_closes_on(edges: &[Edge], fins: &[Fin]) -> bool {
         return false;
     }
     let ends = |f: &Fin| {
-        let e = &edges[f.edge];
-        let (s, t) = if e.reversed { (e.end, e.start) } else { (e.start, e.end) };
+        let Some(e) = edges.get(f.edge) else { return (None, None) };
+        let (s, t) = (e.start, e.end);
         if f.forward { (s, t) } else { (t, s) }
     };
     (0..fins.len())
@@ -1605,6 +1646,95 @@ mod tests {
         assert_eq!(b.edges[seams[0]].curve, b.edges[seams[1]].curve, "both seams on the surface's u iso");
         assert_eq!(b.vertices[b.edges[seams[0]].start.unwrap()], corner, "the seam starts at the corner");
         assert_eq!(b.vertices[b.edges[seams[0]].end.unwrap()], corner2, "and ends at the other corner");
+    }
+
+    /// Splitting a B-spline (plain and rational, a knot already inside or not) gives two clamped pieces that trace
+    /// the curve: each piece's points are the curve's own on its side of the cut.
+    #[test]
+    fn a_bspline_splits_into_two_pieces_on_the_same_curve() {
+        let poles = vec![
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(1.0, 2.0, 0.0),
+            DVec3::new(3.0, 2.5, 1.0),
+            DVec3::new(4.0, -1.0, 0.5),
+            DVec3::new(6.0, 0.0, 0.0),
+        ];
+        let curves = [
+            Nurbs { degree: 3, poles: poles.clone(), weights: None, knots: vec![2.0, 3.0, 5.0], mults: vec![4, 1, 4], periodic: false },
+            Nurbs {
+                degree: 2,
+                poles: poles.clone(),
+                weights: Some(vec![1.0, 0.7, 1.3, 0.9, 1.0]),
+                knots: vec![0.0, 0.4, 0.6, 1.0],
+                mults: vec![3, 1, 1, 3],
+                periodic: false,
+            },
+        ];
+        for n in &curves {
+            let (a, z) = (n.knots[0], n.knots[n.knots.len() - 1]);
+            // A cut between knots, and one on an inner knot.
+            for u in [a + (z - a) * 0.37, n.knots[1]] {
+                let (left, right) = nurbs_split(n, u).unwrap();
+                assert!(checked_knots(&left).is_some() && checked_knots(&right).is_some());
+                assert!(nurbs_point(&left, u).unwrap().distance(nurbs_point(n, u).unwrap()) < 1e-9);
+                for k in 0..=10 {
+                    let f = k as f64 / 10.0;
+                    let (ul, ur) = (a + (u - a) * f, u + (z - u) * f);
+                    assert!(nurbs_point(&left, ul).unwrap().distance(nurbs_point(n, ul).unwrap()) < 1e-9, "left at {ul}");
+                    assert!(nurbs_point(&right, ur).unwrap().distance(nurbs_point(n, ur).unwrap()) < 1e-9, "right at {ur}");
+                }
+            }
+            assert!(nurbs_split(n, a).is_none() && nurbs_split(n, z + 1.0).is_none(), "cuts at or past an end are refused");
+        }
+    }
+
+    /// Counts a file got wrong are refused, not indexed.
+    #[test]
+    fn malformed_curves_are_refused() {
+        let bad =
+            Nurbs { degree: 3, poles: vec![DVec3::ZERO; 3], weights: None, knots: vec![0.0, 1.0], mults: vec![4, 4], periodic: false };
+        assert!(nurbs_point(&bad, 0.5).is_none());
+        assert!(nurbs_split(&bad, 0.5).is_none());
+        assert!(curve_point(&Curve::Through(vec![DVec3::ZERO]), 0.5).is_none());
+        let mut b = Brep::default();
+        let (bottom, _) = ring(&mut b, [(0.0, 1.0, 1.5), (1.0, 1.0, 1.5), (1.0, -1.0, 0.5), (0.0, -1.0, 0.5)]);
+        let (top, _) = ring(&mut b, [(0.0, 1.0, 0.5), (1.0, 1.0, 0.5), (1.0, -1.0, -0.5), (0.0, -1.0, -0.5)]);
+        let mut s = wall_surface();
+        s.poles.pop();
+        b.surfaces = vec![Surface::BSpline(s)];
+        b.faces = vec![Face { surface: 0, flip: false, loops: vec![bottom, top], color: None }];
+        let before = b.clone();
+        split_wall_rings(&mut b);
+        assert_eq!(b, before, "a pole grid short of its counts is left alone");
+    }
+
+    /// A rim edge whose curve runs against it (reversed) is cut too: each half still runs between the vertices its
+    /// curve's ends sit on, so the new wire closes and every edge's ends lie on its curve.
+    #[test]
+    fn a_reversed_rim_edge_is_cut_between_the_right_vertices() {
+        let s = wall_surface();
+        let mut b = Brep::default();
+        let (bottom, bottom_base) = ring(&mut b, [(0.0, 1.0, 1.5), (1.0, 1.0, 1.5), (1.0, -1.0, 0.5), (0.0, -1.0, 0.5)]);
+        let (top, _) = ring(&mut b, [(0.0, 1.0, 0.5), (1.0, 1.0, 0.5), (1.0, -1.0, -0.5), (0.0, -1.0, -0.5)]);
+        // The bottom ring's last edge (the one the seam crosses) keeps its vertices but its curve runs the other way.
+        let cut = bottom_base + 3;
+        let (s0, s1) = (b.vertices[b.edges[cut].start.unwrap()], b.vertices[b.edges[cut].end.unwrap()]);
+        let c = b.edges[cut].curve.unwrap();
+        b.curves[c] = Curve::Line { origin: s1, dir: s0 - s1 };
+        b.edges[cut].reversed = true;
+        b.surfaces = vec![Surface::BSpline(s)];
+        b.faces = vec![Face { surface: 0, flip: false, loops: vec![bottom, top], color: None }];
+        let edges_before = b.edges.len();
+        split_wall_rings(&mut b);
+        assert_eq!(b.faces[0].loops.len(), 1, "both rims and both seams make one wire");
+        assert!(loop_closes(&b, &b.faces[0].loops[0]));
+        for e in &b.edges[edges_before..] {
+            let Some(Curve::Line { origin, dir }) = e.curve.map(|c| &b.curves[c]) else { continue };
+            let (from, to) = (b.vertices[e.start.unwrap()], b.vertices[e.end.unwrap()]);
+            let (cs, ce) = (*origin, *origin + *dir);
+            let (cs, ce) = if e.reversed { (ce, cs) } else { (cs, ce) };
+            assert!(from.distance(cs) < 1e-9 && to.distance(ce) < 1e-9, "edge {from}..{to} on curve {cs}..{ce}");
+        }
     }
 
     #[test]

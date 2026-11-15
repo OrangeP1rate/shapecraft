@@ -186,14 +186,14 @@ pub(super) fn sheet_view(ws: &mut Workspace, ui: &mut Ui) {
 /// The Drawings workspace's right column: Properties toggle and Export drawing…, as observed.
 pub(super) fn right_column(ws: &mut Workspace, ui: &mut Ui) {
     let vp = ws.viewport_rect;
-    let x = vp.right() - 5.0 - Tokens::TOOL_BUTTON;
+    let x = vp.right() - 5.0 - Tokens::tool_button();
     let rows = [("Properties", "⌥⌘P", Icon::SidebarToggle), ("Export drawing…", "", Icon::Export)];
     let mut y = vp.top() + 9.0;
     for (i, (label, keys, icon)) in rows.iter().enumerate() {
         let def = super::toolbar::ToolDef { icon: *icon, label, sub: None, keys, action: super::toolbar::Action::Soon, flyout: false };
         let on = i == 0 && ws.drawings.as_ref().is_some_and(|d| d.props);
         let clicked = super::toolbar::group(ui, pos2(x, y), std::slice::from_ref(&def), &[on], false, &format!("dw{i}")).is_some();
-        let chip = super::toolbar::chip(ui, pos2(x - 6.0, y + 1.0 + Tokens::TOOL_PITCH / 2.0), &def, true, false);
+        let chip = super::toolbar::chip(ui, pos2(x - 6.0, y + 1.0 + Tokens::tool_pitch() / 2.0), &def, true, false);
         let chip_clicked = ui.interact(chip, ui.scope_id().with(("dw-chip", i)), Sense::click()).clicked();
         if clicked || chip_clicked {
             if i == 0 {
@@ -207,7 +207,8 @@ pub(super) fn right_column(ws: &mut Workspace, ui: &mut Ui) {
         y += super::toolbar::group_height(1) + super::toolbar::GROUP_GAP;
     }
     let sep_y = y + 4.0;
-    ui.painter().line_segment([pos2(x + 11.0, sep_y), pos2(x + 33.0, sep_y)], Stroke::new(2.0, Tokens::tool_separator()));
+    ui.painter()
+        .line_segment([pos2(x + 11.0, sep_y), pos2(x + Tokens::tool_button() - 11.0, sep_y)], Stroke::new(2.0, Tokens::tool_separator()));
 }
 
 fn row_label(p: &egui::Painter, at: Pos2, text: &str) {

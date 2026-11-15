@@ -156,6 +156,8 @@ pub struct ShapeCraftApp {
     /// The first touch of the projects folder (made, moved over, read once) and how it went.
     folder: crate::folder_access::FolderAccess,
     landing: Landing,
+    /// Picked on a folded phone's front screen (too small to model on): done once it's opened up.
+    unfold_to: Option<LandingAction>,
     /// Where a new project's folder goes when it's first saved.
     new_parent: Option<PathBuf>,
     ws: Option<Box<Workspace>>,
@@ -221,7 +223,7 @@ impl ShapeCraftApp {
         let tablet_opts = (opts.native_menu && !opts.hosted).then(|| opts.clone());
         // Android goes through the system's file picker the same way (#7): a pick asked for now, the file later; a
         // save written to a scratch folder in the app's own storage, then copied where the picker says.
-        let android = cfg!(target_os = "android");
+        let android = cfg!(any(target_os = "android", target_os = "ios"));
         let tablet_files = (opts.hosted || android).then(|| TabletFiles {
             requests: Vec::new(),
             picks: Vec::new(),
@@ -308,6 +310,7 @@ impl ShapeCraftApp {
             folder,
             new_parent: None,
             ws: None,
+            unfold_to: None,
             control,
             last_change: None,
             saved_generation: 0,
@@ -400,6 +403,11 @@ impl ShapeCraftApp {
     fn new_project_in(&mut self, dir: PathBuf) {
         self.new_project();
         self.new_parent = Some(dir);
+    }
+
+    /// A new project, as + on the home screen (the iOS simulator's SHAPECRAFT_SIM_NEW, which can't be tapped).
+    pub fn start_new_project(&mut self) {
+        self.new_project();
     }
 
     fn new_project(&mut self) {
@@ -1043,7 +1051,7 @@ impl ShapeCraftApp {
             let shown = d.slicer.clone();
             ws.settings.slicer = shown.clone();
             let opened = made && !on_tablet && crate::workspace::slicers::open(&shown, &path);
-            ws.toast(if made && on_tablet && cfg!(target_os = "android") {
+            ws.toast(if made && on_tablet && cfg!(any(target_os = "android", target_os = "ios")) {
                 format!("Choose where to save {name}.3mf for {shown}")
             } else if made && on_tablet {
                 format!("{name}.3mf is ready to download for {shown}")
@@ -1706,6 +1714,10 @@ impl ShapeCraftApp {
             theme::apply_style(&ctx);
             self.styled = true;
         }
+        // A phone's or tablet's window is its screen: nothing to fit (on iOS a resize shrinks the app away).
+        if !self.fitted && cfg!(any(target_os = "android", target_os = "ios")) {
+            self.fitted = true;
+        }
         if !self.fitted {
             self.fitted = fit_window(&ctx);
             if std::env::var_os(RESTARTED_ENV).is_some()
@@ -1759,10 +1771,39 @@ impl ShapeCraftApp {
                 if self.landing.tutorials_done != self.settings.tutorials_done {
                     self.landing.tutorials_done = self.settings.tutorials_done.clone();
                 }
-                match self.landing.ui(ui) {
+                let tree = self.settings.home_tree;
+                self.landing.tree = tree;
+                let picked = self.landing.ui(ui);
+                if self.landing.tree != tree {
+                    self.settings.home_tree = self.landing.tree;
+                    self.save_settings();
+                }
+                // Folded, a project waits for the big screen; opened up, it opens.
+                let picked = if crate::tablet::waits_to_unfold() {
+                    match picked {
+                        Some(
+                            a @ (LandingAction::Open(_) | LandingAction::New(_) | LandingAction::Tutorial(_) | LandingAction::Shortcuts),
+                        ) => {
+                            self.unfold_to = Some(a);
+                            None
+                        }
+                        other => other,
+                    }
+                } else {
+                    picked.or_else(|| self.unfold_to.take())
+                };
+                let name = match &self.unfold_to {
+                    Some(LandingAction::Open(dir)) => self.landing.project_name(dir),
+                    _ => None,
+                };
+                if crate::tablet::waits_to_unfold() && self.unfold_to.is_some() && unfold_prompt(ui, self.unfold_to.as_ref(), name) {
+                    self.unfold_to = None;
+                }
+                match picked {
                     Some(LandingAction::Open(dir)) => self.open_checked(dir),
                     Some(LandingAction::New(dir)) => self.new_project_in(dir),
                     Some(LandingAction::Import) => self.import_dialog(),
+                    Some(LandingAction::Menu(a)) => self.home_menu_action(a, &ctx),
                     Some(LandingAction::Tutorial(id)) => self.start_tutorial(id, 0),
                     Some(LandingAction::NavigationPresets) => {
                         self.home_prefs = Some(0);
@@ -1779,6 +1820,10 @@ impl ShapeCraftApp {
                 self.home_preferences(ui);
                 self.ask_open_dialog(ui);
             }
+        }
+        // Folded with a project open: the front screen is too small to model on.
+        if crate::tablet::waits_to_unfold() && self.ws.is_some() && unfold_prompt(ui, None, None) {
+            self.close_project();
         }
         // On top of the bar the screen just drew; the workspace and the home screen both fill the window.
         let menus_at = self.ws.as_deref().map_or(crate::landing::MENUS_AT, |ws| ws.menus_at);
@@ -1812,8 +1857,11 @@ impl ShapeCraftApp {
             }
         // Android asks the touch question too (a stylus, or a mouse and keyboard, #10), then carries on as
         // the desktop does; only a mouse goes on to how the view moves.
+        // An upright phone (an iPhone, the iPhone Duo folded) is too narrow for its two tiles: it asks once sideways.
         } else if crate::tablet::touch_ui() && ((self.settings_file.is_some() && self.settings.device.is_empty()) || self.ask_device) {
-            if let Some(i) = crate::onboarding::tablet(ui, &mut self.tablet_choice) {
+            if ui.ctx().content_rect().width() >= 600.0
+                && let Some(i) = crate::onboarding::tablet(ui, &mut self.tablet_choice)
+            {
                 let value = crate::onboarding::ANDROID_DEVICES[i].1;
                 self.settings.tablet_device = value.to_string();
                 self.settings.device = value.to_string();
@@ -1990,6 +2038,21 @@ impl ShapeCraftApp {
             }
             AppAction::OpenPage(url) if self.hosted => self.egui.open_url(egui::OpenUrl::new_tab(url)),
             AppAction::OpenPage(url) => open_page(url),
+        }
+    }
+
+    /// A phone's menu page row, done as the home screen's menu bar does it.
+    fn home_menu_action(&mut self, action: MenuAction, ctx: &egui::Context) {
+        match action {
+            MenuAction::App(a) => self.app_action(a, ctx),
+            MenuAction::Home(cmd) => {
+                let now = ctx.input(|i| i.time);
+                self.landing.command(cmd, now);
+            }
+            MenuAction::Ui(crate::workspace::toolbar::UiAction::Preferences) => {
+                self.home_prefs.get_or_insert(0);
+            }
+            _ => {}
         }
     }
 
@@ -2432,7 +2495,19 @@ fn fit_window(ctx: &egui::Context) -> bool {
 
 /// Opens a file in an app: by name on macOS (`open -a`), else its command on the PATH.
 /// Opens a web page in the default browser.
+/// How this platform opens a web page, where it isn't a command (iOS: UIApplication's openURL).
+static URL_OPENER: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// Set once at start by an app whose platform has no command for opening a page.
+pub fn set_url_opener(open: fn(&str)) {
+    let _ = URL_OPENER.set(open);
+}
+
 fn open_page(url: &str) {
+    if let Some(open) = URL_OPENER.get() {
+        open(url);
+        return;
+    }
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(windows) {
@@ -2468,4 +2543,58 @@ fn svg_from_settings(d: &mut ExportDialog, s: &crate::settings::Settings, sessio
     let n = |v: f64| if v.fract() == 0.0 { format!("{v:.0}") } else { v.to_string() };
     d.svg_dpi = n(s.svg_dpi);
     d.svg_res = n(s.svg_resolution);
+}
+
+/// Over a folded phone's front screen: open up to model. With `waiting`, the project (or tutorial) picked opens
+/// once the phone is opened, and the button lets it go; without, a project is open and the button goes home.
+/// Returns true when the button is pressed.
+/// `name`: the waiting project's name (a renamed project keeps its first folder name).
+fn unfold_prompt(ui: &mut egui::Ui, waiting: Option<&LandingAction>, name: Option<String>) -> bool {
+    use crate::theme::{self, Tokens, radius};
+    use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
+    let full = ui.ctx().content_rect();
+    let what = match waiting {
+        Some(LandingAction::Open(dir)) => {
+            let name = name.unwrap_or_else(|| dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+            format!("“{name}” opens as soon as you unfold your iPhone.")
+        }
+        Some(LandingAction::Tutorial(_)) => "The tutorial starts as soon as you unfold your iPhone.".to_string(),
+        Some(_) => "Your new project opens as soon as you unfold your iPhone.".to_string(),
+        None => "Unfold your iPhone to keep modeling: your project is right where you left it.".to_string(),
+    };
+    let mut pressed = false;
+    egui::Area::new(ui.scope_id().with("unfold-prompt")).order(egui::Order::Foreground).fixed_pos(full.min).show(ui.ctx(), |ui| {
+        let _ = ui.allocate_rect(full, Sense::click_and_drag());
+        let p = ui.painter();
+        let screen = ui.ctx().viewport_rect();
+        p.rect_filled(screen, 0.0, if waiting.is_some() { Color32::from_black_alpha(170) } else { theme::c(0x1e1e1e) });
+        let card = Rect::from_center_size(full.center(), vec2((full.width() - 32.0).min(380.0), 300.0));
+        p.rect_filled(card, radius(18), theme::c(0x2c2c2e));
+        // An opening phone: two panels, the right one swinging out.
+        let c = pos2(card.center().x, card.top() + 78.0);
+        p.rect_filled(Rect::from_center_size(c - vec2(23.0, 0.0), vec2(44.0, 72.0)), radius(8), theme::c(0x4a4a4e));
+        let t = ui.input(|i| i.time) as f32;
+        let swing = (0.5 - 0.5 * (t * 2.2).cos()).clamp(0.0, 1.0);
+        let w = 4.0 + 40.0 * swing;
+        p.rect_filled(Rect::from_min_size(pos2(c.x + 1.0, c.y - 36.0), vec2(w, 72.0)), radius(8), Tokens::accent());
+        ui.ctx().request_repaint();
+        p.text(
+            pos2(card.center().x, card.top() + 146.0),
+            Align2::CENTER_CENTER,
+            "Open up to model",
+            theme::strong(20.0),
+            Tokens::text_strong(),
+        );
+        let mut job = egui::text::LayoutJob::simple(what, theme::body(14.0), Tokens::text_dim(), card.width() - 48.0);
+        job.halign = egui::Align::Center;
+        let g = ui.fonts_mut(|f| f.layout_job(job));
+        ui.painter().galley(pos2(card.center().x, card.top() + 168.0), g, Tokens::text_dim());
+        let b = Rect::from_center_size(pos2(card.center().x, card.bottom() - 40.0), vec2(200.0, 44.0));
+        let r = ui.interact(b, ui.scope_id().with("unfold-button"), Sense::click());
+        ui.painter().rect_filled(b, radius(22), if waiting.is_some() { theme::c(0x3a3a3e) } else { Tokens::accent() });
+        let label = if waiting.is_some() { "Not Now" } else { "Back to Projects" };
+        ui.painter().text(b.center(), Align2::CENTER_CENTER, label, theme::strong(15.0), Color32::WHITE);
+        pressed = r.clicked();
+    });
+    pressed
 }

@@ -11,14 +11,19 @@ use crate::workspace::toolbar::{self, Action, ToolDef, UiAction};
 use crate::workspace::tools::Tool;
 use crate::workspace::{RightPop, Workspace};
 
+/// From the right column's left edge to the view cube's centre: the cube's turn arrows stay clear of a phone's
+/// narrower column too.
+fn cube_gap() -> f32 {
+    96.0 - Tokens::tool_button()
+}
+
 impl Workspace {
     /// Fillet | Chamfer segmented switch under the banner while the tool runs.
     /// Visualization's right column, as observed: sidebar toggle and view (a strip), then Capture and Generative
     /// Render.
     fn visual_column(&mut self, ui: &mut Ui, x: f32) {
-        let vp = self.viewport_rect;
         let gap = toolbar::GROUP_GAP;
-        let top = vp.top() + 9.0;
+        let top = self.right_top;
         // The sidebar toggle and the view button each in their own group (as observed, L22).
         let toggle = ToolDef { icon: Icon::SidebarToggle, label: "", sub: None, keys: "", action: Action::Soon, flyout: false };
         if toolbar::group(ui, pos2(x, top), &[toggle], &[self.vis_sidebar], false, "vis-toggle").is_some() {
@@ -31,7 +36,7 @@ impl Workspace {
             self.right_pop = if view_on { None } else { Some((RightPop::View, pos2(x, view_y), self.now)) };
             self.popup_opened_at = self.now;
         }
-        let cube = Rect::from_center_size(pos2(x - 52.0, top + 30.0), vec2(72.0, 72.0));
+        let cube = Rect::from_center_size(pos2(x - cube_gap(), top + 30.0), vec2(72.0, 72.0));
         self.view_cube(ui, cube);
         // Capture and Generative Render share a group; Generative Render sits on blue.
         let defs = [
@@ -49,20 +54,28 @@ impl Workspace {
         if let Some(i) = toolbar::group(ui, pos2(x, y), &defs, &[false, false], false, "vis-capture") {
             self.act(defs[i].action, defs[i].label);
         }
-        let blue = Rect::from_min_size(pos2(x, y + 1.0 + Tokens::TOOL_PITCH), vec2(Tokens::TOOL_BUTTON, Tokens::TOOL_PITCH)).shrink(3.0);
+        let blue =
+            Rect::from_min_size(pos2(x, y + 1.0 + Tokens::tool_pitch()), vec2(Tokens::tool_button(), Tokens::tool_pitch())).shrink(3.0);
         ui.painter().rect_filled(blue, radius(7), Tokens::accent());
-        icons::paint(ui.painter(), Rect::from_center_size(blue.center(), vec2(28.0, 28.0)), Icon::CameraSparkle, Color32::WHITE);
-        for (i, def) in defs.iter().enumerate() {
-            toolbar::chip(ui, pos2(x - 6.0, y + 1.0 + Tokens::TOOL_PITCH * (i as f32 + 0.5)), def, true, false);
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(blue.center(), vec2(Tokens::tool_icon(), Tokens::tool_icon())),
+            Icon::CameraSparkle,
+            Color32::WHITE,
+        );
+        let labels = !(crate::tablet::small_screen() && self.settings.menu_labels == "Never");
+        for (i, def) in defs.iter().enumerate().filter(|_| labels) {
+            toolbar::chip(ui, pos2(x - 6.0, y + 1.0 + Tokens::tool_pitch() * (i as f32 + 0.5)), def, true, false);
         }
         let sep_y = y + toolbar::group_height(2) + 10.0;
-        ui.painter().line_segment([pos2(x + 11.0, sep_y), pos2(x + 33.0, sep_y)], Stroke::new(2.0, Tokens::tool_separator()));
+        let w = Tokens::tool_button();
+        ui.painter().line_segment([pos2(x + 11.0, sep_y), pos2(x + w - 11.0, sep_y)], Stroke::new(2.0, Tokens::tool_separator()));
     }
 
     pub(super) fn right_column(&mut self, ui: &mut Ui) {
         let vp = self.viewport_rect;
         // 8 px from the History sidebar (measured, L05).
-        let x = vp.right() - 5.0 - Tokens::TOOL_BUTTON;
+        let x = vp.right() - 5.0 - Tokens::tool_button();
         if self.visualizing {
             self.visual_column(ui, x);
             return;
@@ -75,13 +88,13 @@ impl Workspace {
         // the corner (both as observed).
         // The snap / grid size / view strip, with the cube beside it (always, as observed this session).
         let strip_bottom = {
-            let strip = Rect::from_min_size(pos2(x, vp.top() + 9.0), vec2(Tokens::TOOL_BUTTON, toolbar::group_height(3)));
+            let strip = Rect::from_min_size(pos2(x, self.right_top), vec2(Tokens::tool_button(), toolbar::group_height(3)));
             ui.painter().rect_filled(strip, radius(Tokens::TOOL_RADIUS), Tokens::button());
             ui.painter().rect_stroke(strip, radius(Tokens::TOOL_RADIUS), Stroke::new(1.0, Tokens::tool_border()), StrokeKind::Inside);
             let cell = |i: usize| {
                 Rect::from_min_size(
-                    pos2(x, strip.top() + 1.0 + i as f32 * Tokens::TOOL_PITCH),
-                    vec2(Tokens::TOOL_BUTTON, Tokens::TOOL_PITCH),
+                    pos2(x, strip.top() + 1.0 + i as f32 * Tokens::tool_pitch()),
+                    vec2(Tokens::tool_button(), Tokens::tool_pitch()),
                 )
             };
             let pops = [RightPop::Snap, RightPop::Units, RightPop::View];
@@ -110,8 +123,13 @@ impl Workspace {
             let c = cell(1).center();
             ui.painter().text(c - vec2(0.0, 6.0), Align2::CENTER_CENTER, num, theme::mono(9.5), Tokens::text());
             ui.painter().text(c + vec2(0.0, 6.0), Align2::CENTER_CENTER, units.suffix(), theme::mono(9.5), Tokens::text());
-            icons::paint(ui.painter(), Rect::from_center_size(cell(2).center(), vec2(28.0, 28.0)), Icon::Origin, Tokens::icon());
-            let cube = Rect::from_center_size(pos2(x - 52.0, strip.top() + 40.0), vec2(72.0, 72.0));
+            icons::paint(
+                ui.painter(),
+                Rect::from_center_size(cell(2).center(), vec2(Tokens::tool_icon(), Tokens::tool_icon())),
+                Icon::Origin,
+                Tokens::icon(),
+            );
+            let cube = Rect::from_center_size(pos2(x - cube_gap(), strip.top() + 40.0), vec2(72.0, 72.0));
             self.view_cube(ui, cube);
             strip.bottom()
         };
@@ -158,7 +176,7 @@ impl Workspace {
         }
         // A failing step puts a red "!" badge on the History button (observed s14-008).
         if self.session.doc.history.iter().chain(&self.session.doc.future).any(|h| h.error.is_some() && !h.quiet) {
-            let c = pos2(x + 22.0 + 6.0, hist_y + 1.0 + Tokens::TOOL_PITCH / 2.0 + 7.0);
+            let c = pos2(x + Tokens::tool_button() / 2.0 + 6.0, hist_y + 1.0 + Tokens::tool_pitch() / 2.0 + 7.0);
             let p = ui.painter();
             p.circle_filled(c, 6.0, theme::c(0xff3c30));
             p.line_segment([c - vec2(0.0, 3.2), c + vec2(0.0, 0.8)], Stroke::new(1.5, Color32::WHITE));
@@ -167,7 +185,7 @@ impl Workspace {
         // On a phone with Menu Labels off, the right column is icons only too (#9).
         let labels = !(crate::tablet::small_screen() && self.settings.menu_labels == "Never");
         for (i, def) in defs.iter().enumerate().filter(|_| labels) {
-            let cy = if i < 2 { top + 1.0 + Tokens::TOOL_PITCH * (i as f32 + 0.5) } else { hist_y + 1.0 + Tokens::TOOL_PITCH / 2.0 };
+            let cy = if i < 2 { top + 1.0 + Tokens::tool_pitch() * (i as f32 + 0.5) } else { hist_y + 1.0 + Tokens::tool_pitch() / 2.0 };
             // The label is a button too (as in the reference: clicking "Display Modes" opens its popover).
             let chip = toolbar::chip(ui, pos2(x - 6.0, cy), def, true, false);
             if ui.interact(chip, ui.scope_id().with(("right-chip", i)), Sense::click()).clicked() {
@@ -179,7 +197,8 @@ impl Workspace {
         // view has none (D-idle, s30-100).
         if !self.session.selection.is_empty() || self.session.active_sketch.is_some() || matches!(self.tool, Tool::PickPlane { .. }) {
             let sep_y = hist_y + toolbar::group_height(1) + 10.0;
-            ui.painter().line_segment([pos2(x + 11.0, sep_y), pos2(x + 33.0, sep_y)], Stroke::new(2.0, Tokens::tool_separator()));
+            let w = Tokens::tool_button();
+            ui.painter().line_segment([pos2(x + 11.0, sep_y), pos2(x + w - 11.0, sep_y)], Stroke::new(2.0, Tokens::tool_separator()));
         }
 
         // Sketch constraints, as observed (L18): a column of icon buttons in groups (settings; the nine
@@ -215,11 +234,23 @@ impl Workspace {
             let groups: [(usize, usize); 3] = [(0, 9), (9, 1), (10, 2)];
             let gap = toolbar::GROUP_GAP;
             let total = toolbar::group_height(1) + groups.iter().map(|g| toolbar::group_height(g.1) + gap).sum::<f32>();
-            let mut y = (vp.center().y - total / 2.0).max(vp.top() + 290.0);
+            // Under the History button's line.
+            let below = hist_y + toolbar::group_height(1) + 23.0;
+            let mut y = (vp.center().y - total / 2.0).max(below);
+            // A phone is too short for one column: the settings and the nine constraints stand left of the column,
+            // under the cube, and the rest under History.
+            let split = self.compact && y + total > vp.bottom() - 8.0;
+            let x_main = x;
+            let mut x = if split { x - Tokens::tool_button() - 6.0 } else { x };
+            if split {
+                y = self.right_top + 84.0;
+            }
             let mut clicked = None;
             let gear_open = self.constraint_pop.is_some();
-            let r = toolbar::chip(ui, pos2(x - 6.0, y + 1.0 + Tokens::TOOL_PITCH / 2.0), &settings, true, false);
-            let chip_clicked = ui.interact(r, ui.scope_id().with("constraints"), Sense::click()).clicked();
+            let chip_clicked = labels && {
+                let r = toolbar::chip(ui, pos2(x - 6.0, y + 1.0 + Tokens::tool_pitch() / 2.0), &settings, true, false);
+                ui.interact(r, ui.scope_id().with("constraints"), Sense::click()).clicked()
+            };
             if toolbar::group(ui, pos2(x, y), &[settings], &[gear_open], false, "c-settings").is_some() || chip_clicked {
                 self.constraint_pop = if gear_open { None } else { Some((pos2(x, y), self.now)) };
             }
@@ -231,13 +262,16 @@ impl Workspace {
                     clicked = Some(rows[first + k].2);
                 }
                 for (k, d) in defs.iter().enumerate().filter(|_| labels) {
-                    let cy = y + 1.0 + Tokens::TOOL_PITCH * (k as f32 + 0.5);
+                    let cy = y + 1.0 + Tokens::tool_pitch() * (k as f32 + 0.5);
                     let r = toolbar::chip(ui, pos2(x - 6.0, cy), d, true, dim[k]);
                     if ui.interact(r, ui.scope_id().with(("constraint", d.label)), Sense::click()).clicked() && !dim[k] {
                         clicked = Some(rows[first + k].2);
                     }
                 }
                 y += toolbar::group_height(*n) + gap;
+                if split && gi == 0 {
+                    (x, y) = (x_main, below);
+                }
             }
             if let Some(kind) = clicked {
                 self.apply_constraint(kind);
@@ -253,7 +287,7 @@ impl Workspace {
     /// A tutorial keeps only the view cube, in the corner (dragging it orbits, which the lessons teach).
     pub(in crate::workspace) fn tutorial_cube(&mut self, ui: &mut Ui) {
         let vp = self.viewport_rect;
-        let cube = Rect::from_center_size(pos2(vp.right() - 62.0, vp.top() + 58.0), vec2(72.0, 72.0));
+        let cube = Rect::from_center_size(pos2(vp.right() - 62.0, self.right_top + 49.0), vec2(72.0, 72.0));
         self.view_cube(ui, cube);
     }
 

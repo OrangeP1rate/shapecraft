@@ -324,7 +324,7 @@ fn badge(i: usize) -> (Color32, crate::icons::Icon) {
 
 pub(super) fn window(ws: &mut Workspace, ui: &mut Ui) {
     let cats = categories();
-    let size = vec2(800.0, 650.0);
+    let size = vec2(800.0, 650.0_f32.min(ui.ctx().content_rect().height() - 16.0));
     // Centred on the whole window, title bar included (as observed, 411).
     let at = ui.ctx().content_rect().center() - size / 2.0;
     let key = ui.scope_id().with("shortcuts-cat");

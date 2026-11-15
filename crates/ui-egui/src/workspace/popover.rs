@@ -96,6 +96,10 @@ pub fn show(ui: &mut Ui, id: &str, anchor: Pos2, bounds: Rect, rows: &[Row]) -> 
 
 /// [`show`], placed left of a button or under a header (as History's Merge Modeling Steps, L16).
 pub fn show_at(ui: &mut Ui, id: &str, place: Place, bounds: Rect, rows: &[Row]) -> (Option<(usize, usize)>, Rect) {
+    // A phone gets the same rows as a sheet from the bottom of the screen, in grouped lists.
+    if crate::tablet::small_screen() {
+        return sheet(ui, id, rows);
+    }
     // Measured (L10): 5 px above the first row, 4 below the last.
     let h: f32 = rows.iter().map(height).sum::<f32>() + 9.0;
     let (left, top) = match place {
@@ -458,4 +462,225 @@ pub fn native_menu(
         }
     });
     (clicked, shown.response.rect)
+}
+
+
+/// A phone's sheet: what a popover holds, risen from the bottom of the screen as a phone's own settings sheets are —
+/// rounded grouped lists on a grey ground, section titles in small capitals over them, tips under them, a check mark
+/// on the right of the current choice, and a round ✕ at the top right. Long sheets scroll. The rect returned is the
+/// list's, so a tap on the ✕ (or anywhere off the sheet) is the outside tap that closes it.
+fn sheet(ui: &mut Ui, id: &str, rows: &[Row]) -> (Option<(usize, usize)>, Rect) {
+    const ROW: f32 = 44.0;
+    const INSET: f32 = 16.0;
+    const HEAD: f32 = 52.0;
+    let light = theme::is_light();
+    let ground = if light { theme::hex(0xf2f2f7) } else { theme::hex(0x1c1c1e) };
+    let cell = if light { Color32::WHITE } else { theme::hex(0x2c2c2e) };
+    let rule = if light { theme::hex(0xd1d1d6) } else { theme::hex(0x3a3a3c) };
+    let ink = if light { Color32::BLACK } else { Color32::WHITE };
+    let dim = if light { theme::hex(0x6d6d72) } else { theme::hex(0x8e8e93) };
+    let screen = ui.ctx().viewport_rect();
+    let width = (screen.width() - 16.0).min(480.0);
+    let w = width - 2.0 * INSET;
+
+    // Where everything goes, down from the list's top: a row's rect, and the grouped boxes behind the rows.
+    let in_group = |r: &Row| {
+        matches!(
+            r,
+            Row::Choice { .. } | Row::Switch { .. } | Row::Button(_) | Row::Saved { .. } | Row::Select { .. } | Row::Scale { .. } | Row::Slider { .. }
+        )
+    };
+    let row_h = |r: &Row| match r {
+        Row::Slider { .. } => 76.0,
+        Row::Scale { .. } => 64.0,
+        Row::Header(_) => 34.0,
+        Row::Segments(..) => 48.0,
+        Row::Title(_) => 32.0,
+        Row::Paragraph(_, lines) => 19.0 * *lines as f32 + 8.0,
+        Row::Tip(t) => 18.0 * ((t.len() as f32 * 7.2 / (w - 2.0 * INSET)).ceil().max(1.0)) + 12.0,
+        Row::Separator => 0.0,
+        _ => ROW,
+    };
+    let mut slots: Vec<(usize, f32, f32)> = Vec::new();
+    let mut groups: Vec<(f32, f32)> = Vec::new();
+    let mut y = 0.0;
+    let mut open: Option<f32> = None;
+    let mut last_kind_header = false;
+    for (i, r) in rows.iter().enumerate() {
+        let grouped = in_group(r);
+        if !grouped && let Some(top) = open.take() {
+            groups.push((top, y));
+            y += 8.0;
+        }
+        if grouped && open.is_none() {
+            if !last_kind_header && y > 0.0 {
+                y += 16.0;
+            }
+            open = Some(y);
+        }
+        let h = row_h(r);
+        slots.push((i, y, h));
+        y += h;
+        last_kind_header = matches!(r, Row::Header(_));
+    }
+    if let Some(top) = open {
+        groups.push((top, y));
+    }
+    let total = y + 24.0;
+    let list_h = total.min(screen.height() * 0.62 - HEAD).max(ROW);
+    // The list ends above the home bar's strip; the sheet itself runs on to the screen's edge.
+    let home = ui.ctx().input(|i| i.safe_area_insets().0.bottom).max(0.0);
+    let list_h = list_h.min(screen.height() - home - HEAD - 60.0).max(ROW);
+    let sheet = Rect::from_min_size(
+        pos2(screen.center().x - width / 2.0, screen.bottom() - home - HEAD - list_h),
+        vec2(width, HEAD + list_h + home + 40.0),
+    );
+
+    let mut clicked = None;
+    let mut list_rect = Rect::NOTHING;
+    egui::Area::new(ui.scope_id().with((id, "sheet"))).fixed_pos(sheet.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        let (rect, _) = ui.allocate_exact_size(sheet.size(), Sense::click());
+        let p = ui.painter().clone();
+        p.add(egui::epaint::Shadow { offset: [0, -2], blur: 24, spread: 0, color: Color32::from_black_alpha(if light { 40 } else { 110 }) }
+            .as_shape(rect, egui::CornerRadius { nw: 22, ne: 22, sw: 0, se: 0 }));
+        p.rect_filled(rect, egui::CornerRadius { nw: 22, ne: 22, sw: 0, se: 0 }, ground);
+        // The round ✕ (it closes the sheet by being outside the list).
+        let x = egui::Rect::from_center_size(pos2(rect.right() - INSET - 15.0, rect.top() + HEAD / 2.0 + 2.0), vec2(30.0, 30.0));
+        p.circle_filled(x.center(), 15.0, if light { theme::hex(0xe3e3e8) } else { theme::hex(0x3a3a3c) });
+        crate::icons::paint(&p, x.shrink(9.0), crate::icons::Icon::Close, dim);
+        let list = Rect::from_min_size(pos2(rect.left(), rect.top() + HEAD), vec2(width, list_h));
+        list_rect = list;
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(list));
+        egui::ScrollArea::vertical().id_salt((id, "sheet-scroll")).max_height(list_h).show(&mut child, |ui| {
+            let (area, _) = ui.allocate_exact_size(vec2(width, total), Sense::hover());
+            let p = ui.painter().clone();
+            let left = area.left() + INSET;
+            for (top, bottom) in &groups {
+                p.rect_filled(Rect::from_min_max(pos2(left, area.top() + top), pos2(left + w, area.top() + bottom)), radius(10), cell);
+            }
+            for (k, &(i, top, h)) in slots.iter().enumerate() {
+                let r = Rect::from_min_size(pos2(left, area.top() + top), vec2(w, h));
+                let row = &rows[i];
+                // A hairline between neighbours in the same group, indented as the text is.
+                if in_group(row) && slots.get(k + 1).is_some_and(|n| in_group(&rows[n.0]) && (n.1 - (top + h)).abs() < 0.5) {
+                    p.line_segment([pos2(r.left() + INSET, r.bottom()), pos2(r.right(), r.bottom())], Stroke::new(0.5, rule));
+                }
+                let tx = r.left() + INSET;
+                let body = theme::body(16.0);
+                match row {
+                    Row::Header(t) => {
+                        p.text(pos2(tx, r.bottom() - 9.0), Align2::LEFT_BOTTOM, t.to_uppercase(), theme::body(12.5), dim);
+                    }
+                    Row::Choice { label, checked, enabled } => {
+                        let resp = ui.interact(r, ui.scope_id().with((id, i)), Sense::click());
+                        if resp.is_pointer_button_down_on() {
+                            p.rect_filled(r, radius(10), rule);
+                        }
+                        p.text(pos2(tx, r.center().y), Align2::LEFT_CENTER, *label, body.clone(), if *enabled { ink } else { dim });
+                        if *checked {
+                            crate::icons::paint(&p, Rect::from_center_size(pos2(r.right() - INSET - 8.0, r.center().y), vec2(17.0, 17.0)), crate::icons::Icon::Check, Tokens::accent());
+                        }
+                        if *enabled && resp.clicked() {
+                            clicked = Some((i, 0));
+                        }
+                    }
+                    Row::Button(t) => {
+                        let resp = ui.interact(r, ui.scope_id().with((id, i)), Sense::click());
+                        if resp.is_pointer_button_down_on() {
+                            p.rect_filled(r, radius(10), rule);
+                        }
+                        p.text(pos2(tx, r.center().y), Align2::LEFT_CENTER, *t, body.clone(), ink);
+                        if resp.clicked() {
+                            clicked = Some((i, 0));
+                        }
+                    }
+                    Row::Saved { label, saved } => {
+                        let resp = ui.interact(r, ui.scope_id().with((id, i)), Sense::click());
+                        p.text(pos2(tx, r.center().y), Align2::LEFT_CENTER, *label, body.clone(), if *saved { ink } else { dim });
+                        if !saved {
+                            // No hover on glass: an empty slot always offers Save.
+                            p.text(pos2(r.right() - INSET, r.center().y), Align2::RIGHT_CENTER, "Save", body.clone(), Tokens::accent());
+                        }
+                        if resp.clicked() {
+                            clicked = Some((i, usize::from(!saved)));
+                        }
+                    }
+                    Row::Switch { label, on } => {
+                        let resp = ui.interact(r, ui.scope_id().with((id, i)), Sense::click());
+                        p.text(pos2(tx, r.center().y), Align2::LEFT_CENTER, *label, body.clone(), ink);
+                        let track = Rect::from_center_size(pos2(r.right() - INSET - 25.5, r.center().y), vec2(51.0, 31.0));
+                        p.rect_filled(track, radius(16), if *on { Tokens::accent() } else if light { theme::hex(0xe9e9ea) } else { theme::hex(0x39393d) });
+                        let kx = if *on { track.right() - 15.5 } else { track.left() + 15.5 };
+                        p.circle_filled(pos2(kx, track.center().y + 1.0), 13.5, Color32::from_black_alpha(30));
+                        p.circle_filled(pos2(kx, track.center().y), 13.5, Color32::WHITE);
+                        if resp.clicked() {
+                            clicked = Some((i, 0));
+                        }
+                    }
+                    Row::Select { label, options, current } => {
+                        p.text(pos2(tx, r.center().y), Align2::LEFT_CENTER, *label, body.clone(), ink);
+                        let opts: Vec<String> = options.iter().map(|o| o.to_string()).collect();
+                        if let Some(k) = pill_select(ui, &format!("{id}-{i}"), pos2(r.right() - INSET, r.center().y), 110.0, &opts, Some(*current)) {
+                            clicked = Some((i, k));
+                        }
+                    }
+                    Row::Tip(t) => {
+                        let g = p.layout(t.to_string(), theme::body(13.0), dim, w - 2.0 * INSET);
+                        p.galley(pos2(tx, r.top() + 6.0), g, dim);
+                    }
+                    Row::Separator => {}
+                    Row::Segments(labels, sel) => {
+                        let b = Rect::from_min_size(pos2(r.left(), r.top() + 6.0), vec2(w, 34.0));
+                        p.rect_filled(b, radius(9), if light { theme::hex(0xe3e3e8) } else { theme::hex(0x2c2c2e) });
+                        let sw = b.width() / labels.len().max(1) as f32;
+                        for (k, l) in labels.iter().enumerate() {
+                            let seg = Rect::from_min_size(pos2(b.left() + sw * k as f32, b.top()), vec2(sw, b.height())).shrink(2.0);
+                            if k == *sel {
+                                p.rect_filled(seg, radius(7), if light { Color32::WHITE } else { theme::hex(0x636366) });
+                            }
+                            p.text(seg.center(), Align2::CENTER_CENTER, *l, theme::body(14.0), ink);
+                            if ui.interact(seg, ui.scope_id().with((id, i, k)), Sense::click()).clicked() {
+                                clicked = Some((i, k));
+                            }
+                        }
+                    }
+                    Row::Title(t) => {
+                        p.text(pos2(tx, r.center().y), Align2::LEFT_CENTER, *t, theme::strong(17.0), ink);
+                    }
+                    Row::Paragraph(t, _) => {
+                        let g = p.layout(t.to_string(), theme::body(14.0), dim, w - 2.0 * INSET);
+                        p.galley(pos2(tx, r.top() + 4.0), g, dim);
+                    }
+                    Row::Scale { label, value, min, max } | Row::Slider { left: label, value, min, max, .. } => {
+                        let slider = matches!(row, Row::Slider { .. });
+                        p.text(pos2(tx, r.top() + 20.0), Align2::LEFT_CENTER, *label, body.clone(), ink);
+                        let v = value.get();
+                        let shown = if slider { format!("{v:.0}°") } else { format!("{v:.1}x") };
+                        p.text(pos2(r.right() - INSET, r.top() + 20.0), Align2::RIGHT_CENTER, shown, body.clone(), dim);
+                        if let Row::Slider { right, .. } = row {
+                            p.text(pos2(r.right() - INSET - 54.0, r.top() + 20.0), Align2::RIGHT_CENTER, *right, theme::body(13.0), dim);
+                        }
+                        let ty = r.top() + if slider { 52.0 } else { 46.0 };
+                        let track = Rect::from_min_max(pos2(tx, ty - 2.0), pos2(r.right() - INSET, ty + 2.0));
+                        let t = ((v - min) / (max - min).max(1e-9)).clamp(0.0, 1.0) as f32;
+                        let kx = track.left() + track.width() * t;
+                        p.rect_filled(track, radius(2), rule);
+                        p.rect_filled(Rect::from_min_max(track.min, pos2(kx, track.bottom())), radius(2), Tokens::accent());
+                        let resp = ui.interact(track.expand2(vec2(14.0, 16.0)), ui.scope_id().with((id, i)), Sense::click_and_drag());
+                        p.circle_filled(pos2(kx, track.center().y + 1.0), 13.0, Color32::from_black_alpha(35));
+                        p.circle_filled(pos2(kx, track.center().y), 13.0, Color32::WHITE);
+                        if (resp.dragged() || resp.clicked())
+                            && let Some(q) = resp.interact_pointer_pos()
+                        {
+                            let f = ((q.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) as f64;
+                            let raw = min + (max - min) * f;
+                            value.set(if slider { raw.round() } else { (raw * 10.0).round() / 10.0 });
+                            clicked = Some((i, 0));
+                        }
+                    }
+                }
+            }
+        });
+    });
+    (clicked, list_rect)
 }

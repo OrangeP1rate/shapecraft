@@ -81,6 +81,8 @@ pub struct Settings {
     pub svg_resolution: f64,
     /// The in-app tutorials finished (their ids), ticked on their cards.
     pub tutorials_done: Vec<String>,
+    /// The projects screen shows the folders as a tree down its left side (Sort menu ▸ Folder Tree).
+    pub home_tree: bool,
     /// Preferences ▸ ShapeCraft ▸ Updates: look for a new version at start and once a day, download it in the
     /// background, and what closing ShapeCraft does with a downloaded update ("Ask" or "Always Update").
     pub update_check: bool,
@@ -166,6 +168,7 @@ impl Default for Settings {
             tool_variants: Default::default(),
             custom_keys: Vec::new(),
             tutorials_done: Vec::new(),
+            home_tree: false,
             update_check: true,
             update_download: true,
             update_on_close: "Ask".into(),

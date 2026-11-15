@@ -1,0 +1,30 @@
+[package]
+name = "shapecraft-ios"
+description = "ShapeCraft for iPhone and iPad: the desktop interface in a UIKit window on Metal (see xtask/src/ios.rs)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "shapecraft-ios"
+path = "src/main.rs"
+
+# Everything is iOS-only, so the binary is an empty main in desktop workspace builds.
+[target.'cfg(target_os = "ios")'.dependencies]
+shapecraft-ui.workspace = true
+shapecraft-kernel-occt.workspace = true
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts"] }
+egui = "0.37"
+log = "0.4"
+# The same (patched) winit eframe runs on, for touches with their tool (Pencil or finger).
+winit = { version = "0.30", default-features = false }
+# The safe area as the interface sees it (the rotating root view) and the Duo's reserved regions (iOS 27.1).
+objc2 = "0.6"
+# The Files picker's completion argument (none).
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSGeometry", "NSObjCRuntime", "NSString", "NSThread", "NSURL"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-ui-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "UIApplication", "UIGeometry", "UIResponder", "UIScene", "UISceneDefinitions", "UIView", "UIViewController", "UIWindow", "UIWindowScene"] }
+
+[lints]
+workspace = true

@@ -180,7 +180,7 @@ impl Workspace {
         let top = vp.top() + 9.0;
 
         // Top left: the ring (how far through the lesson) and the step.
-        let ring = Rect::from_min_size(pos2(x, top), vec2(Tokens::TOOL_BUTTON, Tokens::TOOL_BUTTON));
+        let ring = Rect::from_min_size(pos2(x, top), vec2(Tokens::tool_button(), Tokens::tool_button()));
         let ring_resp = ui.interact(ring, ui.scope_id().with("tut-ring"), Sense::click());
         p.rect_filled(ring, radius(10), if ring_resp.hovered() { Tokens::button_hover() } else { Tokens::button() });
         p.rect_stroke(ring, radius(10), Stroke::new(1.0, Tokens::card_border()), StrokeKind::Inside);
@@ -252,7 +252,7 @@ impl Workspace {
                 request = Some(Request::Next);
             }
             // The reference tints Continue green.
-            let cell = Rect::from_min_size(pos2(x + 1.0, y + 1.0), vec2(Tokens::TOOL_BUTTON - 2.0, Tokens::TOOL_PITCH));
+            let cell = Rect::from_min_size(pos2(x + 1.0, y + 1.0), vec2(Tokens::tool_button() - 2.0, Tokens::tool_pitch()));
             p.rect_filled(cell.shrink(4.0), radius(8), theme::hex(0x34c759).gamma_multiply(0.22));
             icons::paint(&p, Rect::from_center_size(cell.center(), vec2(18.0, 18.0)), Icon::ChevronRight, theme::hex(0x2a9d48));
             y += toolbar::group_height(1) + gap;

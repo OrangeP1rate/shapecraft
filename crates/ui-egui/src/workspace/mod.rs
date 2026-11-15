@@ -156,6 +156,8 @@ impl Default for ViewOptions {
 const ITEMS_MIN_W: f32 = 200.0;
 /// The Items column on a touch screen, 276 pt wide.
 const ITEMS_TOUCH_W: f32 = 276.0;
+/// The phone's corner title (home and the name), from the top of the screen to where the left column starts.
+pub(crate) const COMPACT_TITLE_H: f32 = 70.0;
 const ITEMS_MAX_W: f32 = 500.0;
 
 /// Keyboard Shortcuts being customised: the keys changed so far (label, keys) and the row taking a key.
@@ -459,6 +461,15 @@ pub struct Workspace {
     pub title_menu: bool,
     /// Where banners may start below the touch title pill (0: no pill, the view's top).
     pub pill_bottom: f32,
+    /// A phone held sideways (the iPhone Duo): home and the name sit in the top-left corner instead of a pill, and
+    /// the left column starts under them (set each frame).
+    pub compact: bool,
+    /// Where the left and right columns start (set each frame: under the corner title on a phone, under a reserved
+    /// status corner on the right).
+    pub left_top: f32,
+    pub right_top: f32,
+    /// Where the phone's corner title ends (set each frame).
+    pub title_right: f32,
     /// When this project opened on a touch screen (the "pen may not be connected" bubble shows for a while).
     pub touch_opened: Option<f64>,
     /// When a finger last tapped the model with no pen seen yet: the bubble comes back for a while, since that's
@@ -781,6 +792,10 @@ impl Workspace {
             go_home: false,
             title_menu: false,
             pill_bottom: 0.0,
+            compact: false,
+            left_top: 0.0,
+            right_top: 0.0,
+            title_right: 0.0,
             touch_opened: None,
             pen_nudged: None,
             pen_help: false,
@@ -944,6 +959,12 @@ impl Workspace {
     /// The top of the hint banner and its stand-ins: 8 pt into the view, or 10 pt under the touch title pill (iPad).
     pub(crate) fn banner_y(&self) -> f32 {
         let bubble = if self.pen_bubble() { 37.0 } else { 0.0 };
+        if self.compact {
+            // A phone's corner title leaves the top middle free, unless a sidebar pushes the view's middle (and so
+            // the banner, up to ~520 pt wide) over to it; the pen bubble beside it doesn't.
+            let clear = self.viewport_rect.center().x - 270.0 > self.title_right;
+            return self.viewport_rect.top() + 8.0 + if bubble > 0.0 || !clear { 50.0 } else { 0.0 };
+        }
         (self.viewport_rect.top() + 8.0).max(self.pill_bottom + 10.0 + bubble)
     }
 
@@ -994,6 +1015,14 @@ impl Workspace {
         };
         let title = Rect::from_min_size(full.min, vec2(full.width(), title_h));
         let body_top = title.bottom();
+        // A phone sideways: home and the name in the top-left corner, the columns under it (iPhone Duo).
+        self.compact = touch && crate::tablet::small_screen() && title_h == 0.0;
+        self.left_top = if self.compact {
+            crate::tablet::left_top(full.top() + COMPACT_TITLE_H, full.left())
+        } else {
+            crate::tablet::left_top(body_top + 9.0, full.left())
+        };
+        self.right_top = crate::tablet::right_top(body_top + 9.0, full.right());
         let gap = Tokens::GAP;
         // The Drawings workspace hides the Items sidebar (as observed).
         // A tablet keeps the Items column at its narrowest for room to model; a drag there stays on the tablet.
@@ -1005,25 +1034,50 @@ impl Workspace {
         if teaching {
             self.tutorial_tick();
         }
-        let items_rect = (self.show_items && self.drawings.is_none() && !teaching)
-            .then(|| Rect::from_min_max(pos2(full.left() + gap, body_top + 8.0), pos2(full.left() + gap + items_w, full.bottom() - 8.0)));
+        let items_rect = (self.show_items && self.drawings.is_none() && !teaching).then(|| {
+            Rect::from_min_max(
+                pos2(full.left() + gap, self.left_top - 1.0),
+                // (Its footer buttons keep above the home indicator's strip.)
+                pos2(
+                    full.left() + gap + items_w,
+                    crate::tablet::above_home_strip(ui.ctx(), crate::tablet::left_bottom(full.bottom(), full.left())) - 8.0,
+                ),
+            )
+        });
         let side_open = match &self.drawings {
             Some(d) => d.props,
             None if self.visualizing => self.vis_sidebar,
             None => self.show_history && !teaching,
         };
+        // On a phone the Visualize sheet takes two fifths of the width, as the reference's does on the iPhone Duo.
+        let side_w = if self.compact && self.visualizing && self.drawings.is_none() {
+            (full.width() * 0.4).max(Tokens::HISTORY_W)
+        } else {
+            Tokens::HISTORY_W
+        };
         let history_rect = side_open.then(|| {
-            Rect::from_min_max(pos2(full.right() - gap - Tokens::HISTORY_W, body_top + 8.0), pos2(full.right() - gap, full.bottom() - 8.0))
+            Rect::from_min_max(
+                pos2(full.right() - gap - side_w, self.right_top - 1.0),
+                pos2(full.right() - gap, crate::tablet::right_bottom(full.bottom(), full.right()) - 8.0),
+            )
         });
         let vp_left = items_rect.map_or(full.left(), |r| r.right() + 3.0);
         let vp_right = history_rect.map_or(full.right(), |r| r.left() - 3.0);
         self.viewport_rect = Rect::from_min_max(pos2(vp_left, body_top), pos2(vp_right, full.bottom()));
-        self.view_rect = Rect::from_min_max(pos2(full.left(), body_top), full.max);
+        // The 3D view runs under the status bar, home bar and rounded corners (the safe-area insets a phone or
+        // tablet page reports) as on a tablet app; the controls above stay inside `full`. Same rect on a computer.
+        let screen = ui.ctx().viewport_rect();
+        let view_top = if title_h > 0.0 { body_top } else { screen.top() };
+        self.view_rect = Rect::from_min_max(pos2(screen.left(), view_top), screen.max);
+        ui.painter().with_clip_rect(screen).rect_filled(screen, 0.0, Tokens::window());
 
         self.update_preview();
         // Viewport first so the floating controls drawn after it win the hit test.
         let began = std::time::Instant::now();
+        let clip = ui.clip_rect();
+        ui.set_clip_rect(screen);
         self.viewport(ui, render_state);
+        ui.set_clip_rect(clip);
         self.view_ms = began.elapsed().as_secs_f32() * 1000.0;
         if teaching {
             self.tutorial_controls(ui);

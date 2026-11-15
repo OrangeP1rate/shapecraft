@@ -11,16 +11,18 @@ use crate::window_chrome;
 use crate::workspace::toolbar::UiAction;
 use crate::workspace::{PEN_BUBBLE_SECS, Workspace};
 
-/// The title bar's home button, as observed: a filled grey house (19×17) with a chimney and a door.
-fn home_button(ui: &mut Ui, center: Pos2, ink: Color32, bar: Color32) -> bool {
-    let hit = Rect::from_center_size(center, vec2(28.0, 26.0));
+/// The title bar's home button, as observed: a filled grey house (19×17) with a chimney and a door. `hit` overrides
+/// the 28 × 26 target (the phone's round button takes taps over all of it); `k` scales the house.
+fn home_button(ui: &mut Ui, center: Pos2, ink: Color32, bar: Color32, hit: Option<Rect>, k: f32) -> bool {
+    let round = hit.is_some();
+    let hit = hit.unwrap_or(Rect::from_center_size(center, vec2(28.0, 26.0)));
     let resp = ui.interact(hit, ui.scope_id().with("home"), Sense::click());
-    if resp.hovered() {
+    if resp.hovered() && !round {
         ui.painter().rect_filled(hit, radius(6), Tokens::button_hover());
     }
     let p = ui.painter();
-    let o = center - vec2(9.5, 8.5);
-    let at = |x: f32, y: f32| o + vec2(x, y);
+    let o = center - vec2(9.5, 8.5) * k;
+    let at = |x: f32, y: f32| o + vec2(x, y) * k;
     p.rect_filled(Rect::from_min_max(at(13.0, 1.5), at(15.5, 7.0)), 0.0, ink);
     p.add(Shape::convex_polygon(
         vec![at(9.5, 0.0), at(19.0, 8.5), at(17.5, 10.0), at(9.5, 2.8), at(1.5, 10.0), at(0.0, 8.5)],
@@ -31,6 +33,9 @@ fn home_button(ui: &mut Ui, center: Pos2, ink: Color32, bar: Color32) -> bool {
     p.rect_filled(Rect::from_min_max(at(7.5, 11.0), at(11.5, 17.0)), 0.0, bar);
     resp.clicked()
 }
+
+/// The phone's round home button: a little larger than a tool button (the reference's on the iPhone Duo).
+const COMPACT_HOME_R: f32 = 23.0;
 
 /// A round-cornered icon button on the bar, like Help.
 fn bar_button(ui: &mut Ui, center: Pos2, id: &str, icon: Icon, ink: Color32) -> egui::Response {
@@ -59,7 +64,7 @@ pub(in crate::workspace) fn titlebar(ws: &mut Workspace, ui: &mut Ui, r: Rect) {
     let system_menu_bar = cfg!(target_os = "macos") && !crate::tablet::on_tablet();
     let fullscreen = ui.input(|i| i.viewport().fullscreen).unwrap_or(false);
     let shift = if fullscreen || !system_menu_bar { 77.0 } else { 0.0 };
-    if home_button(ui, pos2(r.left() + 107.5 - shift, r.top() + 25.5), ink, bar) {
+    if home_button(ui, pos2(r.left() + 107.5 - shift, r.top() + 25.5), ink, bar, None, 1.0) {
         ws.go_home = true;
     }
     let name_rect = Rect::from_min_size(pos2(r.left() + 128.0 - shift, r.center().y - 13.0), vec2(320.0, 26.0));
@@ -120,9 +125,27 @@ pub(in crate::workspace) fn touch_title(ws: &mut Workspace, ui: &mut Ui, bar: Re
     let ink = theme::c(0xd6d5d6);
     let fill = theme::c(0x2b2b2d);
     let name = ws.session.doc.name.clone();
-    let font = theme::strong(17.0);
-    let name_w = ui.painter().layout_no_wrap(name.clone(), font.clone(), Color32::WHITE).size().x.min(360.0);
-    let (frame, home_c, name_left, more_c) = if bar.height() > 0.0 {
+    // On a phone the name is a size up (the reference's corner title is bolder and larger than its tool labels).
+    let font = theme::strong(if ws.compact { 18.0 } else { 17.0 });
+    let name_w = ui.painter().layout_no_wrap(name.clone(), font.clone(), Color32::WHITE).size().x.min(if ws.compact { 300.0 } else { 360.0 });
+    let compact = ws.compact;
+    let (frame, home_c, name_left, more_c) = if compact {
+        // A phone sideways (the reference on iPhone Duo): a round home button near the top-left corner, the name
+        // beside it with a chevron, no pill. The name opens the menu (Rename first). The button sits in from the
+        // screen's rounded corner (the reference's is set down and in, clear of the curve) and is a little larger
+        // than the tool buttons.
+        let home_c = pos2(crate::tablet::top_left(bar.top(), bar.left()) + 34.0, bar.top() + 35.0);
+        let p = ui.painter();
+        p.circle_filled(home_c + vec2(0.0, 2.0), COMPACT_HOME_R + 1.0, Color32::from_black_alpha(60));
+        p.circle_filled(home_c, COMPACT_HOME_R, fill);
+        p.circle_stroke(home_c, COMPACT_HOME_R, Stroke::new(1.0, theme::c(0x3c3c3e)));
+        let name_left = home_c.x + COMPACT_HOME_R + 12.0;
+        let frame = Rect::from_min_max(
+            pos2(bar.left() + 7.0, home_c.y - COMPACT_HOME_R),
+            pos2(name_left + name_w + 26.0, home_c.y + COMPACT_HOME_R),
+        );
+        (frame, home_c, name_left, pos2(name_left + name_w + 13.0, home_c.y))
+    } else if bar.height() > 0.0 {
         ui.painter().rect_filled(bar, 0.0, Tokens::titlebar());
         (bar, pos2(bar.left() + 33.0, bar.center().y), bar.left() + 62.0, pos2(bar.right() - 31.0, bar.center().y))
     } else {
@@ -137,6 +160,7 @@ pub(in crate::workspace) fn touch_title(ws: &mut Workspace, ui: &mut Ui, bar: Re
         (pill, pos2(pill.left() + 33.0, pill.center().y), pill.left() + 66.0, pos2(pill.right() - 31.0, pill.center().y))
     };
     ws.pill_bottom = if bar.height() > 0.0 { 0.0 } else { frame.bottom() };
+    ws.title_right = frame.right();
     if ws.touch_opened.is_none() {
         ws.touch_opened = Some(ws.now);
     }
@@ -145,20 +169,27 @@ pub(in crate::workspace) fn touch_title(ws: &mut Workspace, ui: &mut Ui, bar: Re
         let text = if crate::tablet::on_tablet() { "Apple Pencil may not be connected" } else { "Stylus may not be connected" };
         let g = ui.painter().layout_no_wrap(text.into(), theme::body(13.0), theme::c(0xff6961));
         let r = Rect::from_center_size(pos2(frame.center().x, frame.bottom() + 10.0 + 14.0), vec2(g.size().x + 28.0, 27.5));
+        // On a phone it sits beside the corner title, on its row (the column starts right under it).
+        let r = if compact { r.translate(vec2(frame.right() + 10.0 - r.left(), frame.center().y - r.center().y)) } else { r };
         ui.painter().rect_filled(r, radius(14), theme::c(0x3a1f1f));
         ui.painter().galley(r.center() - g.size() / 2.0, g, theme::c(0xff6961));
         if ui.interact(r.expand(6.0), ui.scope_id().with("pen-bubble"), Sense::click()).clicked() {
             ws.pen_help = !ws.pen_help;
         }
         if ws.pen_help {
-            pen_help_card(ws, ui, pos2(frame.center().x, r.bottom() + 8.0));
+            pen_help_card(ws, ui, pos2(if compact { r.left() + 200.0 } else { frame.center().x }, r.bottom() + 8.0));
         }
         // Wake up to take it away even if nothing else moves.
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
     } else {
         ws.pen_help = false;
     }
-    if home_button(ui, home_c, ink, fill) {
+    let (home_hit, home_k) = if compact {
+        (Some(Rect::from_center_size(home_c, vec2(2.0 * COMPACT_HOME_R, 2.0 * COMPACT_HOME_R))), 1.15)
+    } else {
+        (None, 1.0)
+    };
+    if home_button(ui, home_c, ink, fill, home_hit, home_k) {
         ws.go_home = true;
     }
     let name_rect = Rect::from_min_size(pos2(name_left, frame.center().y - 14.0), vec2(name_w, 28.0));
@@ -169,23 +200,39 @@ pub(in crate::workspace) fn touch_title(ws: &mut Workspace, ui: &mut Ui, bar: Re
         font,
         Tokens::text_strong(),
     );
-    if ui.interact(name_rect.expand2(vec2(4.0, 8.0)), ui.scope_id().with("touch-name"), Sense::click()).clicked() {
+    let name_resp = ui.interact(name_rect.expand2(vec2(4.0, 8.0)), ui.scope_id().with("touch-name"), Sense::click());
+    if name_resp.clicked() && !compact {
         // The field starts empty, the current name showing as its placeholder.
         ws.renaming = Some((None, String::new(), true));
         ws.title_menu = false;
     }
-    let more = Rect::from_center_size(more_c, vec2(46.0, 40.0));
+    let more = if compact {
+        Rect::from_min_max(pos2(name_left - 4.0, frame.top()), pos2(more_c.x + 12.0, frame.bottom()))
+    } else {
+        Rect::from_center_size(more_c, vec2(46.0, 40.0))
+    };
     let more_resp = ui.interact(more, ui.scope_id().with("touch-more"), Sense::click());
-    ui.painter().circle_stroke(more_c, 11.0, Stroke::new(1.6, ink));
-    for dx in [-5.0, 0.0, 5.0] {
-        ui.painter().circle_filled(more_c + vec2(dx, 0.0), 1.6, ink);
+    if compact {
+        // A small chevron after the name, as on the Duo.
+        let c = more_c + vec2(0.0, 1.0);
+        ui.painter().circle_filled(c, 8.0, theme::c(0x3a3a3c));
+        let ink2 = Stroke::new(1.5, ink);
+        ui.painter().line_segment([c + vec2(-3.2, -1.4), c + vec2(0.0, 1.8)], ink2);
+        ui.painter().line_segment([c + vec2(0.0, 1.8), c + vec2(3.2, -1.4)], ink2);
+    } else {
+        ui.painter().circle_stroke(more_c, 11.0, Stroke::new(1.6, ink));
+        for dx in [-5.0, 0.0, 5.0] {
+            ui.painter().circle_filled(more_c + vec2(dx, 0.0), 1.6, ink);
+        }
     }
-    if more_resp.clicked() {
+    if more_resp.clicked() || compact && name_resp.clicked() {
         ws.title_menu = !ws.title_menu;
+        ws.popup_opened_at = ws.now;
     }
     let below = frame.bottom() + 8.0;
     if let Some((None, text, focus)) = &mut ws.renaming {
         let popover = Rect::from_center_size(pos2(name_rect.center().x, below + 50.0), vec2(375.0, 100.0));
+        let popover = popover.translate(vec2((bar.left() + 8.0 - popover.left()).max(0.0), 0.0));
         let mut done: Option<bool> = None;
         egui::Area::new(ui.scope_id().with("name-popover")).fixed_pos(popover.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
             let p = ui.painter();
@@ -228,7 +275,9 @@ pub(in crate::workspace) fn touch_title(ws: &mut Workspace, ui: &mut Ui, bar: Re
         }
     }
     if ws.title_menu {
-        touch_more_menu(ws, ui, more, more_c, below, ink);
+        // On a phone the menu hangs from the corner title's left edge.
+        let anchor = if compact { pos2(frame.left() + 236.0 - 23.0, more_c.y) } else { more_c };
+        touch_more_menu(ws, ui, more, anchor, below, ink);
     } else {
         ws.title_sub = None;
     }
@@ -314,6 +363,8 @@ enum Pick {
     Ui(UiAction),
     /// Opens submenu n beside the row.
     Sub(usize),
+    /// The project's name (on a phone the name opens this menu instead of the field).
+    Rename,
 }
 
 /// The touch ⋯ menu, as on iPad: Import › and Export to › open a submenu to the right, then Help and Settings.
@@ -323,12 +374,18 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, more: Rect, more_c: Pos2, be
     use crate::workspace::export::Format;
     const ROW: f32 = 44.0;
     const W: f32 = 252.0;
-    let main: [(&str, Option<Icon>, Pick); 4] = [
-        ("Import", Some(Icon::Import), Pick::Sub(0)),
-        ("Export to", Some(Icon::Export), Pick::Sub(1)),
-        ("Help", Some(Icon::Help), Pick::Ui(UiAction::Help)),
-        ("Settings", Some(Icon::Gear), Pick::Ui(UiAction::Preferences)),
-    ];
+    let rename: &[(&str, Option<Icon>, Pick)] = if ws.compact { &[("Rename", Some(Icon::Pencil), Pick::Rename)] } else { &[] };
+    let first = rename.len();
+    let main: Vec<(&str, Option<Icon>, Pick)> = rename
+        .iter()
+        .copied()
+        .chain([
+            ("Import", Some(Icon::Import), Pick::Sub(0)),
+            ("Export to", Some(Icon::Export), Pick::Sub(1)),
+            ("Help", Some(Icon::Help), Pick::Ui(UiAction::Help)),
+            ("Settings", Some(Icon::Gear), Pick::Ui(UiAction::Preferences)),
+        ])
+        .collect();
     let subs: [&[(&str, Option<Icon>, Pick)]; 2] = [
         &[
             ("File…", None, Pick::App(AppAction::Import)),
@@ -344,7 +401,7 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, more: Rect, more_c: Pos2, be
         ],
     ];
     let menu = Rect::from_min_size(pos2(more_c.x - 236.0 + 23.0, below), vec2(W, 16.0 + main.len() as f32 * ROW + 9.0));
-    let row_top = |i: usize| menu.top() + 8.0 + i as f32 * ROW + if i >= 2 { 9.0 } else { 0.0 };
+    let row_top = |i: usize| menu.top() + 8.0 + i as f32 * ROW + if i >= first + 2 { 9.0 } else { 0.0 };
     let mut picked: Option<Pick> = None;
     let mut rects = vec![menu];
     let paint_rows =
@@ -391,7 +448,7 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, more: Rect, more_c: Pos2, be
         };
     let open = ws.title_sub;
     egui::Area::new(ui.scope_id().with("title-menu")).fixed_pos(menu.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-        if let Some(p) = paint_rows(ui, menu, &main, Some(2), "title-row", open) {
+        if let Some(p) = paint_rows(ui, menu, &main, Some(first + 2), "title-row", open) {
             picked = Some(p);
         }
     });
@@ -399,7 +456,7 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, more: Rect, more_c: Pos2, be
         && let Some(rows) = subs.get(n)
     {
         // Measured on iPad: the submenu opens to the right, overlapping the menu by 10 pt, top aligned with its row.
-        let frame = Rect::from_min_size(pos2(menu.right() - 10.0, row_top(n) - 8.0), vec2(236.0, 16.0 + rows.len() as f32 * ROW));
+        let frame = Rect::from_min_size(pos2(menu.right() - 10.0, row_top(n + first) - 8.0), vec2(236.0, 16.0 + rows.len() as f32 * ROW));
         rects.push(frame);
         egui::Area::new(ui.scope_id().with("title-sub")).fixed_pos(frame.min).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
             if let Some(p) = paint_rows(ui, frame, rows, None, "title-sub-row", None) {
@@ -419,6 +476,10 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, more: Rect, more_c: Pos2, be
         Some(Pick::Ui(u)) => {
             ws.title_menu = false;
             ws.ui_action(u);
+        }
+        Some(Pick::Rename) => {
+            ws.title_menu = false;
+            ws.renaming = Some((None, String::new(), true));
         }
         None if outside => ws.title_menu = false,
         None => {}

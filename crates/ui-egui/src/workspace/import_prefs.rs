@@ -54,7 +54,7 @@ pub fn mode_index(name: &str) -> usize {
 pub(super) fn dialog(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
     let Some(mut d) = ws.import_prefs.take() else { return };
     // About 560 wide, 640 tall, centred.
-    let r = Rect::from_center_size(full.center(), vec2(560.0, 640.0));
+    let r = Rect::from_center_size(full.center(), vec2(560.0, 640.0_f32.min(full.height() - 16.0)));
     let p = ui.painter().clone();
     p.rect_filled(full, 0.0, Color32::from_black_alpha(90));
     p.rect_filled(r.translate(vec2(0.0, 6.0)).expand(2.0), radius(12), Color32::from_black_alpha(90));

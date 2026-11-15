@@ -22,6 +22,9 @@ pub fn install_fonts(ctx: &egui::Context) {
     use egui::epaint::text::{FontData, FontDefinitions, FontTweak, VariationCoords};
     let candidates = [
         "/System/Library/Fonts/SFNS.ttf",
+        // iOS / iPadOS: the system font, variable (checked in the iOS 27.2 runtime). Without it the phone fell back
+        // to egui's own face, which has no semibold.
+        "/System/Library/Fonts/Core/SFUI.ttf",
         "/usr/share/fonts/truetype/inter/InterVariable.ttf",
         "/usr/share/fonts/inter/InterVariable.ttf",
         "/usr/share/fonts/opentype/inter/InterVariable.ttf",
@@ -58,6 +61,7 @@ pub fn install_fonts(ctx: &egui::Context) {
     // Dimension labels use the platform's monospaced UI face when there is one.
     for path in [
         "/System/Library/Fonts/SFNSMono.ttf",
+        "/System/Library/Fonts/Core/SFUIMono.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
         "C:\\Windows\\Fonts\\consola.ttf",
         "/system/fonts/DroidSansMono.ttf",
@@ -74,6 +78,7 @@ pub fn install_fonts(ctx: &egui::Context) {
     // Shortcut glyphs (⌘ ⇧ ⌥ ⌫) come from a symbol font when the UI font lacks them.
     for path in [
         "/System/Library/Fonts/Apple Symbols.ttf",
+        "/System/Library/Fonts/Core/AppleSymbols.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/dejavu/DejaVuSans.ttf",
         "C:\\Windows\\Fonts\\seguisym.ttf",
@@ -96,13 +101,14 @@ pub fn install_fonts(ctx: &egui::Context) {
             "C:\\Windows\\Fonts\\YuGothR.ttc",
             "C:\\Windows\\Fonts\\msgothic.ttc",
             "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+            "/System/Library/Fonts/Core/HiraginoKakuGothic.ttc",
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
             "/system/fonts/NotoSansCJK-Regular.ttc",
         ],
         &["C:\\Windows\\Fonts\\msyh.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc"],
-        &["C:\\Windows\\Fonts\\malgun.ttf", "/System/Library/Fonts/AppleSDGothicNeo.ttc"],
+        &["C:\\Windows\\Fonts\\malgun.ttf", "/System/Library/Fonts/AppleSDGothicNeo.ttc", "/System/Library/Fonts/Core/AppleSDGothicNeo.ttc"],
     ];
     for (i, paths) in cjk.iter().enumerate() {
         let Some((path, bytes)) = paths.iter().find_map(|p| std::fs::read(p).ok().map(|b| (*p, b))) else { continue };

@@ -522,7 +522,7 @@ fn settings(d: &mut ExportDialog, ui: &mut Ui, p: &egui::Painter, f: Format, k: 
 
 pub(super) fn dialog(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
     let Some(mut d) = ws.export.take() else { return };
-    let r = Rect::from_center_size(full.center(), vec2(800.0, 648.0));
+    let r = Rect::from_center_size(full.center(), vec2(800.0, 648.0_f32.min(full.height() - 16.0)));
     let p = ui.painter().clone();
     p.rect_filled(full, 0.0, Color32::from_black_alpha(90));
     p.rect_filled(r.translate(vec2(0.0, 6.0)).expand(2.0), radius(12), Color32::from_black_alpha(90));

@@ -72,6 +72,129 @@ pub fn small_screen() -> bool {
     touch_ui() && SMALL_SCREEN.load(Ordering::Relaxed)
 }
 
+/// A phone folded shut (the iPhone Duo's front screen) or held upright: fine for the projects screen, too small to
+/// model on.
+static FOLDED: AtomicBool = AtomicBool::new(false);
+
+/// Set by an app that knows its screen just folded (or unfolded).
+pub fn set_folded(on: bool) {
+    FOLDED.store(on, Ordering::Relaxed);
+}
+
+/// Folded or upright on a phone (only on a touch screen): projects wait for the big screen.
+pub fn folded() -> bool {
+    touch_ui() && FOLDED.load(Ordering::Relaxed)
+}
+
+/// A phone that doesn't fold (an ordinary iPhone): upright is still the projects screen, but a project opens at once
+/// and the app turns the phone on its side for it, instead of asking to open up.
+static TURNS_TO_MODEL: AtomicBool = AtomicBool::new(false);
+
+/// Set by an app on a phone that turns sideways for a project rather than unfolding.
+pub fn set_turns_to_model(on: bool) {
+    TURNS_TO_MODEL.store(on, Ordering::Relaxed);
+}
+
+/// Folded shut on a phone that opens up: a project waits until it's opened.
+pub fn waits_to_unfold() -> bool {
+    folded() && !TURNS_TO_MODEL.load(Ordering::Relaxed)
+}
+
+/// A corner of the screen the system keeps for itself (the iPhone Duo's clock, Wi-Fi and camera), in interface
+/// points. The interface still draws under it; controls keep out.
+static CORNER: Mutex<Option<egui::Rect>> = Mutex::new(None);
+
+/// Set by an app that knows of a reserved corner (None when there's none, or it moved away on a turn).
+pub fn set_reserved_corner(r: Option<egui::Rect>) {
+    if let Ok(mut c) = CORNER.lock() {
+        *c = r;
+    }
+}
+
+/// The reserved corner, if any (only on a touch screen).
+pub fn reserved_corner() -> Option<egui::Rect> {
+    if !touch_ui() {
+        return None;
+    }
+    CORNER.lock().ok().and_then(|c| *c)
+}
+
+/// The iPhone Duo's vertical bar (iOS 27.1): a column down one side holding the clock and Wi-Fi at its top, which
+/// the projects screen fills with its own buttons, as the reference does. In interface points; the page still draws
+/// under it.
+static SIDE_BAR: Mutex<Option<egui::Rect>> = Mutex::new(None);
+
+/// Set by an app whose system shows the vertical bar (None when it's off or folded away).
+pub fn set_side_bar(r: Option<egui::Rect>) {
+    if let Ok(mut c) = SIDE_BAR.lock() {
+        *c = r;
+    }
+}
+
+/// The vertical bar, if any (only on a touch screen).
+pub fn side_bar() -> Option<egui::Rect> {
+    if !touch_ui() {
+        return None;
+    }
+    SIDE_BAR.lock().ok().and_then(|c| *c)
+}
+
+/// How far down controls along the right edge start: under a reserved corner at the top right, else `top`.
+pub fn right_top(top: f32, right: f32) -> f32 {
+    match reserved_corner() {
+        Some(c) if c.right() >= right - 1.0 && c.top() <= top + 1.0 => top.max(c.bottom() + 6.0),
+        _ => top,
+    }
+}
+
+/// How far left controls along the top edge end: before a reserved corner at the top right, else `right`.
+pub fn top_right(top: f32, right: f32) -> f32 {
+    match reserved_corner() {
+        Some(c) if c.right() >= right - 1.0 && c.top() <= top + 1.0 => right.min(c.left() - 4.0),
+        _ => right,
+    }
+}
+
+/// How far down controls along the left edge start: under a reserved corner at the top left, else `top`.
+pub fn left_top(top: f32, left: f32) -> f32 {
+    match reserved_corner() {
+        Some(c) if c.left() <= left + 1.0 && c.top() <= top + 1.0 => top.max(c.bottom() + 6.0),
+        _ => top,
+    }
+}
+
+/// How far right controls along the top edge start: after a reserved corner at the top left, else `left`.
+pub fn top_left(top: f32, left: f32) -> f32 {
+    match reserved_corner() {
+        Some(c) if c.left() <= left + 1.0 && c.top() <= top + 1.0 => left.max(c.right() + 4.0),
+        _ => left,
+    }
+}
+
+/// How far down controls along the left edge reach: above a reserved corner at the bottom left, else `bottom`.
+pub fn left_bottom(bottom: f32, left: f32) -> f32 {
+    match reserved_corner() {
+        Some(c) if c.left() <= left + 1.0 && c.bottom() >= bottom - 1.0 => bottom.min(c.top() - 6.0),
+        _ => bottom,
+    }
+}
+
+/// How far down buttons may reach: above the home indicator's strip (the safe area's bottom on iOS), else `bottom`.
+/// The view runs on under the strip, but a button there gets in the way of the swipe up to go home or switch apps;
+/// the reference keeps its Undo and Redo well up from the bottom edge on the iPhone Duo.
+pub fn above_home_strip(ctx: &egui::Context, bottom: f32) -> f32 {
+    let (screen, inset) = ctx.input(|i| (i.viewport_rect(), i.safe_area_insets().0.bottom));
+    if inset > 0.0 && inset.is_finite() { bottom.min(screen.bottom() - inset) } else { bottom }
+}
+
+/// How far down controls along the right edge reach: above a reserved corner at the bottom right, else `bottom`.
+pub fn right_bottom(bottom: f32, right: f32) -> f32 {
+    match reserved_corner() {
+        Some(c) if c.right() >= right - 1.0 && c.bottom() >= bottom - 1.0 => bottom.min(c.top() - 6.0),
+        _ => bottom,
+    }
+}
+
 /// Set when a hardware keyboard comes or goes.
 pub fn set_keyboard(present: bool) {
     KEYBOARD.store(present, Ordering::Relaxed);

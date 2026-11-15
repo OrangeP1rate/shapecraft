@@ -118,12 +118,25 @@ impl Tokens {
     pub const SIDEBAR_W: f32 = 300.0;
     pub const HISTORY_W: f32 = 280.0;
     pub const PANEL_RADIUS: u8 = 10;
-    pub const TOOL_BUTTON: f32 = 44.0;
-    pub const TOOL_PITCH: f32 = 40.0;
     pub const TOOL_RADIUS: u8 = 9;
     pub const CHIP_H: f32 = 36.0;
     pub const CHIP_RADIUS: u8 = 6;
     pub const ROW_H: f32 = 24.0;
+
+    /// A toolbar button's width: 44, or 40 on a phone (as observed on the iPhone).
+    pub fn tool_button() -> f32 {
+        if crate::tablet::small_screen() { 40.0 } else { 44.0 }
+    }
+
+    /// From one toolbar button to the next: 40, or 36 on a phone.
+    pub fn tool_pitch() -> f32 {
+        if crate::tablet::small_screen() { 36.0 } else { 40.0 }
+    }
+
+    /// A toolbar icon's size: 28, or 26 on a phone.
+    pub fn tool_icon() -> f32 {
+        if crate::tablet::small_screen() { 26.0 } else { 28.0 }
+    }
 }
 
 pub fn radius(r: u8) -> CornerRadius {

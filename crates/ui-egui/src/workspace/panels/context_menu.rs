@@ -89,7 +89,7 @@ pub(super) fn variant_menu(ws: &mut Workspace, ui: &mut Ui, label: &'static str,
     let active: Vec<bool> = (0..defs.len()).map(|i| i == current).collect();
     let vp = ws.viewport_rect;
     let top = pos2(at.x, at.y.min(vp.bottom() - 12.0 - toolbar::group_height(defs.len())));
-    let hit = Rect::from_min_size(top, vec2(Tokens::TOOL_BUTTON + 120.0, toolbar::group_height(defs.len())));
+    let hit = Rect::from_min_size(top, vec2(Tokens::tool_button() + 120.0, toolbar::group_height(defs.len())));
     if let Some(i) = toolbar::group(ui, top, &defs, &active, true, "variants") {
         ws.variants.insert(label.into(), i);
         ws.variant_menu = None;
@@ -108,7 +108,7 @@ pub(super) fn variant_menu(ws: &mut Workspace, ui: &mut Ui, label: &'static str,
     let outside = ws.now - ws.popup_opened_at > 0.15
         && ui.input(|i| {
             i.pointer.any_click()
-                && i.pointer.interact_pos().is_some_and(|q| !hit.contains(q) && q.x > vp.left() + 8.0 + Tokens::TOOL_BUTTON)
+                && i.pointer.interact_pos().is_some_and(|q| !hit.contains(q) && q.x > vp.left() + 8.0 + Tokens::tool_button())
         });
     if outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         ws.variant_menu = None;

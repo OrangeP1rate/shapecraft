@@ -152,6 +152,7 @@ impl Router {
     /// Something is still to happen without new input (a release a frame later, a long press to time out).
     pub fn busy(&self) -> bool {
         !self.now.is_empty() || !self.later.is_empty() || !self.nav.is_empty() || matches!(self.mode, Mode::Pending { .. })
+            || self.pen_hold.is_some() && self.pen_held.is_none()
     }
 
     /// The page went away: forget fingers and buttons.

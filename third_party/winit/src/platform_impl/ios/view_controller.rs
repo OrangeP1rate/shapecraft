@@ -2,7 +2,7 @@ use std::cell::Cell;
 
 use objc2::rc::Retained;
 use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
-use objc2_foundation::{MainThreadMarker, NSObject};
+use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol};
 use objc2_ui_kit::{
     UIDevice, UIInterfaceOrientationMask, UIRectEdge, UIResponder, UIStatusBarStyle,
     UIUserInterfaceIdiom, UIView, UIViewController,
@@ -40,6 +40,14 @@ declare_class!(
             true
         }
 
+        // ShapeCraft patch: iOS 27.1's vertical status bar (iPhone Duo) off unless the app asks for it
+        // (platform::ios::set_vertical_bar), so the clock and Wi-Fi sit in a short row at the top instead of a
+        // column down the side (UIVerticalBarBehaviorAutomatic = 0, Disabled = 1).
+        #[method(preferredVerticalBarBehavior)]
+        fn preferred_vertical_bar_behavior(&self) -> isize {
+            if super::VERTICAL_BAR.load(std::sync::atomic::Ordering::Relaxed) { 0 } else { 1 }
+        }
+
         #[method(prefersStatusBarHidden)]
         fn prefers_status_bar_hidden(&self) -> bool {
             self.ivars().prefers_status_bar_hidden.get()
@@ -55,9 +63,14 @@ declare_class!(
             self.ivars().prefers_home_indicator_auto_hidden.get()
         }
 
+        // ShapeCraft patch: the app's lock (platform::ios::set_orientation_lock) wins over the window's choice.
         #[method(supportedInterfaceOrientations)]
         fn supported_orientations(&self) -> UIInterfaceOrientationMask {
-            self.ivars().supported_orientations.get()
+            match super::ORIENTATION_LOCK.load(std::sync::atomic::Ordering::Relaxed) {
+                1 => UIInterfaceOrientationMask::Portrait,
+                2 => UIInterfaceOrientationMask::Landscape,
+                _ => self.ivars().supported_orientations.get(),
+            }
         }
 
         #[method(preferredScreenEdgesDeferringSystemGestures)]
@@ -131,6 +144,14 @@ impl WinitViewController {
         self.ivars().supported_orientations.set(mask);
         #[allow(deprecated)]
         UIViewController::attemptRotationToDeviceOrientation(mtm);
+        // ShapeCraft patch: the iOS 16+ way (the call above does nothing there).
+        let sel = objc2::sel!(setNeedsUpdateOfSupportedInterfaceOrientations);
+        if self.respondsToSelector(sel) {
+            // SAFETY: UIViewController.h, iOS 16; takes nothing, returns nothing.
+            unsafe {
+                let _: () = objc2::msg_send![self, setNeedsUpdateOfSupportedInterfaceOrientations];
+            }
+        }
     }
 
     pub(crate) fn new(
@@ -170,7 +191,53 @@ impl WinitViewController {
         );
 
         this.setView(Some(view));
+        watch_hinge(&this, view);
 
         this
+    }
+}
+
+/// ShapeCraft patch: iOS 27.1's UIHingeInteraction on the root view tells whether the device folds (its update
+/// carries a hinge, or nil where there is none). UIHinge.h / UIHingeInteraction.h in the iOS 27.2 SDK.
+fn watch_hinge(vc: &WinitViewController, view: &UIView) {
+    use std::sync::atomic::Ordering::Relaxed;
+
+    use objc2::rc::{Allocated, Weak};
+    use objc2::runtime::{AnyClass, AnyObject};
+    let Some(cls) = AnyClass::get("UIHingeInteraction") else { return };
+    let weak = Weak::from(vc);
+    let handler = block2::RcBlock::new(move |_interaction: *mut AnyObject, update: *mut AnyObject| {
+        if update.is_null() {
+            return;
+        }
+        // SAFETY: UIHingeInteractionUpdate's `hinge` property (nullable UIHinge) and UIHinge's `status`.
+        let hinge: *mut AnyObject = unsafe { objc2::msg_send![update, hinge] };
+        if hinge.is_null() {
+            return;
+        }
+        super::FOLDABLE.store(true, Relaxed);
+        let status: isize = unsafe { objc2::msg_send![hinge, status] };
+        super::HINGE_STATUS.store(status.clamp(0, 3) as u8, Relaxed);
+        if !super::FOLD_ORIENTATIONS.load(Relaxed) || status == 0 {
+            return;
+        }
+        // Closed: the front screen, upright. Open (partly or fully): the inside screen, on its side.
+        let lock = if status == 1 { 1 } else { 2 };
+        if super::ORIENTATION_LOCK.swap(lock, Relaxed) != lock {
+            if let Some(vc) = weak.load() {
+                // SAFETY: UIViewController.h, iOS 16; takes nothing, returns nothing.
+                unsafe {
+                    let _: () = objc2::msg_send![&*vc, setNeedsUpdateOfSupportedInterfaceOrientations];
+                }
+            }
+        }
+    });
+    // SAFETY: -[UIHingeInteraction initWithUpdateHandler:] and -[UIView addInteraction:] (iOS 27.1 / 11).
+    unsafe {
+        let a: Allocated<AnyObject> = msg_send_id![cls, alloc];
+        let interaction: Option<Retained<AnyObject>> = msg_send_id![a, initWithUpdateHandler: &*handler];
+        if let Some(i) = interaction {
+            let _: () = objc2::msg_send![view, addInteraction: &*i];
+        }
     }
 }

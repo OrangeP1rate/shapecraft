@@ -10,6 +10,7 @@ pub mod control;
 pub mod crash_log;
 pub mod dialogs;
 pub mod folder_access;
+mod glide;
 pub mod graphics;
 pub mod i18n;
 pub mod icons;
@@ -27,4 +28,4 @@ pub mod whats_new;
 pub mod window_chrome;
 pub mod workspace;
 
-pub use app::{Options, ShapeCraftApp, TabletRequest, write_color_image, write_rgba};
+pub use app::{Options, ShapeCraftApp, TabletRequest, set_url_opener, write_color_image, write_rgba};

@@ -200,7 +200,11 @@ pub(super) fn right_popover(ws: &mut Workspace, ui: &mut Ui, pop: RightPop, at: 
             let rows = [
                 Row::Segments(&["Views", "Appearance"], 0),
                 Row::Button("Default View"),
-                Row::Tip("Tip: double-click the view cube to reset quickly"),
+                Row::Tip(if crate::tablet::touch_ui() {
+                    "Tip: double-tap the view cube to reset quickly"
+                } else {
+                    "Tip: double-click the view cube to reset quickly"
+                }),
                 Row::Separator,
                 view("Front", V::Front),
                 view("Back", V::Back),
@@ -259,7 +263,7 @@ pub(super) fn right_popover(ws: &mut Workspace, ui: &mut Ui, pop: RightPop, at: 
         && ui.input(|i| {
             i.pointer.primary_clicked()
                 && i.pointer.interact_pos().is_some_and(|q| {
-                    !rect.contains(q) && !Rect::from_min_size(at, vec2(Tokens::TOOL_BUTTON, Tokens::TOOL_PITCH)).contains(q)
+                    !rect.contains(q) && !Rect::from_min_size(at, vec2(Tokens::tool_button(), Tokens::tool_pitch())).contains(q)
                 })
         });
     if choice_closes || outside {
@@ -295,7 +299,7 @@ pub(super) fn constraint_settings(ws: &mut Workspace, ui: &mut Ui, at: Pos2, ope
         Some(9) => st.anchor_last = true,
         _ => {}
     }
-    let button = Rect::from_min_size(at, vec2(Tokens::TOOL_BUTTON, Tokens::TOOL_PITCH + 2.0));
+    let button = Rect::from_min_size(at, vec2(Tokens::tool_button(), Tokens::tool_pitch() + 2.0));
     if ws.now - opened > 0.15
         && ui.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|q| !rect.contains(q) && !button.contains(q)))
     {

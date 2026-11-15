@@ -58,7 +58,8 @@ impl Workspace {
         if self.area.is_none()
             && self.area_open()
             && !self.touch_drag
-            && (!self.pen_input || self.pen_held.is_some())
+            // The pen draws a box straight away too (it never moves the view, so a drag on nothing is free for it);
+            // holding first still starts the box where the pen rested.
             && resp.drag_started_by(egui::PointerButton::Primary)
             && !self.dragging_handle()
             && let Some(p) = self.pen_held.filter(|_| self.pen_input).or_else(|| ui.input(|i| i.pointer.press_origin()))

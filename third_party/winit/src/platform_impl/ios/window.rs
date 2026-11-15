@@ -83,6 +83,8 @@ impl WinitUIWindow {
         let this: Retained<Self> = unsafe { msg_send_id![mtm.alloc(), initWithFrame: frame] };
 
         this.setRootViewController(Some(view_controller));
+        // ShapeCraft patch: windows live in the app's scene (iOS 27 SDK).
+        super::scene::adopt(mtm, &this);
 
         match window_attributes.fullscreen.clone().map(Into::into) {
             Some(Fullscreen::Exclusive(ref video_mode)) => {
@@ -184,11 +186,14 @@ impl Inner {
     }
 
     pub fn inner_size(&self) -> PhysicalSize<u32> {
+        // ShapeCraft patch: the whole view, as `Resized` reports it. The render surface is sized from this, and the
+        // view (its Metal layer) covers the whole screen, so the safe area here stretched the picture to fit; the app
+        // keeps clear of the safe area itself.
         let scale_factor = self.scale_factor();
-        let safe_area = self.safe_area_screen_space();
+        let screen_frame = self.screen_frame();
         let size = LogicalSize {
-            width: safe_area.size.width as f64,
-            height: safe_area.size.height as f64,
+            width: screen_frame.size.width as f64,
+            height: screen_frame.size.height as f64,
         };
         size.to_physical(scale_factor)
     }

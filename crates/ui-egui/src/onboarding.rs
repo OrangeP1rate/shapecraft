@@ -140,24 +140,33 @@ pub fn tablet(ui: &mut Ui, choice: &mut Option<usize>) -> Option<usize> {
     let mut done = None;
     egui::Area::new(ui.scope_id().with("onboarding-tablet")).fixed_pos(full.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         let (_, _) = ui.allocate_exact_size(full.size(), Sense::click());
+        // The dimming reaches under the home bar too (the card stays in the safe area).
+        let screen = ui.ctx().viewport_rect();
+        egui::Painter::new(ui.ctx().clone(), ui.layer_id(), screen).rect_filled(screen, 0.0, Color32::from_black_alpha(150));
         let p = ui.painter().clone();
-        p.rect_filled(full, 0.0, Color32::from_black_alpha(150));
         let android = !crate::tablet::on_tablet();
         let rows = choice.map_or(0, |c| if android { ANDROID_CONTROLS[c].len() } else { TABLET_CONTROLS[c].len() });
-        let card =
-            Rect::from_center_size(full.center(), vec2(780.0, 330.0 + if choice.is_some() { rows as f32 * 30.0 + 70.0 } else { 0.0 }));
+        // A phone sideways (the iPhone Duo is 635 pt tall inside its home bar) gets the same card, tighter, so
+        // Start Modeling stays on the screen with the longest list of controls.
+        let tight = full.height() < 700.0;
+        let (head, tile_h, pitch) = if tight { (80.0, 140.0, 24.0) } else { (100.0, 190.0, 30.0) };
+        let base = head + tile_h + if tight { 30.0 } else { 40.0 };
+        let card = Rect::from_center_size(
+            full.center(),
+            vec2(780.0_f32.min(full.width() - 24.0), base + if choice.is_some() { rows as f32 * pitch + 70.0 } else { 0.0 }),
+        );
         p.rect_filled(card.translate(vec2(0.0, 6.0)).expand(2.0), radius(14), Color32::from_black_alpha(90));
         p.rect_filled(card, radius(12), theme::c(0x232324));
         p.rect_stroke(card, radius(12), Stroke::new(1.0, theme::c(0x4b4b4b)), StrokeKind::Outside);
         p.text(
-            pos2(card.center().x, card.top() + 44.0),
+            pos2(card.center().x, card.top() + if tight { 32.0 } else { 44.0 }),
             Align2::CENTER_CENTER,
             if android { "How do you want to use ShapeCraft on this device?" } else { "How do you want to use ShapeCraft on this tablet?" },
             theme::strong(19.0),
             Tokens::text_strong(),
         );
         p.text(
-            pos2(card.center().x, card.top() + 72.0),
+            pos2(card.center().x, card.top() + if tight { 56.0 } else { 72.0 }),
             Align2::CENTER_CENTER,
             if android {
                 "Use either any time: a stylus and a mouse are told apart by themselves, and fingers always move the view."
@@ -168,7 +177,7 @@ pub fn tablet(ui: &mut Ui, choice: &mut Option<usize>) -> Option<usize> {
             Tokens::text_dim(),
         );
         for (i, (name, _)) in touch_devices().iter().enumerate() {
-            let tile = Rect::from_min_size(pos2(card.center().x - 230.0 + i as f32 * 240.0, card.top() + 100.0), vec2(220.0, 190.0));
+            let tile = Rect::from_min_size(pos2(card.center().x - 230.0 + i as f32 * 240.0, card.top() + head), vec2(220.0, tile_h));
             let resp = ui.interact(tile, ui.scope_id().with(("tablet-device", i)), Sense::click());
             let on = *choice == Some(i);
             let lit = on || resp.hovered();
@@ -189,25 +198,34 @@ pub fn tablet(ui: &mut Ui, choice: &mut Option<usize>) -> Option<usize> {
                 Stroke::new(if lit { 2.0 } else { 1.0 }, if lit { Tokens::accent() } else { theme::c(0x3e3e42) }),
                 StrokeKind::Inside,
             );
-            let art = Rect::from_center_size(pos2(tile.center().x, tile.top() + 78.0), vec2(150.0, 100.0));
+            let art = Rect::from_center_size(pos2(tile.center().x, tile.top() + if tight { 58.0 } else { 78.0 }), vec2(150.0, 100.0));
             match i {
                 0 => pencil_art(&p, art),
                 _ => device_art(&p, art, android),
             }
-            p.text(pos2(tile.center().x, tile.bottom() - 26.0), Align2::CENTER_CENTER, *name, theme::strong(14.5), Tokens::text_strong());
+            p.text(
+                pos2(tile.center().x, tile.bottom() - if tight { 20.0 } else { 26.0 }),
+                Align2::CENTER_CENTER,
+                *name,
+                theme::strong(14.5),
+                Tokens::text_strong(),
+            );
             if resp.clicked() {
                 *choice = Some(i);
             }
         }
         if let Some(c) = *choice {
-            let mut y = card.top() + 322.0;
+            let mut y = card.top() + base - 8.0;
             let controls = if android { ANDROID_CONTROLS[c] } else { TABLET_CONTROLS[c] };
             for (gesture, what) in controls {
                 p.text(pos2(card.left() + 60.0, y), Align2::LEFT_CENTER, *gesture, theme::strong(14.0), Tokens::text_strong());
                 p.text(pos2(card.left() + 280.0, y), Align2::LEFT_CENTER, *what, theme::body(14.0), Tokens::text_dim());
-                y += 30.0;
+                y += pitch;
             }
-            let go = Rect::from_min_size(pos2(card.left() + 40.0, card.bottom() - 68.0), vec2(card.width() - 80.0, 44.0));
+            let go = Rect::from_min_size(
+                pos2(card.left() + 40.0, card.bottom() - if tight { 60.0 } else { 68.0 }),
+                vec2(card.width() - 80.0, 44.0),
+            );
             let resp = ui.interact(go, ui.scope_id().with("tablet-go"), Sense::click());
             p.rect_filled(go, radius(10), if resp.hovered() { theme::c(0x2f7cf6) } else { Tokens::accent() });
             p.text(go.center(), Align2::CENTER_CENTER, "Start Modeling", theme::strong(15.0), Color32::WHITE);

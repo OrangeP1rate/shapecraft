@@ -525,6 +525,30 @@ impl WinitView {
                     scale_factor as f64,
                 )
             };
+            // ShapeCraft patch: the touch with its tool, for apps that tell the Pencil from a finger.
+            {
+                use crate::platform::ios::pointers::{self, Phase, Record, Tool};
+                pointers::push(Record {
+                    tool: match touch_type {
+                        UITouchType::Pencil => Tool::Stylus,
+                        UITouchType::IndirectPointer => Tool::Mouse,
+                        _ => Tool::Finger,
+                    },
+                    id: touch_id,
+                    phase: match phase {
+                        TouchPhase::Started => Phase::Down,
+                        TouchPhase::Moved => Phase::Move,
+                        TouchPhase::Ended => Phase::Up,
+                        TouchPhase::Cancelled => Phase::Cancel,
+                    },
+                    x: physical_location.x as f32,
+                    y: physical_location.y as f32,
+                    pressure: touch.force() as f32,
+                    buttons: 0,
+                    button: 0,
+                    scroll: (0.0, 0.0),
+                });
+            }
             touch_events.push(EventWrapper::StaticEvent(Event::WindowEvent {
                 window_id: RootWindowId(window.id()),
                 event: WindowEvent::Touch(Touch {

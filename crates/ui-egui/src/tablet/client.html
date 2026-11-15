@@ -19,9 +19,11 @@
     touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
     -webkit-tap-highlight-color: transparent; -webkit-text-size-adjust: 100%;
     font: 15px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; color: var(--ink); }
-  /* The app fills the safe area; the status bar and rounded corners keep the page colour. */
-  #stage { position: fixed; left: env(safe-area-inset-left); top: env(safe-area-inset-top);
-    right: env(safe-area-inset-right); bottom: env(safe-area-inset-bottom); }
+  /* The app fills the whole screen, under the status bar and home bar too; it's told the safe area (#safe) and keeps
+     its controls inside it while the 3D view runs to the edges. */
+  #stage { position: fixed; inset: 0; }
+  #safe { position: fixed; visibility: hidden; pointer-events: none; top: env(safe-area-inset-top);
+    right: env(safe-area-inset-right); bottom: env(safe-area-inset-bottom); left: env(safe-area-inset-left); }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
   #kb { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none;
     font-size: 16px; /* 16px: Safari doesn't zoom into a field this size */ }
@@ -63,6 +65,7 @@
   <div class="d">On a phone, ShapeCraft works in landscape only.</div>
 </div>
 <div id="stage"><canvas id="screen" tabindex="-1"></canvas></div>
+<div id="safe"></div>
 <textarea id="kb" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-hidden="true"></textarea>
 <div id="status" class="pill hidden">Connecting…</div>
 <div id="full" class="pill hidden"><button id="fullgo" class="x" style="color:inherit;padding:0">⤢&nbsp; Full Screen</button><button id="fullx" class="x" aria-label="Dismiss">✕</button></div>
@@ -100,19 +103,22 @@
   let parked = false;
   let ws = null, size = null, retry = 400, chain = Promise.resolve(), state = {}, lastHardKey = 0;
 
+  const safeBox = document.getElementById("safe");
   function measure() {
     const r = stage.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    return { w: Math.max(200, Math.round(r.width)), h: Math.max(200, Math.round(r.height)), dpr, left: r.left, top: r.top };
+    const c = getComputedStyle(safeBox);
+    const safe = [c.top, c.right, c.bottom, c.left].map((v) => Math.max(0, Math.round(parseFloat(v) || 0)));
+    return { w: Math.max(200, Math.round(r.width)), h: Math.max(200, Math.round(r.height)), dpr, safe, left: r.left, top: r.top };
   }
   function applySize() {
     const m = measure();
-    const changed = !size || m.w !== size.w || m.h !== size.h || m.dpr !== size.dpr;
+    const changed = !size || m.w !== size.w || m.h !== size.h || m.dpr !== size.dpr || m.safe.join() !== size.safe.join();
     size = m;
     if (changed) {
       canvas.width = Math.round(m.w * m.dpr);
       canvas.height = Math.round(m.h * m.dpr);
-      send({ t: "size", w: m.w, h: m.h, dpr: m.dpr });
+      send({ t: "size", w: m.w, h: m.h, dpr: m.dpr, safe: m.safe });
     }
   }
   let sizeTimer = 0;
@@ -155,7 +161,7 @@
       size = m;
       canvas.width = Math.round(m.w * m.dpr);
       canvas.height = Math.round(m.h * m.dpr);
-      send({ t: "hello", w: m.w, h: m.h, dpr: m.dpr, touch: navigator.maxTouchPoints || 0 });
+      send({ t: "hello", w: m.w, h: m.h, dpr: m.dpr, safe: m.safe, touch: navigator.maxTouchPoints || 0 });
     };
     ws.onmessage = (e) => (typeof e.data === "string" ? onText(JSON.parse(e.data)) : onFrame(e.data));
     ws.onclose = () => {
@@ -388,10 +394,13 @@
 
   connect();
 })();
-  // Phones (narrow side under 600 points) are landscape only.
+  // Phones (narrow side under 600 points) are landscape only; an opened foldable turns freely. The window's own size
+  // decides it: iOS keeps screen.width/height at the folded size on an iPhone Duo, opened or not (466×678 measured,
+  // opened 669×869). Only phones ask: an iPad in Slide Over or Split View is narrow too, but stays as it is.
+  const phoneClass = /iPhone|iPod/.test(navigator.userAgent) || Math.min(screen.width, screen.height) < 600;
   const uprightPhone = () => {
-    const narrow = Math.min(screen.width, screen.height) < 600;
-    document.body.classList.toggle("upright-phone", narrow && window.innerHeight > window.innerWidth);
+    const w = window.innerWidth, h = window.innerHeight;
+    document.body.classList.toggle("upright-phone", phoneClass && Math.min(w, h) < 600 && h > w);
   };
   uprightPhone();
   addEventListener("resize", uprightPhone);

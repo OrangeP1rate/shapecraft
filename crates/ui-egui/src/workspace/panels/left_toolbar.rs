@@ -310,18 +310,23 @@ impl Workspace {
         let workspace = open_drawing.clone().unwrap_or_else(|| if self.visualizing { "Visualization".into() } else { "Modeling".into() });
         let subs: Vec<Option<String>> = vec![Some(workspace)];
         let top_active: Vec<bool> = vec![self.switcher];
-        if let Some(i) = toolbar::group_with(ui, pos2(x, vp.top() + 9.0), &top, &subs, &top_active, true, "top") {
+        // With Menu Labels off a phone shows these two as icons too (the reference on iPhone Duo).
+        let top_chips = !(crate::tablet::small_screen() && self.settings.menu_labels == "Never");
+        if let Some(i) = toolbar::group_with(ui, pos2(x, self.left_top), &top, &subs, &top_active, top_chips, "top") {
             clicked = toolbar::TOP.get(i).copied();
         }
         // Measured (L05): groups 9 px under the title bar, 6 px apart; a 2 px line 9 px under Items, Search 9 px
         // under that.
-        let items_y = vp.top() + 9.0 + toolbar::group_height(toolbar::TOP.len()) + gap;
+        let items_y = self.left_top + toolbar::group_height(toolbar::TOP.len()) + gap;
         let sep_y = items_y + toolbar::group_height(1) + 10.0;
         if open_drawing.is_none() {
-            if toolbar::group(ui, pos2(x, items_y), &[toolbar::ITEMS], &[self.show_items], true, "items").is_some() {
+            if toolbar::group(ui, pos2(x, items_y), &[toolbar::ITEMS], &[self.show_items], top_chips, "items").is_some() {
                 clicked = Some(toolbar::ITEMS);
             }
-            ui.painter().line_segment([pos2(x + 11.0, sep_y), pos2(x + 33.0, sep_y)], Stroke::new(2.0, Tokens::tool_separator()));
+            ui.painter().line_segment(
+                [pos2(x + 11.0, sep_y), pos2(x + Tokens::tool_button() - 11.0, sep_y)],
+                Stroke::new(2.0, Tokens::tool_separator()),
+            );
         }
 
         // A tool waiting for picks: its option(s), Done, Cancel, each in its own container, centered.
@@ -339,12 +344,12 @@ impl Workspace {
                         self.shot_res_menu = if self.shot_res_menu.is_some() {
                             None
                         } else {
-                            Some(pos2(x + Tokens::TOOL_BUTTON + 2.0, y + toolbar::group_height(1) / 2.0))
+                            Some(pos2(x + Tokens::tool_button() + 2.0, y + toolbar::group_height(1) / 2.0))
                         };
                         self.popup_opened_at = self.now;
                         clicked = None;
                     } else if d.label == "Pattern Type" || d.label == "Measure mode" {
-                        let at = pos2(x + Tokens::TOOL_BUTTON + 5.0, y);
+                        let at = pos2(x + Tokens::tool_button() + 5.0, y);
                         let label = if d.label == "Pattern Type" { "Pattern" } else { "Measure mode" };
                         self.variant_menu = if self.variant_menu.is_some() { None } else { Some((label, at)) };
                         self.popup_opened_at = self.now;
@@ -479,7 +484,10 @@ impl Workspace {
         }
         // Touch screens: Undo and Redo get their own cells at the very bottom, under a line
         // (two 44 × 40 cells side by side, 10 pt from the bottom).
-        let undo_row = crate::tablet::touch_ui().then(|| vp.bottom() - 10.0 - toolbar::group_height(1));
+        // (Above a reserved corner down there: a phone held the other way up.)
+        // Above the home indicator's strip too, so a swipe up to go home never lands on Undo.
+        let floor = crate::tablet::above_home_strip(ui.ctx(), crate::tablet::left_bottom(vp.bottom(), ui.ctx().content_rect().left()));
+        let undo_row = crate::tablet::touch_ui().then(|| floor - 10.0 - toolbar::group_height(1));
         let by = undo_row.map_or(vp.bottom() - 9.0, |u| u - 20.0) - toolbar::group_height(bottom.len());
         // Preferences ▸ Done / Cancel Buttons ▸ Toolbar or Both: the classic ✓ / ✕ cells (each its own container, as
         // 26.142 had them) above the bottom group, standing in for the bottom row's buttons.
@@ -584,7 +592,7 @@ impl Workspace {
         if y + height > limit && tools.len() > 1 {
             y = top_min;
             let room = limit - y - fixed - 1.0 - toolbar::SPLIT_GAP;
-            let k = ((room / Tokens::TOOL_PITCH).floor() as usize).saturating_sub(1).min(tools.len() - 1);
+            let k = ((room / Tokens::tool_pitch()).floor() as usize).saturating_sub(1).min(tools.len() - 1);
             self.overflow = tools.split_off(k);
             // A running tool cut off takes the last place shown; what it displaces leads the rest (s11-123).
             if k > 0
@@ -649,7 +657,7 @@ impl Workspace {
                 && d.sub != Some("Chain")
                 && active.get(i).copied().unwrap_or(false)
             {
-                let at = pos2(x + Tokens::TOOL_BUTTON + 5.0, y + i as f32 * Tokens::TOOL_PITCH);
+                let at = pos2(x + Tokens::tool_button() + 5.0, y + i as f32 * Tokens::tool_pitch());
                 self.variant_menu = if self.variant_menu.is_some_and(|(l, _)| l == d.label) { None } else { Some((d.label, at)) };
                 self.popup_opened_at = self.now;
                 clicked = None;
@@ -660,7 +668,7 @@ impl Workspace {
                 && toolbar::variants(d.label).0.is_empty()
                 && (!tool_options(self).is_empty() || self.card_tool())
             {
-                let at = pos2(x + Tokens::TOOL_BUTTON + 5.0, y + i as f32 * Tokens::TOOL_PITCH);
+                let at = pos2(x + Tokens::tool_button() + 5.0, y + i as f32 * Tokens::tool_pitch());
                 self.options_menu = if self.options_menu.is_some() { None } else { Some(at) };
                 self.popup_opened_at = self.now;
                 clicked = None;
@@ -670,7 +678,7 @@ impl Workspace {
             {
                 // Docked right next to the toolbar column, level with the button.
                 let below = if split.is_some_and(|k| i >= k) { toolbar::SPLIT_GAP } else { 0.0 };
-                let at = pos2(x + Tokens::TOOL_BUTTON + 5.0, y + i as f32 * Tokens::TOOL_PITCH + below);
+                let at = pos2(x + Tokens::tool_button() + 5.0, y + i as f32 * Tokens::tool_pitch() + below);
                 self.flyout = if self.flyout.is_some_and(|(c, _)| c == cat) { None } else { Some((cat, at)) };
                 self.flyout_sub = None;
                 self.popup_opened_at = self.now;
@@ -721,7 +729,10 @@ impl Workspace {
             }
             return;
         }
-        ui.painter().line_segment([pos2(x + 11.0, by - 10.0), pos2(x + 33.0, by - 10.0)], Stroke::new(2.0, Tokens::tool_separator()));
+        ui.painter().line_segment(
+            [pos2(x + 11.0, by - 10.0), pos2(x + Tokens::tool_button() - 11.0, by - 10.0)],
+            Stroke::new(2.0, Tokens::tool_separator()),
+        );
         let bottom_active: Vec<bool> = bottom
             .iter()
             .map(|d| match d.label {
@@ -736,11 +747,14 @@ impl Workspace {
             clicked = bottom.get(i).copied();
         }
         if let Some(top) = undo_row {
-            ui.painter().line_segment([pos2(x + 11.0, top - 10.0), pos2(x + 33.0, top - 10.0)], Stroke::new(2.0, Tokens::tool_separator()));
+            ui.painter().line_segment(
+                [pos2(x + 11.0, top - 10.0), pos2(x + Tokens::tool_button() - 11.0, top - 10.0)],
+                Stroke::new(2.0, Tokens::tool_separator()),
+            );
             if toolbar::group(ui, pos2(x, top), &[toolbar::UNDO], &[false], false, "undo").is_some() {
                 clicked = Some(toolbar::UNDO);
             }
-            if toolbar::group(ui, pos2(x + Tokens::TOOL_BUTTON + 4.0, top), &[toolbar::REDO], &[false], false, "redo").is_some() {
+            if toolbar::group(ui, pos2(x + Tokens::tool_button() + 4.0, top), &[toolbar::REDO], &[false], false, "redo").is_some() {
                 clicked = Some(toolbar::REDO);
             }
         }
@@ -755,12 +769,12 @@ impl Workspace {
             && let Some(k) = bottom.iter().position(|d| d.label == "Section View")
         {
             let cell =
-                Rect::from_min_size(pos2(x, by + 1.0 + k as f32 * Tokens::TOOL_PITCH), vec2(Tokens::TOOL_BUTTON, Tokens::TOOL_PITCH))
+                Rect::from_min_size(pos2(x, by + 1.0 + k as f32 * Tokens::tool_pitch()), vec2(Tokens::tool_button(), Tokens::tool_pitch()))
                     .shrink(3.0);
             ui.painter().rect_filled(cell, radius(7), Color32::WHITE);
             icons::paint(
                 ui.painter(),
-                Rect::from_center_size(cell.center(), vec2(28.0, 28.0)),
+                Rect::from_center_size(cell.center(), vec2(Tokens::tool_icon(), Tokens::tool_icon())),
                 Icon::SectionView,
                 crate::workspace::viewport::PILL_INK,
             );
@@ -770,12 +784,12 @@ impl Workspace {
             && let Some(k) = bottom.iter().position(|d| d.label == "Measure")
         {
             let cell =
-                Rect::from_min_size(pos2(x, by + 1.0 + k as f32 * Tokens::TOOL_PITCH), vec2(Tokens::TOOL_BUTTON, Tokens::TOOL_PITCH))
+                Rect::from_min_size(pos2(x, by + 1.0 + k as f32 * Tokens::tool_pitch()), vec2(Tokens::tool_button(), Tokens::tool_pitch()))
                     .shrink(3.0);
             ui.painter().rect_filled(cell, radius(7), Color32::WHITE);
             icons::paint(
                 ui.painter(),
-                Rect::from_center_size(cell.center(), vec2(28.0, 28.0)),
+                Rect::from_center_size(cell.center(), vec2(Tokens::tool_icon(), Tokens::tool_icon())),
                 Icon::Measure,
                 crate::workspace::viewport::PILL_INK,
             );

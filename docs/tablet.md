@@ -27,8 +27,8 @@ Close the tab or let the iPad sleep and the copy keeps going: open it again and 
 | Input | What it does |
 | --- | --- |
 | Apple Pencil | The pointer: tap, drag, draw. Edges, sketch curves and snap points reach about twice as far as for a mouse, and a small wobble during a tap still counts as a tap. On iPads with Pencil hover, holding the tip above the glass lights up what a tap would pick, and what's lit holds on until the tip moves well away, so the tap picks it. |
-| Pencil, drag on nothing | Turns the view. |
-| Pencil, hold, then drag | Area Selection: drag right for what's fully inside the box, left for what it crosses. |
+| Pencil, drag on nothing | Area Selection, as with a mouse: drag right for what's fully inside the box, left for what it crosses. The Pencil never moves the view (fingers do). |
+| Pencil, hold, then drag | Area Selection too, starting where the Pencil rested (also over a body or face). |
 | Pencil in a sketch | **Sketch** arms Line at once: draw straight onto the floor grid or a face. A quick stroke that bends round becomes a circle around where it started (Preferences ▸ Tablet ▸ Pen turns this off); once the pen rests or the stroke runs long it stays a line, so steering a line never turns it round. **Cancel** at the bottom drops an unfinished line or rectangle and keeps the tool. |
 | Pencil on a value pill | Opens a number pad beside it (digits, minus, backspace, ✓). |
 | Fingers in the 3D view | Move the view only: fingers never pick, draw or drag handles (the Pencil does). |

@@ -11,3 +11,14 @@ The changes, both marked "ShapeCraft patch":
 
 Nothing else differs from the release, and nothing changes on other platforms. Drop this folder and the
 `[patch.crates-io]` entry in the workspace `Cargo.toml` once eframe uses a winit that reports pointer kinds (0.31).
+
+iOS (same patch, later): the `pointers` module moved to `src/platform/pointers.rs`, shared by Android and iOS
+(`src/platform/ios.rs` exposes it too), and `src/platform_impl/ios/view.rs` records every `UITouch` with its type
+(Pencil, finger, indirect pointer) in `handle_touches`. Also marked "ShapeCraft patch".
+- `src/platform_impl/ios/view_controller.rs`: `preferredVerticalBarBehavior` (iOS 27.1) returns Disabled unless the
+  app asks for the vertical bar with `platform::ios::set_vertical_bar(true)` (a static in
+  `platform_impl/ios/mod.rs`; the app then calls `setNeedsUpdateOfVerticalBarConfiguration` itself). Disabled, the
+  iPhone Duo shows its status bar as a row at the top; Automatic, as a column down the side (the projects screen).
+- `src/platform_impl/ios/window.rs`: `inner_size` is the whole view rather than the safe area. eframe sizes the
+  render surface from it while the Metal layer covers the screen, so the safe-area size stretched the picture
+  vertically (1.21x on the iPhone Duo). The app keeps clear of the safe area itself.

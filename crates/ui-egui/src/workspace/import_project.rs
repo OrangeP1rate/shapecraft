@@ -42,7 +42,7 @@ fn when(t: SystemTime) -> String {
 pub(super) fn dialog(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
     let Some(mut sheet) = ws.import_sheet.take() else { return };
     // Measured from s14-150: about 860×680, a 240-wide sidebar, cards in two columns.
-    let r = Rect::from_center_size(full.center(), vec2(860.0, 680.0));
+    let r = Rect::from_center_size(full.center(), vec2(860.0_f32.min(full.width() - 16.0), 680.0_f32.min(full.height() - 16.0)));
     let p = ui.painter().clone();
     p.rect_filled(full, 0.0, Color32::from_black_alpha(90));
     p.rect_filled(r.translate(vec2(0.0, 6.0)).expand(2.0), radius(12), Color32::from_black_alpha(90));

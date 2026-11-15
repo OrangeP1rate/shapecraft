@@ -4,7 +4,7 @@
 //! `shapecraft-snap SCENARIO.jsonl OUT_DIR`, one step per line:
 //! `{"size": [1840, 1324]}` (first line: start size, `"scale": 2` for Retina pixels; later: resize), `{"control": "engine.execute", "params": {...}}`,
 //! `{"hover": [x, y]}`, `{"click": [x, y]}`, `{"right_click": [x, y]}`, `{"double_click": [x, y]}`, `{"right_drag": [[x0, y0], [x1, y1]]}`, `{"drag": [[..], [..]]}`,
-//! `{"key": "R", "mods": "cmd+shift"}`, `{"text": "10"}`, `{"touch_screen": true}` and `{"small_screen": true}` (as on an Android tablet or phone), `{"wait": 0.5}`, `{"sleep": 0.5}` (real time, for background threads), `{"shot": "name"}`.
+//! `{"key": "R", "mods": "cmd+shift"}`, `{"text": "10"}`, `{"touch_screen": true}` and `{"small_screen": true}` (as on an Android tablet or phone), `{"safe": [top, right, bottom, left]}` (safe-area insets in points), `{"corner": [x, y, w, h]}` (a reserved status corner), `{"side_bar": [x, y, w, h]}` (the iPhone Duo's vertical bar), `{"folded": true}` (a folded phone), `{"wait": 0.5}`, `{"sleep": 0.5}` (real time, for background threads), `{"shot": "name"}`.
 //! A point with three numbers is a model point (mm), placed on screen through the current camera.
 //! `"@face:BODY:x,y,z"` and `"@edge:BODY:x,y,z"` anywhere in a step become the face or edge at that model point.
 //! `{"expect": {...}}` checks the model (see [`expect`]); `{"task": {...}}` names a benchmark task.
@@ -252,9 +252,31 @@ fn steps(h: &mut App<'_>, lines: &[Value], out: Option<&Path>, outcome: &mut Out
         } else if let Some(on) = step.get("touch_screen").and_then(Value::as_bool) {
             // As the Android app starts: a touch screen of its own (touch layout, first-run question).
             shapecraft_ui::tablet::set_touch_screen(on);
+        } else if let Some(m) = step.get("safe").and_then(Value::as_array) {
+            // A phone's or tablet's safe-area insets [top, right, bottom, left] in points, as its page reports them.
+            let at = |i: usize| m.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+            let margin = egui::epaint::MarginF32 { top: at(0), right: at(1), bottom: at(2), left: at(3) };
+            h.input_mut().safe_area_insets = Some(egui::SafeAreaInsets(margin));
+            h.run_steps(2);
+        } else if let Some(c) = step.get("corner").and_then(Value::as_array) {
+            // A corner the system keeps [x, y, w, h] in points (the iPhone Duo's status corner); [] clears it.
+            let at = |i: usize| c.get(i).and_then(Value::as_f64).map(|v| v as f32);
+            let r = (|| Some(egui::Rect::from_min_size(egui::pos2(at(0)?, at(1)?), egui::vec2(at(2)?, at(3)?))))();
+            shapecraft_ui::tablet::set_reserved_corner(r);
+            h.run_steps(2);
+        } else if let Some(c) = step.get("side_bar").and_then(Value::as_array) {
+            // The iPhone Duo's vertical bar [x, y, w, h] in points (with "corner" for its clock block); [] clears it.
+            let at = |i: usize| c.get(i).and_then(Value::as_f64).map(|v| v as f32);
+            let r = (|| Some(egui::Rect::from_min_size(egui::pos2(at(0)?, at(1)?), egui::vec2(at(2)?, at(3)?))))();
+            shapecraft_ui::tablet::set_side_bar(r);
+            h.run_steps(2);
         } else if let Some(on) = step.get("small_screen").and_then(Value::as_bool) {
             // An Android phone (under 600 dp across).
             shapecraft_ui::tablet::set_small_screen(on);
+        } else if let Some(on) = step.get("folded").and_then(Value::as_bool) {
+            // A phone folded shut or upright (the iPhone Duo's front screen): projects wait to be opened up.
+            shapecraft_ui::tablet::set_folded(on);
+            h.run_steps(2);
         } else if let Some(s) = step.get("wait").and_then(Value::as_f64) {
             h.run_steps(((s * 60.0).ceil() as usize).clamp(1, 600));
         } else if let Some(s) = step.get("sleep").and_then(Value::as_f64) {

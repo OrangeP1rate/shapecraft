@@ -433,3 +433,64 @@ pub enum StatusBarStyle {
     LightContent,
     DarkContent,
 }
+
+/// ShapeCraft patch: every touch with the tool that made it (finger, Apple Pencil, pointer), which
+/// `WindowEvent::Touch` leaves out. The app takes the records each frame with [`pointers::take`]; the same module
+/// as Android's.
+#[path = "pointers.rs"]
+pub mod pointers;
+
+/// ShapeCraft patch: whether the app wants iOS 27.1's vertical bar (the iPhone Duo opened: clock and Wi-Fi in a
+/// column down the side). Off by default (the status bar stays a row at the top). After changing it, the app tells
+/// UIKit with `-[UIViewController setNeedsUpdateOfVerticalBarConfiguration]` on the root view controller.
+pub fn set_vertical_bar(on: bool) {
+    crate::platform_impl::VERTICAL_BAR.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the app asked for the vertical bar.
+pub fn vertical_bar() -> bool {
+    crate::platform_impl::VERTICAL_BAR.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// ShapeCraft patch: locks the interface to portrait (`Some(false)`), landscape (`Some(true)`), or back to the
+/// window's valid orientations (`None`). After changing it, the app tells UIKit with
+/// `-[UIViewController setNeedsUpdateOfSupportedInterfaceOrientations]` on the root view controller.
+pub fn set_orientation_lock(landscape: Option<bool>) {
+    let v = match landscape {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    };
+    crate::platform_impl::ORIENTATION_LOCK.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The app's orientation lock: `Some(true)` landscape, `Some(false)` portrait.
+pub fn orientation_lock() -> Option<bool> {
+    match crate::platform_impl::ORIENTATION_LOCK.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Some(false),
+        2 => Some(true),
+        _ => None,
+    }
+}
+
+/// ShapeCraft patch: on a phone that folds, upright while it's closed (the front screen) and on its side while it's
+/// open (the inside screen, which doesn't turn), switched from the hinge as it moves. The screen's size can't tell:
+/// a portrait-locked app on the inside screen is given a portrait-sized screen of its own there.
+pub fn set_fold_orientations(on: bool) {
+    crate::platform_impl::FOLD_ORIENTATIONS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// ShapeCraft patch: whether the hinge is closed (None: unknown, or no hinge).
+pub fn hinge_closed() -> Option<bool> {
+    match crate::platform_impl::HINGE_STATUS.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => Some(true),
+        2 | 3 => Some(false),
+        _ => None,
+    }
+}
+
+/// ShapeCraft patch: whether the device folds (iOS 27.1 reported a hinge to the root view). False before the first
+/// report, and on iOS before 27.1.
+pub fn foldable() -> bool {
+    crate::platform_impl::FOLDABLE.load(std::sync::atomic::Ordering::Relaxed)
+}

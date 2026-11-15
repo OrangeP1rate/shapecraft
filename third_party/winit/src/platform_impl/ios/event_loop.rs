@@ -295,6 +295,8 @@ impl<T: 'static> EventLoop<T> {
         let handler = EventLoopHandler { handler, event_loop: self.window_target };
 
         app_state::will_launch(self.mtm, handler);
+        // ShapeCraft patch: the scene delegate the Info.plist names, registered before UIKit looks it up.
+        super::scene::register();
 
         extern "C" {
             // These functions are in crt_externs.h.

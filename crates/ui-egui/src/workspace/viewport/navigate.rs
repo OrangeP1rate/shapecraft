@@ -61,17 +61,14 @@ impl Workspace {
             // Left-drag on nothing draws an Area Selection box where one applies, else it orbits.
             let primary_free = button == Some(Button::Left)
                 && !self.dragging_handle()
-                && (self.touch_drag
-                    || !self.tool.is_sketch_tool() && !self.area_open() && self.area.is_none()
-                    // The pencil turns the view on a plain drag; a long press first makes it an Area Selection.
-                    || self.pen_input
-                        && self.pen_held.is_none()
-                        && self.area.is_none()
-                        && self.sketch_drag.is_none()
-                        && !self.tool.is_sketch_tool()
-                        && !matches!(self.tool, Tool::PickPlane { .. }));
-            let action =
-                button.and_then(|b| self.settings.preset().action(b, shift, ctrl, alt)).or(primary_free.then_some(NavAction::Orbit));
+                && (self.touch_drag || !self.tool.is_sketch_tool() && !self.area_open() && self.area.is_none());
+            // The pen never moves the camera, as on iPad: fingers orbit, pan and zoom; the pen picks, draws and
+            // (after a long press) drags an Area Selection.
+            let action = if self.pen_input {
+                None
+            } else {
+                button.and_then(|b| self.settings.preset().action(b, shift, ctrl, alt)).or(primary_free.then_some(NavAction::Orbit))
+            };
             match action {
                 Some(NavAction::Zoom) => {
                     if let Some(c) = self.cursor {

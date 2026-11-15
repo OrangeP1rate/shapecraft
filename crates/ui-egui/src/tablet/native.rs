@@ -145,8 +145,10 @@ impl NativeTouch {
     /// After a frame: tells the router what the finger was over, and asks for the frames a pending gesture needs.
     pub fn after_frame(&mut self, ctx: &egui::Context, over_view: bool) {
         self.router.after_frame(over_view, ctx.dragged_id().is_some());
+        // The next frame at once: a timed repaint doesn't wake the iPhone app, so a Pencil held still (an Area
+        // Selection's long press) would never time out.
         if self.router.busy() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            ctx.request_repaint();
         }
     }
 
@@ -160,6 +162,13 @@ impl NativeTouch {
             return None;
         }
         Some(fit(natural.x, natural.y))
+    }
+
+    /// The same zoom for a safe area of this many system points, for platforms whose window sizes reach egui
+    /// already divided by the zoom while the safe-area insets don't (iOS): measured that way, the zoom can't feed
+    /// back into itself.
+    pub fn fit_zoom_for(w: f32, h: f32) -> Option<f32> {
+        (w > 1.0 && h > 1.0).then(|| fit(w, h))
     }
 }
 

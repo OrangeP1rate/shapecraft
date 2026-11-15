@@ -116,7 +116,7 @@ pub fn occt(rest: &[String]) -> Result<()> {
 }
 
 /// The OCCT toolkits kernel-occt links, read from its build script so the list lives in one place.
-fn linked_toolkits() -> Result<Vec<String>> {
+pub(crate) fn linked_toolkits() -> Result<Vec<String>> {
     let script = std::fs::read_to_string(root().join("crates/kernel-occt/build.rs"))?;
     let start = script.find("const LIBS").context("no LIBS list in kernel-occt/build.rs")?;
     let list = &script[start..start + script[start..].find("];").context("LIBS list not closed")?];
@@ -128,7 +128,7 @@ fn linked_toolkits() -> Result<Vec<String>> {
 }
 
 /// The first file called `name` under `dir`.
-fn find(dir: &Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn find(dir: &Path, name: &str) -> Option<PathBuf> {
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let path = entry.path();
         if path.is_dir() {

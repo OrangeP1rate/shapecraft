@@ -853,8 +853,8 @@ pub fn group_full(
     if defs.is_empty() {
         return None;
     }
-    let pitch = Tokens::TOOL_PITCH;
-    let w = Tokens::TOOL_BUTTON;
+    let pitch = Tokens::tool_pitch();
+    let w = Tokens::tool_button();
     let extra = if split.is_some() { SPLIT_GAP } else { 0.0 };
     let container = Rect::from_min_size(top_left, vec2(w, group_height(defs.len()) + extra));
     ui.painter().rect_filled(container, radius(Tokens::TOOL_RADIUS), Tokens::button());
@@ -919,7 +919,7 @@ pub fn group_full(
         } else {
             Tokens::icon()
         };
-        icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(28.0, 28.0)), def.icon, color);
+        icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(Tokens::tool_icon(), Tokens::tool_icon())), def.icon, color);
         if def.flyout {
             let c = r.right_bottom() + vec2(-6.0, -6.0);
             ui.painter().add(egui::Shape::convex_polygon(
@@ -945,7 +945,7 @@ pub const SPLIT_GAP: f32 = 6.0;
 /// Between a toolbar column's groups (measured, L05).
 pub const GROUP_GAP: f32 = 6.0;
 
-/// Total height of a group: 40 per button and the 1 px border top and bottom (measured, L05).
+/// Total height of a group: a pitch (40, 36 on a phone) per button and the 1 px border top and bottom (measured, L05).
 pub fn group_height(n: usize) -> f32 {
-    Tokens::TOOL_PITCH * n as f32 + 2.0
+    Tokens::tool_pitch() * n as f32 + 2.0
 }

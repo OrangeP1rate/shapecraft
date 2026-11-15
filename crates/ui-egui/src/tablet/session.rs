@@ -49,6 +49,9 @@ struct Client {
     ws: Box<WebSocket<TcpStream>>,
     /// The page's size in CSS pixels and its device pixel ratio.
     size: Option<(f32, f32, f32)>,
+    /// The page's safe-area insets in CSS pixels (top, right, bottom, left): the status bar, home bar and rounded
+    /// corners. The page fills the whole screen; the controls keep out of these, the 3D view runs under them.
+    safe: [f32; 4],
     in_flight: u32,
     seq: u32,
     /// What the page was last told (cursor, keyboard…), to send only changes.
@@ -182,7 +185,7 @@ pub(super) fn run(shared: &Arc<Shared>, device: &str, inbox: Receiver<ToSession>
                         let _ = old.ws.close(None);
                         flush(&mut old.ws);
                     }
-                    client = Some(Client { ws, size: None, in_flight: 0, seq: 0, state: json!({}) });
+                    client = Some(Client { ws, size: None, safe: [0.0; 4], in_flight: 0, seq: 0, state: json!({}) });
                     stream.reset();
                     router.reset();
                     shared.connected(device, Some(agent));
@@ -259,10 +262,12 @@ pub(super) fn run(shared: &Arc<Shared>, device: &str, inbox: Receiver<ToSession>
             }
             let (w, h, dpr, scale) =
                 client.as_ref().and_then(|c| c.size.map(|s| (s.0, s.1, s.2, c.scale()))).unwrap_or((1180.0, 820.0, 2.0, 1.0));
+            let [st, sr, sb, sl] = client.as_ref().map_or([0.0; 4], |c| c.safe.map(|v| v * scale));
             let points = vec2(w * scale, h * scale);
             let ppp = dpr / scale;
             let mut raw = egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, points)),
+                safe_area_insets: Some(egui::SafeAreaInsets(egui::epaint::MarginF32 { left: sl, right: sr, top: st, bottom: sb })),
                 time: Some(started.elapsed().as_secs_f64()),
                 predicted_dt: 1.0 / 60.0,
                 events,
@@ -428,6 +433,12 @@ fn handle(v: &Value, c: &mut Client, router: &mut Router, scale: f32, now: Insta
             // A frame's pixels have to fit a texture: big monitors at 3× come down a little.
             let dpr = dpr.min(8192.0 / w).min(8192.0 / h);
             c.size = Some((w, h, dpr));
+            // Older pages send no insets: the whole page is then safe, as before.
+            let safe = v.get("safe").and_then(Value::as_array);
+            c.safe = std::array::from_fn(|i| {
+                let n = safe.and_then(|a| a.get(i)).and_then(Value::as_f64).filter(|n| n.is_finite()).unwrap_or(0.0);
+                (n as f32).clamp(0.0, w.min(h) / 3.0)
+            });
             true
         }
         "ack" => {

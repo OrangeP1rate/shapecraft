@@ -299,7 +299,7 @@ impl Workspace {
         }
         let p = ui.painter().clone();
         let vp = self.viewport_rect;
-        let y = vp.bottom() - 26.0;
+        let y = crate::tablet::above_home_strip(ui.ctx(), vp.bottom()) - 26.0;
         let items: &[(&'static str, &str, f32)] =
             if done { &[("Cancel", "Esc", 80.0), ("Done", "↩", 68.0)] } else { &[("Cancel", "Esc", 80.0)] };
         self.seen_bottom = items.iter().map(|i| i.0.to_string()).collect();

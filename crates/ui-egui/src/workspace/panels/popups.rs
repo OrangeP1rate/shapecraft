@@ -292,7 +292,10 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
         let angle_w = ag.as_ref().map_or(0.0, |a| a.size().x + 24.0 + 6.0);
         let extra = lg.as_ref().map_or(0.0, |l| l.size().x + 24.0 + 6.0) + angle_w + if ag.is_some() || lg.is_some() { 22.0 } else { 0.0 };
         let h = if lg.is_some() || ag.is_some() { 26.0 } else { 22.0 };
-        let r = Rect::from_center_size(pos2(vp.center().x, vp.bottom() - 28.0), vec2(g.size().x + 16.0 + extra, h));
+        let r = Rect::from_center_size(
+            pos2(vp.center().x, crate::tablet::above_home_strip(ui.ctx(), vp.bottom()) - 28.0),
+            vec2(g.size().x + 16.0 + extra, h),
+        );
         p.rect_filled(r, radius(6), Tokens::pill());
         p.text(pos2(r.left() + 8.0, r.center().y), Align2::LEFT_CENTER, text, theme::body(11.0), Tokens::text());
         let measured = ag.is_some() || lg.is_some();
@@ -346,11 +349,11 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
         let defs = &defs[..];
         let top = column(defs, at);
         let active: Vec<bool> = defs.iter().map(|d| is_active(ws, d)).collect();
-        let mut hit = Rect::from_min_size(top, vec2(Tokens::TOOL_BUTTON + 290.0, toolbar::group_height(defs.len())));
+        let mut hit = Rect::from_min_size(top, vec2(Tokens::tool_button() + 290.0, toolbar::group_height(defs.len())));
         if let Some(i) = toolbar::group(ui, top, defs, &active, ws.flyout_sub.is_none(), "flyout") {
             let d = defs[i];
             if let Action::Flyout(sub) = d.action {
-                let sat = pos2(top.x + Tokens::TOOL_BUTTON + 5.0, top.y + i as f32 * Tokens::TOOL_PITCH);
+                let sat = pos2(top.x + Tokens::tool_button() + 5.0, top.y + i as f32 * Tokens::tool_pitch());
                 ws.flyout_sub = if ws.flyout_sub.is_some_and(|(c, _)| c == sub) { None } else { Some((sub, sat)) };
                 ws.popup_opened_at = ws.now;
             } else {
@@ -359,7 +362,7 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
         } else if let Some((sub, sat)) = ws.flyout_sub {
             let sdefs = toolbar::flyout(sub);
             let stop = column(sdefs, sat);
-            hit = hit.union(Rect::from_min_size(stop, vec2(Tokens::TOOL_BUTTON + 330.0, toolbar::group_height(sdefs.len()))));
+            hit = hit.union(Rect::from_min_size(stop, vec2(Tokens::tool_button() + 330.0, toolbar::group_height(sdefs.len()))));
             let sactive: Vec<bool> = sdefs.iter().map(|d| is_active(ws, d)).collect();
             if let Some(i) = toolbar::group(ui, stop, sdefs, &sactive, true, "flyout-sub") {
                 let d = sdefs[i];
@@ -371,7 +374,7 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
                 i.pointer.any_click()
                     && i.pointer
                         .interact_pos()
-                        .is_some_and(|p| !hit.contains(p) && p.x > ws.viewport_rect.left() + 8.0 + Tokens::TOOL_BUTTON)
+                        .is_some_and(|p| !hit.contains(p) && p.x > ws.viewport_rect.left() + 8.0 + Tokens::tool_button())
             });
         if outside {
             ws.flyout = None;
@@ -500,7 +503,7 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
     command_search(ws, ui);
 
     // Toasts, bottom center above the pill.
-    let mut y = vp.bottom() - 64.0;
+    let mut y = crate::tablet::above_home_strip(ui.ctx(), vp.bottom()) - 64.0;
     for t in ws.toasts.iter().rev() {
         let g = p.layout_no_wrap(t.text.clone(), theme::body(12.0), Tokens::text());
         let r = Rect::from_center_size(pos2(vp.center().x, y), vec2(g.size().x + 24.0, 30.0));

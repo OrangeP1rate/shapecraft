@@ -45,13 +45,29 @@ const STEPS: [&str; 3] = ["Look", "Your Projects", "Backups"];
 
 /// Draws it over everything. Returns true when Start Modeling is pressed (the picks are in `st`).
 pub fn show(ui: &mut Ui, st: &mut Setup, found: Option<&Found>) -> bool {
-    let full = ui.ctx().content_rect();
+    let screen = ui.ctx().content_rect();
+    // A phone's screen is smaller than the card: the whole card scales down to fit inside the safe area (clear of
+    // the clock and the home strip), taps and all, through its layer's transform.
+    let inset = ui.ctx().input(|i| i.safe_area_insets().0);
+    let room = Rect::from_min_max(
+        pos2(screen.left() + inset.left, screen.top() + inset.top.max(crate::tablet::status_row())),
+        pos2(screen.right() - inset.right, screen.bottom() - inset.bottom),
+    )
+    .shrink(8.0);
+    let card_size = vec2(720.0, 570.0);
+    let s = (room.width() / card_size.x).min(room.height() / card_size.y).clamp(0.4, 1.0);
+    let to_screen = egui::emath::TSTransform::new(room.center().to_vec2() - s * screen.center().to_vec2(), s);
+    // The screen in the card's own (unscaled) coordinates, so the dimming and the click guard still cover it all.
+    let full = to_screen.inverse() * ui.ctx().viewport_rect().union(screen);
+    let id = ui.scope_id().with("setup");
+    ui.ctx().set_transform_layer(egui::LayerId::new(egui::Order::Foreground, id), to_screen);
     let mut done = false;
-    egui::Area::new(ui.scope_id().with("setup")).fixed_pos(full.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+    egui::Area::new(id).fixed_pos(full.min).order(egui::Order::Foreground).constrain(false).show(ui.ctx(), |ui| {
+        ui.set_clip_rect(full);
         let _ = ui.allocate_exact_size(full.size(), Sense::click());
         let p = ui.painter().clone();
         p.rect_filled(full, 0.0, Color32::from_black_alpha(150));
-        let card = Rect::from_center_size(full.center(), vec2(720.0, 570.0));
+        let card = Rect::from_center_size(screen.center(), card_size);
         p.rect_filled(card.translate(vec2(0.0, 6.0)).expand(2.0), radius(14), Color32::from_black_alpha(90));
         p.rect_filled(card, radius(12), theme::c(0x232324));
         p.rect_stroke(card, radius(12), Stroke::new(1.0, theme::c(0x4b4b4b)), StrokeKind::Outside);

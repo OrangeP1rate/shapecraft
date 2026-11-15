@@ -108,7 +108,11 @@ pub fn install_fonts(ctx: &egui::Context) {
             "/system/fonts/NotoSansCJK-Regular.ttc",
         ],
         &["C:\\Windows\\Fonts\\msyh.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc"],
-        &["C:\\Windows\\Fonts\\malgun.ttf", "/System/Library/Fonts/AppleSDGothicNeo.ttc", "/System/Library/Fonts/Core/AppleSDGothicNeo.ttc"],
+        &[
+            "C:\\Windows\\Fonts\\malgun.ttf",
+            "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+            "/System/Library/Fonts/Core/AppleSDGothicNeo.ttc",
+        ],
     ];
     for (i, paths) in cjk.iter().enumerate() {
         let Some((path, bytes)) = paths.iter().find_map(|p| std::fs::read(p).ok().map(|b| (*p, b))) else { continue };

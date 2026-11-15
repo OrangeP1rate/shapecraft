@@ -20,7 +20,7 @@ pub struct Measured {
     pub regions: Vec<(f32, f32, f32, f32)>,
     /// A small reserved region in a top corner (the iPhone Duo's clock, Wi-Fi and camera when held sideways), as
     /// (x, y, w, h). The interface keeps its controls out of it instead of giving up the whole top row: the status bar
-    /// row UIKit's safe area reports is free everywhere else, as in the reference on the Duo.
+    /// row UIKit's safe area reports is free everywhere else.
     pub corner: Option<(f32, f32, f32, f32)>,
     /// How many of the regions found were inactive (for the log).
     pub inactive: usize,
@@ -151,7 +151,7 @@ pub fn measure() -> Option<Measured> {
         let reach = [y + rh, w - x, h - y, x + rw]; // inset needed from top, right, bottom, left
         let dist = [y, w - (x + rw), h - (y + rh), x];
         let near = dist.iter().copied().fold(f32::INFINITY, f32::min);
-        let cost = |e: usize| if e % 2 == 0 { reach[e] * w } else { reach[e] * h };
+        let cost = |e: usize| if e.is_multiple_of(2) { reach[e] * w } else { reach[e] * h };
         let edge = (0..4).filter(|e| dist[*e] <= near + 1.0).min_by(|a, b| cost(*a).total_cmp(&cost(*b))).unwrap_or(0);
         match edge {
             0 => m.top = m.top.max(reach[0]),

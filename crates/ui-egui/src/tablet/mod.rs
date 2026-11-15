@@ -119,8 +119,28 @@ pub fn reserved_corner() -> Option<egui::Rect> {
     CORNER.lock().ok().and_then(|c| *c)
 }
 
+/// A sideways iPhone's status row: the top strip the clock sits in the middle of, which the app hands to the
+/// interface (its corners are free) instead of insetting the whole top. Its height in interface points; things
+/// centred at the top of the screen (cards, sheets) keep below it.
+static STATUS_ROW: Mutex<f32> = Mutex::new(0.0);
+
+/// Set by an app that gives its status row to the interface (0 when there's none).
+pub fn set_status_row(h: f32) {
+    if let Ok(mut c) = STATUS_ROW.lock() {
+        *c = h;
+    }
+}
+
+/// The status row's height (0 when there's none, and off touch screens).
+pub fn status_row() -> f32 {
+    if !touch_ui() {
+        return 0.0;
+    }
+    STATUS_ROW.lock().map(|c| *c).unwrap_or(0.0)
+}
+
 /// The iPhone Duo's vertical bar (iOS 27.1): a column down one side holding the clock and Wi-Fi at its top, which
-/// the projects screen fills with its own buttons, as the reference does. In interface points; the page still draws
+/// the projects screen fills with its own buttons. In interface points; the page still draws
 /// under it.
 static SIDE_BAR: Mutex<Option<egui::Rect>> = Mutex::new(None);
 
@@ -181,7 +201,7 @@ pub fn left_bottom(bottom: f32, left: f32) -> f32 {
 
 /// How far down buttons may reach: above the home indicator's strip (the safe area's bottom on iOS), else `bottom`.
 /// The view runs on under the strip, but a button there gets in the way of the swipe up to go home or switch apps;
-/// the reference keeps its Undo and Redo well up from the bottom edge on the iPhone Duo.
+/// Undo and Redo stay well up from the bottom edge on the iPhone Duo.
 pub fn above_home_strip(ctx: &egui::Context, bottom: f32) -> f32 {
     let (screen, inset) = ctx.input(|i| (i.viewport_rect(), i.safe_area_insets().0.bottom));
     if inset > 0.0 && inset.is_finite() { bottom.min(screen.bottom() - inset) } else { bottom }

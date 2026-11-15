@@ -464,7 +464,6 @@ pub fn native_menu(
     (clicked, shown.response.rect)
 }
 
-
 /// A phone's sheet: what a popover holds, risen from the bottom of the screen as a phone's own settings sheets are —
 /// rounded grouped lists on a grey ground, section titles in small capitals over them, tips under them, a check mark
 /// on the right of the current choice, and a round ✕ at the top right. Long sheets scroll. The rect returned is the
@@ -487,7 +486,13 @@ fn sheet(ui: &mut Ui, id: &str, rows: &[Row]) -> (Option<(usize, usize)>, Rect) 
     let in_group = |r: &Row| {
         matches!(
             r,
-            Row::Choice { .. } | Row::Switch { .. } | Row::Button(_) | Row::Saved { .. } | Row::Select { .. } | Row::Scale { .. } | Row::Slider { .. }
+            Row::Choice { .. }
+                | Row::Switch { .. }
+                | Row::Button(_)
+                | Row::Saved { .. }
+                | Row::Select { .. }
+                | Row::Scale { .. }
+                | Row::Slider { .. }
         )
     };
     let row_h = |r: &Row| match r {
@@ -541,8 +546,10 @@ fn sheet(ui: &mut Ui, id: &str, rows: &[Row]) -> (Option<(usize, usize)>, Rect) 
     egui::Area::new(ui.scope_id().with((id, "sheet"))).fixed_pos(sheet.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         let (rect, _) = ui.allocate_exact_size(sheet.size(), Sense::click());
         let p = ui.painter().clone();
-        p.add(egui::epaint::Shadow { offset: [0, -2], blur: 24, spread: 0, color: Color32::from_black_alpha(if light { 40 } else { 110 }) }
-            .as_shape(rect, egui::CornerRadius { nw: 22, ne: 22, sw: 0, se: 0 }));
+        p.add(
+            egui::epaint::Shadow { offset: [0, -2], blur: 24, spread: 0, color: Color32::from_black_alpha(if light { 40 } else { 110 }) }
+                .as_shape(rect, egui::CornerRadius { nw: 22, ne: 22, sw: 0, se: 0 }),
+        );
         p.rect_filled(rect, egui::CornerRadius { nw: 22, ne: 22, sw: 0, se: 0 }, ground);
         // The round ✕ (it closes the sheet by being outside the list).
         let x = egui::Rect::from_center_size(pos2(rect.right() - INSET - 15.0, rect.top() + HEAD / 2.0 + 2.0), vec2(30.0, 30.0));
@@ -578,7 +585,12 @@ fn sheet(ui: &mut Ui, id: &str, rows: &[Row]) -> (Option<(usize, usize)>, Rect) 
                         }
                         p.text(pos2(tx, r.center().y), Align2::LEFT_CENTER, *label, body.clone(), if *enabled { ink } else { dim });
                         if *checked {
-                            crate::icons::paint(&p, Rect::from_center_size(pos2(r.right() - INSET - 8.0, r.center().y), vec2(17.0, 17.0)), crate::icons::Icon::Check, Tokens::accent());
+                            crate::icons::paint(
+                                &p,
+                                Rect::from_center_size(pos2(r.right() - INSET - 8.0, r.center().y), vec2(17.0, 17.0)),
+                                crate::icons::Icon::Check,
+                                Tokens::accent(),
+                            );
                         }
                         if *enabled && resp.clicked() {
                             clicked = Some((i, 0));
@@ -609,7 +621,17 @@ fn sheet(ui: &mut Ui, id: &str, rows: &[Row]) -> (Option<(usize, usize)>, Rect) 
                         let resp = ui.interact(r, ui.scope_id().with((id, i)), Sense::click());
                         p.text(pos2(tx, r.center().y), Align2::LEFT_CENTER, *label, body.clone(), ink);
                         let track = Rect::from_center_size(pos2(r.right() - INSET - 25.5, r.center().y), vec2(51.0, 31.0));
-                        p.rect_filled(track, radius(16), if *on { Tokens::accent() } else if light { theme::hex(0xe9e9ea) } else { theme::hex(0x39393d) });
+                        p.rect_filled(
+                            track,
+                            radius(16),
+                            if *on {
+                                Tokens::accent()
+                            } else if light {
+                                theme::hex(0xe9e9ea)
+                            } else {
+                                theme::hex(0x39393d)
+                            },
+                        );
                         let kx = if *on { track.right() - 15.5 } else { track.left() + 15.5 };
                         p.circle_filled(pos2(kx, track.center().y + 1.0), 13.5, Color32::from_black_alpha(30));
                         p.circle_filled(pos2(kx, track.center().y), 13.5, Color32::WHITE);
@@ -620,7 +642,9 @@ fn sheet(ui: &mut Ui, id: &str, rows: &[Row]) -> (Option<(usize, usize)>, Rect) 
                     Row::Select { label, options, current } => {
                         p.text(pos2(tx, r.center().y), Align2::LEFT_CENTER, *label, body.clone(), ink);
                         let opts: Vec<String> = options.iter().map(|o| o.to_string()).collect();
-                        if let Some(k) = pill_select(ui, &format!("{id}-{i}"), pos2(r.right() - INSET, r.center().y), 110.0, &opts, Some(*current)) {
+                        if let Some(k) =
+                            pill_select(ui, &format!("{id}-{i}"), pos2(r.right() - INSET, r.center().y), 110.0, &opts, Some(*current))
+                        {
                             clicked = Some((i, k));
                         }
                     }

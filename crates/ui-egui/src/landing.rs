@@ -447,11 +447,11 @@ impl Landing {
         let light = theme::is_light();
         let local = "All Projects";
         // A phone on its side (the iPhone Duo) has no room for the sidebar: its sections are in a menu, the search
-        // in the title strip, as the reference lays out its phone home screen.
+        // in the title strip.
         let phone = crate::tablet::small_screen();
         // Upright (the iPhone Duo closed): the search and buttons take a second row under the status corner.
         let narrow = phone && full.width() < full.height();
-        // The title strip's height; a phone's has no fill, its page shows through as on the reference's.
+        // The title strip's height; a phone's has no fill, its page shows through.
         let head = if narrow { 132.0 } else { 51.0 };
         let side = Rect::from_min_size(full.min, vec2(if phone { 0.0 } else { 250.0 }, full.height()));
         if !phone {
@@ -465,7 +465,7 @@ impl Landing {
             };
             under.rect_filled(Rect::from_min_max(pos2(screen.left(), screen.top()), pos2(side.right(), screen.bottom())), 0.0, side_fill);
             p.line_segment([side.right_top(), side.right_bottom()], Stroke::new(1.0, if light { hex(0xc2c0c0) } else { hex(0x000000) }));
-            // Where the reference has its team: a grey square with a white letter, the name, and a short line under it.
+            // The team row: a grey square with a white letter, the name, and a short line under it.
             let badge = Rect::from_min_size(pos2(side.left() + 16.0, side.top() + 59.0), vec2(32.0, 32.0));
             p.rect_filled(badge, radius(6), hex(0x808080));
             p.text(badge.center(), Align2::CENTER_CENTER, "S", theme::strong(17.0), Color32::WHITE);
@@ -486,7 +486,7 @@ impl Landing {
             };
             let g = ui.fonts_mut(|f| f.layout_job(job));
             p.galley(pos2(badge.right() + 9.0, badge.top() + 24.0 - g.size().y / 2.0), g, Tokens::text_dim());
-            // The reference's Upgrade button (left out) holds the projects folder instead, so the spacing stays.
+            // The projects folder sits in the last slot, so the spacing stays.
             let folder_button =
                 Rect::from_min_max(pos2(side.left() + 10.0, side.top() + 101.0), pos2(side.left() + 240.0, side.top() + 121.0));
             let fb = ui.interact(folder_button, ui.scope_id().with("projects-folder"), Sense::click());
@@ -688,7 +688,7 @@ impl Landing {
             window_chrome::drag_area(ui, Rect::from_min_max(title_end, pos2(bar_right - 130.0, content.top() + 51.0)), "home-drag");
         }
         // New, Import, New Folder and Sort. A computer has them in the title strip. A phone on its side stacks them
-        // down the right edge under the status corner, as the reference does on the iPhone Duo; upright, they sit in
+        // down the right edge under the status corner on the iPhone Duo; upright, they sit in
         // the second row beside the search.
         let tools = [(Icon::Plus, "new"), (Icon::Import, "import"), (Icon::NewFolder, "folder"), (Icon::Sort, "sort")];
         let mut hit = [false; 4];
@@ -1170,7 +1170,7 @@ impl Landing {
         let mut action = None;
         let tutorials_page = self.section == Section::Tutorials;
         let mut y = top + 94.0;
-        // Columns and card width: the reference's 170 every 190 on a computer; on a phone as many as fit, widened
+        // Columns and card width: 170 every 190 on a computer; on a phone as many as fit, widened
         // to fill the room.
         let (cols, card_w) = if right.is_finite() {
             let room = right - 20.0 - left;
@@ -1266,7 +1266,7 @@ impl Landing {
                     p.text(pos2(cell.center().x, cell.bottom() - 9.0), Align2::CENTER_CENTER, *name, theme::body(9.0), hex(0xe6e6e6));
                 }
             } else {
-                // Key caps in a checkerboard, as the reference's card has them (four across, whatever the card's width).
+                // Key caps in a checkerboard (four across, whatever the card's width).
                 let k_w = r.width() / 4.0;
                 let keys = ["⌘F", "", "E", "", "⇧⌘A", "F", "", "⌥⌘P", "", "R", "⌘1", ""];
                 for (k, key) in keys.iter().enumerate() {
@@ -1503,10 +1503,7 @@ impl PhoneChrome {
         let (cx, rail_top) = match bar {
             Some(b) => (b.center().x, corner.filter(|c| c.intersects(b)).map_or(b.top() + 110.0, |c| c.bottom()) + 12.0),
             // Upright, the rail starts level with the search row, under the title's row.
-            None if narrow => (
-                full.right() - 12.0 - RAIL_W / 2.0,
-                crate::tablet::right_top(top, full.right()).max(top + ROW_H + 8.0),
-            ),
+            None if narrow => (full.right() - 12.0 - RAIL_W / 2.0, crate::tablet::right_top(top, full.right()).max(top + ROW_H + 8.0)),
             None => (full.right() - 12.0 - RAIL_W / 2.0, crate::tablet::right_top(top, full.right())),
         };
         let nav = Rect::from_min_size(pos2(cx - RAIL_W / 2.0, rail_top), vec2(RAIL_W, 2.0 * PITCH + 2.0 * PAD));
@@ -1736,7 +1733,7 @@ impl Landing {
         }
     }
 
-    /// A phone's glass buttons over its page, as the reference lays out its iPhone Duo home screen: the sections
+    /// A phone's glass buttons over its page on the iPhone Duo home screen: the sections
     /// button and the page's title top left, the search top right, and down the right (the Duo's vertical bar, under
     /// its clock) back/forward in one group and New, Import, New Folder and Sort in another.
     fn phone_chrome(&mut self, ui: &mut Ui, c: &PhoneChrome, screen: Rect, now: f64) -> Option<LandingAction> {
@@ -1919,9 +1916,7 @@ impl Landing {
                         self.toast = Some(("Nothing's backed up there yet (or it can't be reached now)".into(), now + 4.0));
                     }
                 }
-                k if k == 4 + places => {
-                    self.toast = Some((format!("Your projects are kept in {}", shorten_home(&self.root)), now + 4.0))
-                }
+                k if k == 4 + places => self.toast = Some((format!("Your projects are kept in {}", shorten_home(&self.root)), now + 4.0)),
                 k if k <= 4 + places + pages => self.visit(Section::Menu(PHONE_MENUS[k - 5 - places]), self.folder.clone()),
                 _ => action = Some(LandingAction::Menu(crate::menubar::MenuAction::Ui(crate::workspace::toolbar::UiAction::Preferences))),
             }

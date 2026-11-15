@@ -1058,7 +1058,7 @@ impl Workspace {
             None if self.visualizing => self.vis_sidebar,
             None => self.show_history && !teaching,
         };
-        // On a phone the Visualize sheet takes two fifths of the width, as the reference's does on the iPhone Duo.
+        // On a phone the Visualize sheet takes two fifths of the width.
         let side_w = if self.compact && self.visualizing && self.drawings.is_none() {
             (full.width() * 0.4).max(Tokens::HISTORY_W)
         } else {

@@ -99,9 +99,8 @@ pub fn ask(requests: Vec<TabletRequest>) {
         let shown = match r {
             TabletRequest::Pick { id, .. } => show_open(mtm, id),
             TabletRequest::Saved(dir) => {
-                let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-                    .map(|d| d.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect())
-                    .unwrap_or_default();
+                let mut files: Vec<PathBuf> =
+                    std::fs::read_dir(&dir).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect()).unwrap_or_default();
                 files.sort();
                 !files.is_empty() && show_export(mtm, &files)
             }
@@ -129,8 +128,7 @@ fn show_open(mtm: MainThreadMarker, id: u64) -> bool {
 
 fn show_export(mtm: MainThreadMarker, files: &[PathBuf]) -> bool {
     let Some(cls) = AnyClass::get(c"UIDocumentPickerViewController") else { return false };
-    let urls: Vec<Retained<NSURL>> =
-        files.iter().map(|f| NSURL::fileURLWithPath(&NSString::from_str(&f.to_string_lossy()))).collect();
+    let urls: Vec<Retained<NSURL>> = files.iter().map(|f| NSURL::fileURLWithPath(&NSString::from_str(&f.to_string_lossy()))).collect();
     let urls = NSArray::from_retained_slice(&urls);
     // SAFETY: -[UIDocumentPickerViewController initForExportingURLs:asCopy:] (iOS 14).
     let picker: Option<Retained<AnyObject>> = unsafe {

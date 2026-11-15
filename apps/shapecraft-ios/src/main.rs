@@ -44,7 +44,13 @@ mod ios {
         let settings = home.join("Library/Preferences/ShapeCraft-settings.json");
         let opts = Options {
             projects_root: Options::default_root(),
-            control_port: None,
+            // The simulator shares the Mac's loopback: SIMCTL_CHILD_SHAPECRAFT_CONTROL_PORT=<port> lets scripts
+            // and recordings drive it. Phones never listen.
+            control_port: if cfg!(target_abi = "sim") {
+                std::env::var("SHAPECRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok())
+            } else {
+                None
+            },
             open: None,
             new_project: false,
             native_menu: false,
@@ -122,7 +128,7 @@ mod ios {
             // turn with the interface, and the Duo's camera and status column are added from its reserved regions.
             raw.safe_area_insets = None;
             // The iPhone Duo opened on the projects screen: iOS's vertical bar (clock over Wi-Fi in a column down the
-            // side, the page's buttons under it), as the reference keeps it there. A project gets the top row.
+            // side, the page's buttons under it). A project gets the top row.
             // A phone that folds keeps one orientation per screen: the front screen (folded, 466 × 678) upright for
             // the projects, the big inside screen (opened, 951 × 669) on its side for modeling. Ordinary phones and
             // iPads turn as they like.
@@ -202,7 +208,8 @@ mod ios {
                     m.corner,
                     self.side_bar,
                     crate::insets::uikit_safe()
-                ) + " " + &crate::insets::status_probe();
+                ) + " "
+                    + &crate::insets::status_probe();
                 self.corner = m.corner;
             }
             let native_ppp = raw.viewport().native_pixels_per_point.unwrap_or(3.0);
@@ -230,7 +237,7 @@ mod ios {
                         crate::insets::update_orientations();
                     }
                 }
-                let z = if folded || sideways && short >= 600.0 && short < 700.0 && long >= 900.0 {
+                let z = if folded || sideways && (600.0..700.0).contains(&short) && long >= 900.0 {
                     1.0
                 } else if slab {
                     // An iPhone on its side (about 400 tall): the Duo's compact layout needs about 500.
@@ -247,6 +254,7 @@ mod ios {
                 );
                 let mut m = m;
                 let mut rect = egui::Rect::from_min_size(egui::Pos2::ZERO, screen.size() / z);
+                shapecraft_ui::tablet::set_status_row(if slab && sideways { m.top / z } else { 0.0 });
                 if slab && sideways {
                     // An iPhone on its side: the Dynamic Island's end is a strip down one side (iOS 27 reports it as
                     // an occlusion region), and the top row is free but for the clock in its middle. The interface
@@ -281,7 +289,7 @@ mod ios {
             if self.frame == 30 && std::env::var_os("SHAPECRAFT_SIM_NEW").is_some() {
                 self.inner.start_new_project();
             }
-            if self.frame < 20 || self.frame % 30 == 0 && self.frame < 3000 {
+            if self.frame < 20 || self.frame.is_multiple_of(30) && self.frame < 3000 {
                 let zoom = self.scale;
                 let line = ctx.input(|i| {
                     let v = i.viewport();

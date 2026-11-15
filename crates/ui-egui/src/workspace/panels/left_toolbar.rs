@@ -310,7 +310,7 @@ impl Workspace {
         let workspace = open_drawing.clone().unwrap_or_else(|| if self.visualizing { "Visualization".into() } else { "Modeling".into() });
         let subs: Vec<Option<String>> = vec![Some(workspace)];
         let top_active: Vec<bool> = vec![self.switcher];
-        // With Menu Labels off a phone shows these two as icons too (the reference on iPhone Duo).
+        // With Menu Labels off a phone shows these two as icons too.
         let top_chips = !(crate::tablet::small_screen() && self.settings.menu_labels == "Never");
         if let Some(i) = toolbar::group_with(ui, pos2(x, self.left_top), &top, &subs, &top_active, top_chips, "top") {
             clicked = toolbar::TOP.get(i).copied();

@@ -34,7 +34,7 @@ fn home_button(ui: &mut Ui, center: Pos2, ink: Color32, bar: Color32, hit: Optio
     resp.clicked()
 }
 
-/// The phone's round home button: a little larger than a tool button (the reference's on the iPhone Duo).
+/// The phone's round home button: a little larger than a tool button.
 const COMPACT_HOME_R: f32 = 23.0;
 
 /// A round-cornered icon button on the bar, like Help.
@@ -125,14 +125,15 @@ pub(in crate::workspace) fn touch_title(ws: &mut Workspace, ui: &mut Ui, bar: Re
     let ink = theme::c(0xd6d5d6);
     let fill = theme::c(0x2b2b2d);
     let name = ws.session.doc.name.clone();
-    // On a phone the name is a size up (the reference's corner title is bolder and larger than its tool labels).
+    // On a phone the name is a size up (bolder and larger than the tool labels).
     let font = theme::strong(if ws.compact { 18.0 } else { 17.0 });
-    let name_w = ui.painter().layout_no_wrap(name.clone(), font.clone(), Color32::WHITE).size().x.min(if ws.compact { 300.0 } else { 360.0 });
+    let name_w =
+        ui.painter().layout_no_wrap(name.clone(), font.clone(), Color32::WHITE).size().x.min(if ws.compact { 300.0 } else { 360.0 });
     let compact = ws.compact;
     let (frame, home_c, name_left, more_c) = if compact {
-        // A phone sideways (the reference on iPhone Duo): a round home button near the top-left corner, the name
+        // A phone sideways: a round home button near the top-left corner, the name
         // beside it with a chevron, no pill. The name opens the menu (Rename first). The button sits in from the
-        // screen's rounded corner (the reference's is set down and in, clear of the curve) and is a little larger
+        // screen's rounded corner (set down and in, clear of the curve) and is a little larger
         // than the tool buttons.
         let home_c = pos2(crate::tablet::top_left(bar.top(), bar.left()) + 34.0, bar.top() + 35.0);
         let p = ui.painter();
@@ -184,11 +185,8 @@ pub(in crate::workspace) fn touch_title(ws: &mut Workspace, ui: &mut Ui, bar: Re
     } else {
         ws.pen_help = false;
     }
-    let (home_hit, home_k) = if compact {
-        (Some(Rect::from_center_size(home_c, vec2(2.0 * COMPACT_HOME_R, 2.0 * COMPACT_HOME_R))), 1.15)
-    } else {
-        (None, 1.0)
-    };
+    let (home_hit, home_k) =
+        if compact { (Some(Rect::from_center_size(home_c, vec2(2.0 * COMPACT_HOME_R, 2.0 * COMPACT_HOME_R))), 1.15) } else { (None, 1.0) };
     if home_button(ui, home_c, ink, fill, home_hit, home_k) {
         ws.go_home = true;
     }

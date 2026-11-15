@@ -47,6 +47,8 @@ pub struct TutorialRun {
 /// How long the caption shows large, and how long it takes to shrink into the corner.
 const INTRO_S: f64 = 2.8;
 const SHRINK_S: f64 = 0.35;
+/// How long a new instruction calls attention to itself.
+const CALL_S: f64 = 1.6;
 
 impl TutorialRun {
     pub fn new(lesson: &'static Lesson, step: usize, base: Snapshot) -> Self {
@@ -213,9 +215,22 @@ impl Workspace {
         let galley = p.layout_no_wrap(text, theme::body(12.0), Tokens::text_strong());
         // Under the project's title pill where it has one (touch screens), not hidden behind it (#15).
         let pill = Rect::from_center_size(pos2(vp.center().x, self.banner_y() + 8.0), vec2(galley.size().x + 22.0, 22.0));
+        // A new instruction, or the step's video just shrunk away: the pill swells and glows for a moment, so the eye
+        // finds it up here (#48: it was easy to miss next to the picture at the bottom left).
+        let shown_at = t.intro_until.map_or(t.hint_since, |u| t.hint_since.max(u + SHRINK_S));
+        let age = now - shown_at;
+        let call = if (0.0..CALL_S).contains(&age) { (1.0 - age / CALL_S) as f32 } else { 0.0 };
+        if call > 0.0 {
+            ui.ctx().request_repaint();
+            let glow = pill.expand(3.0 + 5.0 * call);
+            p.rect_filled(glow, radius(16), Tokens::accent().gamma_multiply(0.45 * call));
+        }
         // White in Light, as observed; a dark pill in Dark.
         p.rect_filled(pill.translate(vec2(0.0, 1.0)), radius(11), Color32::from_black_alpha(22));
         p.rect_filled(pill, radius(11), if theme::is_light() { Color32::WHITE } else { theme::hex(0x2b2a2a) });
+        if call > 0.0 {
+            p.rect_stroke(pill, radius(11), Stroke::new(1.5, Tokens::accent().gamma_multiply(call)), StrokeKind::Outside);
+        }
         p.galley(pill.center() - galley.size() / 2.0, galley, Tokens::text_strong());
 
         // Left: the step's tools and Retry, or Continue and Redo once it's done; centred like the reference's.

@@ -819,27 +819,60 @@ fn bspline_at(s: &NurbsSurface, u: f64, v: f64) -> DVec3 {
 /// Whether two B-spline surfaces describe the same geometry on their shared interior, and the second is closed
 /// along u (its two u ends meet).
 fn surfaces_coincide(a: &NurbsSurface, b: &NurbsSurface) -> bool {
+    let (Some((au0, au1, v0, v1)), Some((bu0, bu1, _, _))) = (domain(a), domain(b)) else {
+        return false;
+    };
     if a.u_degree != b.u_degree || a.v_degree != b.v_degree || a.nv != b.nv {
         return false;
     }
     if a.v_knots != b.v_knots || a.v_mults != b.v_mults {
         return false;
     }
-    // The u knot vectors differ only at the ends of a clamped closed surface; the interior is the same.
-    for &u in &[0.25, 0.5, 0.75] {
-        for &v in &[0.25, 0.5, 0.75] {
+    // The u knot vectors differ only at the ends of a clamped closed surface; the interior is the same. Sample
+    // inside both u domains and the shared v domain, never at fixed numbers that may lie outside them.
+    let (u0, u1) = (au0.max(bu0), au1.min(bu1));
+    if u1 <= u0 {
+        return false;
+    }
+    let at = |lo: f64, hi: f64, f: f64| lo + (hi - lo) * f;
+    for &fu in &[0.25, 0.5, 0.75] {
+        for &fv in &[0.25, 0.5, 0.75] {
+            let (u, v) = (at(u0, u1, fu), at(v0, v1, fv));
             if bspline_at(a, u, v).distance(bspline_at(b, u, v)) > 1e-6 {
                 return false;
             }
         }
     }
-    let expand = |k: &[f64], m: &[u32]| -> Vec<f64> { k.iter().zip(m).flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize)).collect() };
-    let k = expand(&b.u_knots, &b.u_mults);
-    let (u0, u1) = (k[b.u_degree as usize], k[k.len() - 1 - b.u_degree as usize]);
     (0..=4).all(|i| {
-        let v = 0.25 + 0.5 * i as f64 / 4.0;
-        bspline_at(b, u0, v).distance(bspline_at(b, u1, v)) < 1e-2
+        let v = at(v0, v1, 0.25 + 0.5 * i as f64 / 4.0);
+        bspline_at(b, bu0, v).distance(bspline_at(b, bu1, v)) < 1e-2
     })
+}
+
+/// The `(u0, u1, v0, v1)` parameter domain of a well-formed clamped B-spline surface, or `None` when its counts
+/// don't add up (pole grid, weights, knots per degree) or a number isn't finite: file data is hostile, and
+/// `bspline_at` indexes by those counts.
+fn domain(s: &NurbsSurface) -> Option<(f64, f64, f64, f64)> {
+    let (pu, pv) = (s.u_degree as usize, s.v_degree as usize);
+    let expand = |k: &[f64], m: &[u32]| -> Vec<f64> { k.iter().zip(m).flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize)).collect() };
+    let (ku, kv) = (expand(&s.u_knots, &s.u_mults), expand(&s.v_knots, &s.v_mults));
+    let ok = pu >= 1
+        && pv >= 1
+        && s.nu > pu
+        && s.nv > pv
+        && s.u_knots.len() == s.u_mults.len()
+        && s.v_knots.len() == s.v_mults.len()
+        && ku.len() == s.nu + pu + 1
+        && kv.len() == s.nv + pv + 1
+        && s.poles.len() == s.nu * s.nv
+        && s.weights.as_ref().is_none_or(|w| w.len() == s.poles.len())
+        && ku.iter().chain(&kv).all(|k| k.is_finite())
+        && s.poles.iter().all(|p| p.is_finite());
+    if !ok {
+        return None;
+    }
+    let (u0, u1, v0, v1) = (ku[pu], ku[ku.len() - 1 - pu], kv[pv], kv[kv.len() - 1 - pv]);
+    (u1 > u0 && v1 > v0).then_some((u0, u1, v0, v1))
 }
 
 /// Where a fin starts and ends (vertex indices), following the edge's and the fin's senses.
@@ -1065,6 +1098,38 @@ mod tests {
         assert!(surfaces_coincide(&a, &c));
         for pole in &mut c.poles {
             pole.x += 1.0;
+        }
+        assert!(!surfaces_coincide(&a, &c));
+    }
+
+    /// File data is hostile: counts that don't add up must be refused, not indexed.
+    #[test]
+    fn malformed_surfaces_are_refused_without_panicking() {
+        let a = wall_surface();
+        let mut short = wall_surface();
+        short.u_degree = 9;
+        assert!(!surfaces_coincide(&a, &short));
+        let mut few_poles = wall_surface();
+        few_poles.poles.truncate(2);
+        assert!(!surfaces_coincide(&a, &few_poles));
+        let mut nan = wall_surface();
+        nan.u_knots[1] = f64::NAN;
+        assert!(!surfaces_coincide(&nan, &a));
+    }
+
+    /// Domains outside [0, 1] are sampled inside themselves (fixed 0.25..0.75 samples would evaluate to nothing on
+    /// both surfaces and look alike).
+    #[test]
+    fn far_apart_surfaces_on_a_shifted_domain_do_not_coincide() {
+        let mut a = wall_surface();
+        let mut c = wall_surface();
+        for s in [&mut a, &mut c] {
+            s.u_knots = vec![10.0, 10.5, 11.0];
+            s.v_knots = vec![10.0, 11.0];
+        }
+        assert!(surfaces_coincide(&a, &c));
+        for pole in &mut c.poles {
+            pole.y += 5.0;
         }
         assert!(!surfaces_coincide(&a, &c));
     }

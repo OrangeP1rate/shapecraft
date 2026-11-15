@@ -975,6 +975,11 @@ impl Renderer {
         let mut through_draws = Vec::new();
         for body in scene.doc.bodies.iter().filter(|b| b.visible) {
             let key = body.id.0 as usize;
+            // A body with no triangles (an import can arrive with one) has nothing to draw, and slicing its empty
+            // vertex and index buffers panics: skip it before anything is uploaded or queued (#39).
+            if body.mesh.indices.is_empty() {
+                continue;
+            }
             let mut color = c.body.linear();
             let mut material = [0.0, 0.0, 0.0, if scene.presentation { 1.0 } else { 0.0 }];
             if let Some(a) = &body.appearance {
@@ -1527,5 +1532,65 @@ mod cull_tests {
         assert!(off_screen(&vp, ([1.0e5, 1.0e5, 1.0e5], [1.0e5 + 1.0; 3])));
         // A big box around the eye is never culled.
         assert!(!off_screen(&vp, ([-1.0e5; 3], [1.0e5; 3])));
+    }
+
+    /// An empty B-rep shape for the renderer to ignore: it only ever reads a body's mesh.
+    struct NoShape;
+    impl shapecraft_kernel::ShapeData for NoShape {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    /// A body whose mesh has no triangles (a STEP import can arrive with one) draws nothing instead of panicking on
+    /// an empty buffer slice (#39; skipped where there's no graphics adapter).
+    #[test]
+    fn a_body_without_triangles_renders_as_nothing() {
+        let Ok(mut r) = crate::Renderer::headless() else { return };
+        let mut doc = shapecraft_doc::Document::new("t");
+        let id = doc.alloc_id();
+        doc.bodies.push(shapecraft_doc::Body {
+            id,
+            name: "empty".into(),
+            shape: shapecraft_kernel::Shape::new(NoShape),
+            mesh: Arc::new(Mesh::default()),
+            visible: true,
+            appearance: None,
+            face_colors: Vec::new(),
+            facets: None,
+        });
+        let scene = crate::SceneInput {
+            doc: &doc,
+            selection: &[],
+            hover: None,
+            active_sketch: None,
+            plane_tiles: &[],
+            overlays: &[],
+            colors: crate::SceneColors::default(),
+            show_axes: false,
+            show_edges: false,
+            show_hidden_edges: false,
+            show_decals: false,
+            grid: None,
+            display: Default::default(),
+            section: None,
+            presentation: false,
+            backdrop: crate::Rgba::hex(0x101010),
+            shadow: 0.0,
+            ghosts: &[],
+            tints: &[],
+            drawn: &[],
+            defined: &[],
+            boxing: false,
+        };
+        let camera = crate::Camera::standard(crate::StandardView::Front, glam::DVec3::ZERO, 50.0);
+        r.render(&scene, &camera, (64, 48)).expect("an empty mesh body must not panic the renderer");
+        let (w, h, px) = r.read_pixels().expect("pixels after an empty mesh body");
+        // Nothing was drawn: the backdrop reads the same everywhere, with no body tint over any of it.
+        let at = |x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            (px[i], px[i + 1], px[i + 2])
+        };
+        assert_eq!(at(0, 0), at(w - 1, h - 1), "the backdrop is uniform where no body draws");
     }
 }

@@ -3,7 +3,11 @@
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
 ## 0.9.3-alpha
-**Offset Face no longer freezes the window on big parts or slow computers.**
+**Offset Face no longer freezes the window on big parts or slow computers, and Windows on Arm gets its own download.**
+### New
+- **Windows on Arm.** Each release now has its own Arm64 download (MSI and portable zip) for Snapdragon and other Arm
+  laptops, so ShapeCraft runs natively instead of through emulation, and updates pick the Arm64 file. Thanks
+  [@Hobbesdcc](https://github.com/Hobbesdcc) (#61).
 ### Changed
 - **Offset Face works in the background when it takes a while.** A quick offset lands at once as before; a long one
   shows a small card with how long it has been working and **Cancel**, while the window keeps drawing (so the

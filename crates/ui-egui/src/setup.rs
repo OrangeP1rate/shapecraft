@@ -11,7 +11,7 @@ use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens, radius};
 
 /// Where the person is in it, and what they picked so far.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Setup {
     pub step: usize,
     pub theme: String,
@@ -21,6 +21,9 @@ pub struct Setup {
     pub work_cloud: Option<String>,
     pub backups: Vec<String>,
     pub after_change: bool,
+    /// The Work Folder and backup folders being asked for while the window keeps answering.
+    pub pick_work: crate::dialogs::Pick,
+    pub pick_backup: crate::dialogs::Pick,
 }
 
 impl Setup {
@@ -32,6 +35,8 @@ impl Setup {
             work_cloud: None,
             backups: s.backups.clone(),
             after_change: s.backup_after_change,
+            pick_work: Default::default(),
+            pick_backup: Default::default(),
         }
     }
 }
@@ -266,10 +271,14 @@ fn projects(ui: &mut Ui, body: Rect, st: &mut Setup, found: Option<&Found>) {
         );
     }
     let r = Rect::from_min_size(pos2(body.right() - 170.0, body.bottom() - 34.0), vec2(170.0, 28.0));
-    if pill(ui, r, "Choose a Folder…", false, "setup-work-pick")
-        && let Some(dir) = crate::dialogs::FileDialog::new().set_title("Choose your Work Folder").pick_folder()
-    {
+    if st.pick_work.is_open() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+    }
+    if let Some(Some(dir)) = st.pick_work.taken() {
         (st.work, st.work_cloud) = (Some(dir), None);
+    }
+    if pill(ui, r, "Choose a Folder…", false, "setup-work-pick") && !st.pick_work.is_open() {
+        st.pick_work.start(|| crate::dialogs::FileDialog::new().set_title("Choose your Work Folder").pick_folder());
     }
     // What was found on this computer, in one line.
     let names: Vec<String> =
@@ -338,13 +347,17 @@ fn backups(ui: &mut Ui, body: Rect, st: &mut Setup, found: Option<&Found>) {
         y += 48.0;
     }
     let r = Rect::from_min_size(pos2(body.left(), y + 2.0), vec2(190.0, 28.0));
-    if pill(ui, r, "Add a Folder or NAS…", false, "setup-backup-folder")
-        && let Some(dir) = crate::dialogs::FileDialog::new().set_title("Choose a folder to back up to").pick_folder()
-    {
+    if st.pick_backup.is_open() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+    }
+    if let Some(Some(dir)) = st.pick_backup.taken() {
         let s = crate::backup::Target::Folder(dir).setting();
         if !st.backups.contains(&s) {
             st.backups.push(s);
         }
+    }
+    if pill(ui, r, "Add a Folder or NAS…", false, "setup-backup-folder") && !st.pick_backup.is_open() {
+        st.pick_backup.start(|| crate::dialogs::FileDialog::new().set_title("Choose a folder to back up to").pick_folder());
     }
     // When: on Save (⌘S), closing and quitting leaves a gap to go back to; every change keeps it closest.
     let y = body.bottom() - 58.0;

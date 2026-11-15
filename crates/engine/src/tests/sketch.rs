@@ -558,3 +558,26 @@ fn inspect_filters() {
     assert_eq!(v["bodies"][0]["face_count"], 6);
     assert!(s.execute("inspect", &serde_json::json!({"body": 999})).is_err());
 }
+
+/// A copied sketch comes back whole, in place, named like a copied body, and a second copy gets the next number (#37).
+#[test]
+fn duplicate_sketch_copies_a_whole_sketch() {
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 3})).unwrap();
+    s.execute("line", &json!({"a": [5, 0], "b": [9, 0]})).unwrap();
+    let k = s.active_sketch.unwrap();
+    s.execute("exit_sketching", &json!({})).unwrap();
+    let out = s.execute("duplicate_sketch", &json!({"sketch": k.0})).unwrap().value;
+    let copy = shapecraft_doc::ItemId(out["sketch"].as_u64().unwrap());
+    assert_eq!(out["name"], "Sketch 01 (1)");
+    let (a, b) = (s.doc.sketch(k).unwrap(), s.doc.sketch(copy).unwrap());
+    assert_eq!(a.entities, b.entities);
+    assert_eq!(a.plane, b.plane);
+    assert_eq!(s.selection, vec![shapecraft_doc::Pick::Sketch { sketch: copy }]);
+    let again = s.execute("duplicate_sketch", &json!({"sketch": k.0})).unwrap().value;
+    assert_eq!(again["name"], "Sketch 01 (2)");
+    // One undo takes the last copy back.
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(s.doc.sketches.len(), 2);
+}

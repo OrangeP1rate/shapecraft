@@ -81,7 +81,7 @@ impl Install {
             _ => return None,
         };
         match self {
-            // One disk image for both chips since 0.8.6. Releases also carry it as `…-macos-arm64.dmg` and
+            // One disk image for both chips since 0.8.7. Releases also carry it as `…-macos-arm64.dmg` and
             // `…-macos-x86_64.dmg`, the names copies up to 0.8.5 look for, so they keep updating.
             Install::MacApp(_) => Some("-macos-universal.dmg".into()),
             // A copy from the old setup program moves to the MSI at its next update (apply.rs).

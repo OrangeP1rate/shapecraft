@@ -44,7 +44,7 @@ pub(crate) use gpu::unmix;
 pub(in crate::workspace) use paint::PILL_INK;
 
 impl Workspace {
-    fn local(&self, p: Pos2) -> DVec2 {
+    pub(in crate::workspace) fn local(&self, p: Pos2) -> DVec2 {
         to_d(p) - to_d(self.view_rect.min)
     }
 
@@ -100,10 +100,13 @@ impl Workspace {
         } else {
             self.update_hover();
             self.handle_clicks(ui, &resp);
-            self.handle_drags(ui, &resp);
-            self.area_drags(ui, &resp);
-            // After the handles: a drag that just grabbed one mustn't also turn the view on its first frame.
-            self.navigate(ui, &resp);
+            // A placed measure point picked up and moved takes the whole drag.
+            if !self.measure_point_drag(ui, &resp) {
+                self.handle_drags(ui, &resp);
+                self.area_drags(ui, &resp);
+                // After the handles: a drag that just grabbed one mustn't also turn the view on its first frame.
+                self.navigate(ui, &resp);
+            }
         }
 
         let ppp = ui.ctx().pixels_per_point();

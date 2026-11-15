@@ -190,6 +190,8 @@ pub struct Workspace {
     import_go: bool,
     /// Import Preferences, open over a file waiting to come in; then the file and its "heal" to import (app.rs).
     pub import_prefs: Option<import_prefs::ImportPrefs>,
+    /// The Sync tab's Work Folder and backup folders being asked for while the window keeps answering.
+    pub prefs_picks: prefs::SyncPicks,
     pub import_file_go: Option<(std::path::PathBuf, serde_json::Value)>,
     /// An import running on its own thread (#22).
     pub importing: Option<importing::Importing>,
@@ -250,6 +252,8 @@ pub struct Workspace {
     pub(crate) through: Option<(Pos2, Vec<Pick>)>,
     pub(crate) menu_hover: Option<Pick>,
     pub camera: Camera,
+    /// The selection's box as last worked out, with what it was worked out for ([`Workspace::selection_bounds`]).
+    pub(crate) selection_box: std::cell::Cell<camera::KeptBox>,
     pub(crate) anim: Option<Anim>,
     pub tool: Tool,
     /// A sketch tool chosen before a plane was picked; started once there is one.
@@ -452,6 +456,8 @@ pub struct Workspace {
     pub(super) items_dragging: Option<shapecraft_doc::ItemId>,
     /// Measure: points picked in the point modes, Include X, Y, Z Deltas, and the pinned measurements.
     pub(super) measure_points: Vec<DVec3>,
+    /// The placed measure point being dragged to a new spot (#36).
+    pub(super) measure_drag: Option<usize>,
     pub(super) measure_deltas: bool,
     pub(super) pinned: Vec<measure::Measured>,
     hint_collapsed: bool,
@@ -640,6 +646,7 @@ impl Workspace {
             import_sheet: None,
             import_go: false,
             import_prefs: None,
+            prefs_picks: Default::default(),
             import_file_go: None,
             importing: None,
             wants_export: None,
@@ -677,6 +684,7 @@ impl Workspace {
             session,
             camera,
             anim: None,
+            selection_box: Default::default(),
             tool: Tool::Idle,
             pending_tool: None,
             items_focus: false,
@@ -786,6 +794,7 @@ impl Workspace {
             items_expanded: std::collections::HashSet::new(),
             items_dragging: None,
             measure_points: Vec::new(),
+            measure_drag: None,
             measure_deltas: false,
             pinned: Vec::new(),
             hint_collapsed: false,

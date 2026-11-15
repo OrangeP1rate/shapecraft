@@ -2,11 +2,38 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
-## 0.8.6-alpha
-**One Mac download for every Mac.**
+## 0.8.7-alpha
+**One Mac download for every Mac, sturdier .shapr and STEP imports, and a round of everyday fixes: Measure snaps and
+moves its points, + and - zoom, and sketches can be copied.**
+### New
+- **Measure's points snap and move.** In Point-to-Point Distance and 3-Point Angle a click near a corner, an edge's
+  middle or a circle's center takes that exact point, and a placed point can be dragged to another one. Thanks
+  [@jan-tdy](https://github.com/jan-tdy) (#33, #36).
+- **+ and - zoom the view** in and out, about the pointer. Thanks [@jan-tdy](https://github.com/jan-tdy) (#34).
+- **A picked round face shows its height beside its diameter** in the bottom pill ("1 face | ⌀ 14 mm | ↕ 18 mm").
+  Thanks [@jan-tdy](https://github.com/jan-tdy) (#35).
+- **Sketches can be copied and pasted.** Pick a sketch in Items, Copy (⌘C / Ctrl+C) and Paste: a whole copy lands in
+  place ("Sketch 01 (1)"), ready to move. Thanks [@jan-tdy](https://github.com/jan-tdy) (#37).
 ### Changed
 - **The Mac download is now a single universal app** that runs natively on Apple silicon and Intel Macs, so there's
   no longer a choice to make on the download page. Copies already installed update into it on their own, as usual.
+- **Large models stay smooth when the pointer moves or much is picked:** only the bodies whose edges change are
+  redrawn, and a big selection is looked up once per frame (about 93 ms to 35 ms per pick change on 1,763 bodies).
+  Thanks [@chickey](https://github.com/chickey) (#29).
+- **A .shapr import keeps the file's own folder tree,** every folder in its order with each body where the file lists
+  it, and a STEP assembly comes in as nested folders instead of one flat folder per path. Thanks
+  [@pablohc](https://github.com/pablohc) (#43).
+### Fixed
+- **On Linux the window keeps answering while a file dialog is open,** so the desktop no longer offers to close the
+  app ten seconds into browsing. Thanks [@pablohc](https://github.com/pablohc) (#41).
+- **A STEP file with bodies that have no triangles no longer closes the app when it's shown.** Thanks
+  [@pablohc](https://github.com/pablohc) (#39, #40).
+- **.shapr bodies on the offset of a sweep carried on by a straight piece import** instead of being left out as
+  "offset of a C0 surface". Thanks [@pablohc](https://github.com/pablohc) (#42, #44).
+- **A size typed right after placing a circle's center (or a rectangle's corner) shows its field** before the pointer
+  moves; Return makes the shape at that size. Thanks [@jan-tdy](https://github.com/jan-tdy) (#32).
+- **Undo and Redo from the window menu (Ctrl+Z on Linux and Windows) put the running tool down first,** as ⌘Z and the
+  on-screen buttons already did. Thanks [@jan-tdy](https://github.com/jan-tdy) (#38).
 
 ## 0.8.5-alpha
 **Large projects import, save and select much faster, and .shapr imports bring in more of the model.**

@@ -259,25 +259,35 @@ impl Workspace {
         DVec2::new(near(p.x), near(p.y))
     }
 
-    /// A point picked in 3D: a body corner or edge middle near the pointer, else where the pointer meets the model.
+    /// A point picked in 3D: a notable point near the pointer (a body corner, an edge's middle, a round edge's
+    /// center), else where the pointer meets the model.
     pub(in crate::workspace) fn snap_point(&self, c: Pos2) -> Option<DVec3> {
-        let mut best: Option<(f32, DVec3)> = None;
+        let mut best: Option<(f32, f64, DVec3)> = None;
+        let eye = self.camera.eye();
         for body in self.session.doc.bodies.iter().filter(|b| b.visible) {
             for line in &body.mesh.edges {
                 let (Some(a), Some(b)) = (line.first(), line.last()) else { continue };
                 let (a, b) = (DVec3::from(a.map(f64::from)), DVec3::from(b.map(f64::from)));
                 let mid = line.get(line.len() / 2).map(|m| DVec3::from(m.map(f64::from)));
-                for p in [Some(a), Some(b), mid.filter(|_| line.len() > 2).or(Some((a + b) / 2.0))].into_iter().flatten() {
+                // A closed edge (a circle's rim) also offers its center (#33).
+                let center = (line.len() > 3 && a.distance(b) < 1e-6).then(|| {
+                    let pts = &line[..line.len() - 1];
+                    pts.iter().map(|p| DVec3::from(p.map(f64::from))).sum::<DVec3>() / pts.len() as f64
+                });
+                for p in [Some(a), Some(b), mid.filter(|_| line.len() > 2).or(Some((a + b) / 2.0)), center].into_iter().flatten() {
                     if let Some(s) = self.to_screen(p) {
                         let d = (s - c).length();
-                        if d < 12.0 && best.is_none_or(|(bd, _)| d < bd) {
-                            best = Some((d, p));
+                        // Points on the same spot on screen (a cylinder's two centers seen end on): the one facing
+                        // the viewer.
+                        let depth = eye.distance(p);
+                        if d < 12.0 && best.is_none_or(|(bd, bz, _)| d < bd - 0.5 || (d <= bd + 0.5 && depth < bz)) {
+                            best = Some((d, depth, p));
                         }
                     }
                 }
             }
         }
-        best.map(|(_, p)| p).or_else(|| self.pick_at(c).map(|(_, hit)| hit))
+        best.map(|(_, _, p)| p).or_else(|| self.pick_at(c).map(|(_, hit)| hit))
     }
 
     /// Where a dragged gizmo center lands: on the model under the pointer, snapping to a face's center when near

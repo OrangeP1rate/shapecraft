@@ -28,6 +28,7 @@ pub(super) const RADIAL: f32 = -1.0;
 pub(super) fn leader_dim(painter: &egui::Painter, from: Pos2, tip: Pos2, text: &str, typed: Option<&str>) {
     let d = tip - from;
     if d.length() < 2.0 {
+        typed_at_start(painter, from, typed);
         return;
     }
     let u = d.normalized();
@@ -47,6 +48,7 @@ pub(super) fn leader_dim(painter: &egui::Painter, from: Pos2, tip: Pos2, text: &
 pub(super) fn dashed_radius(painter: &egui::Painter, a: Pos2, b: Pos2, text: &str, typed: Option<&str>) {
     let d = b - a;
     if d.length() < 4.0 {
+        typed_at_start(painter, a, typed);
         return;
     }
     painter.add(egui::Shape::dashed_line(&[a, b], Stroke::new(1.0, Color32::WHITE), 4.0, 3.0));
@@ -70,6 +72,7 @@ pub(super) const DIAMETER: f32 = -2.0;
 pub(super) fn diameter_dim(painter: &egui::Painter, a: Pos2, b: Pos2, text: &str, typed: Option<&str>, live: bool) {
     let d = b - a;
     if d.length() < 4.0 {
+        typed_at_start(painter, a.lerp(b, 0.5), typed);
         return;
     }
     let u = d.normalized();
@@ -95,6 +98,7 @@ pub(super) fn diameter_dim(painter: &egui::Painter, a: Pos2, b: Pos2, text: &str
 pub(super) fn radius_dim(painter: &egui::Painter, a: Pos2, b: Pos2, text: &str, typed: Option<&str>, live: bool) {
     let d = b - a;
     if d.length() < 2.0 {
+        typed_at_start(painter, a, typed);
         return;
     }
     // 26.200 (s11-063): a white line center→rim with an arrowhead at the rim; the live value boxed on the line, a
@@ -119,6 +123,7 @@ pub(super) fn radius_dim(painter: &egui::Painter, a: Pos2, b: Pos2, text: &str, 
 pub(super) fn sketch_dimension(painter: &egui::Painter, ends: [Pos2; 2], dim: [Pos2; 2], text: &str, typed: Option<&str>, live: bool) {
     let d = dim[1] - dim[0];
     if d.length() < 2.0 {
+        typed_at_start(painter, ends[0], typed);
         return;
     }
     let col = Color32::WHITE;
@@ -179,6 +184,7 @@ pub(super) fn padlock(painter: &egui::Painter, at: Pos2) {
 /// left), like the old screen-space dimensions.
 pub(super) fn screen_dim(painter: &egui::Painter, a: Pos2, b: Pos2, offset: f32, text: &str, typed: Option<&str>, live: bool) {
     if (b - a).length() < 2.0 {
+        typed_at_start(painter, a, typed);
         return;
     }
     let n = vec2(-(b - a).y, (b - a).x).normalized();
@@ -210,6 +216,14 @@ pub(super) fn sketch_dimension_label(painter: &egui::Painter, mid: Pos2, u: egui
 
 /// The value field opened by typing (26.200, s11-014): a dark rounded panel holding a blue-rimmed field with the
 /// text, an "x+" variable glyph at its right end, and a "123" keypad key beside it.
+/// A value typed before the pointer has moved off where the shape starts (a circle's center just placed): there is
+/// no line yet to put it on, so the field shows beside that point instead of nowhere (#32).
+fn typed_at_start(painter: &egui::Painter, at: Pos2, typed: Option<&str>) {
+    if let Some(t) = typed {
+        value_field(painter, at + vec2(0.0, -40.0), t);
+    }
+}
+
 pub(super) fn value_field(painter: &egui::Painter, center: Pos2, typed: &str) {
     // See-through: the panel #30323d at 64 % (about #282931 over the dark view), the field a light veil over it, so
     // a face behind tints it.

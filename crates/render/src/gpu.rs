@@ -8,7 +8,7 @@ use shapecraft_kernel::Mesh;
 use wgpu::util::DeviceExt;
 
 use crate::blur::Blur;
-use crate::scene::{Built, Segment, body_edges, build, edges_key};
+use crate::scene::{Built, Chosen, Segment, build, edges_key, edges_of, edges_of_key};
 use crate::{Camera, DisplayMode, SceneInput};
 
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -199,6 +199,11 @@ fn line_vertices(segments: &[Segment]) -> (Vec<LineVertex>, Vec<LineVertex>) {
     (lines, overlays)
 }
 
+/// One body's edges as vertices (those drawn, and those on top), with the key they were made for.
+type BodyLines = (u64, Vec<LineVertex>, Vec<LineVertex>);
+/// A body and how many vertices its edges have in the two edge streams.
+type BodySpan = (shapecraft_doc::ItemId, usize, usize);
+
 /// A vertex buffer that grows as needed.
 struct Stream {
     buf: Option<wgpu::Buffer>,
@@ -231,6 +236,15 @@ impl Stream {
         }
         if let Some(buf) = &self.buf {
             queue.write_buffer(buf, 0, bytes);
+        }
+    }
+
+    /// Writes over part of what was uploaded, from vertex `at` on: for a piece that changed without growing.
+    fn patch<T: Pod>(&self, queue: &wgpu::Queue, at: usize, data: &[T]) {
+        let bytes: &[u8] = bytemuck::cast_slice(data);
+        let offset = (at * std::mem::size_of::<T>()) as u64;
+        if let Some(buf) = self.buf.as_ref().filter(|_| !bytes.is_empty() && offset + bytes.len() as u64 <= self.cap) {
+            queue.write_buffer(buf, offset, bytes);
         }
     }
 
@@ -295,6 +309,11 @@ pub struct Renderer {
     edges: Stream,
     edge_overlays: Stream,
     edges_key: Option<u64>,
+    /// Each body's edges as vertices (drawn, and on top), with what they were made for (`scene::edges_of_key`).
+    body_lines: HashMap<shapecraft_doc::ItemId, BodyLines>,
+    /// The bodies in the order their edges were last uploaded whole, with how many vertices each has in the two
+    /// streams: while that stays the same, a body whose edges change is written over in place.
+    body_spans: Vec<BodySpan>,
     /// The grid and axes: under the edges, so an axis along an edge doesn't show over it.
     under: Stream,
     under_overlays: Stream,
@@ -752,6 +771,8 @@ impl Renderer {
             edges: Stream::new("edges"),
             edge_overlays: Stream::new("edge overlays"),
             edges_key: None,
+            body_lines: HashMap::new(),
+            body_spans: Vec::new(),
             under: Stream::new("lines under edges"),
             under_overlays: Stream::new("overlays under edges"),
             lines: Stream::new("lines"),
@@ -973,8 +994,14 @@ impl Renderer {
         let mut ghost_draws = Vec::new();
         let mut see_draws = Vec::new();
         let mut through_draws = Vec::new();
+        let chosen = crate::scene::Chosen::of(scene.selection);
         for body in scene.doc.bodies.iter().filter(|b| b.visible) {
             let key = body.id.0 as usize;
+            // A body with no triangles (an import can arrive with one) has nothing to draw, and slicing its empty
+            // vertex and index buffers panics: skip it before anything is uploaded or queued (#39).
+            if body.mesh.indices.is_empty() {
+                continue;
+            }
             let mut color = c.body.linear();
             let mut material = [0.0, 0.0, 0.0, if scene.presentation { 1.0 } else { 0.0 }];
             if let Some(a) = &body.appearance {
@@ -989,10 +1016,7 @@ impl Renderer {
             // A selected body is drawn a little see-through cyan (only its nearest surface).
             // A tint with alpha (a face growing out under Extrude) is see-through the same way, at its own alpha.
             let tinted_through = color[3] < 0.999;
-            let see_through = ghost.is_none()
-                && !sketching
-                && scene.display.solid()
-                && (tinted_through || crate::scene::fully_selected(body, scene.selection));
+            let see_through = ghost.is_none() && !sketching && scene.display.solid() && (tinted_through || chosen.whole(body));
             if let Some(g) = ghost {
                 color = [g[0], g[1], g[2], 0.3];
             } else if see_through {
@@ -1081,9 +1105,57 @@ impl Renderer {
         let key = edges_key(scene);
         if self.edges_key != Some(key) {
             self.edges_key = Some(key);
-            let (lines, overlays) = line_vertices(&body_edges(scene));
-            self.edges.upload(&self.device, &self.queue, &lines);
-            self.edge_overlays.upload(&self.device, &self.queue, &overlays);
+            // Body by body: most keep the edges they had (only what's picked or under the pointer changes them).
+            let chosen = Chosen::of(scene.selection);
+            let mut kept = std::mem::take(&mut self.body_lines);
+            let mut spans = Vec::with_capacity(self.body_spans.len());
+            let mut remade = Vec::new();
+            let mut segments = Vec::new();
+            for body in scene.doc.bodies.iter().filter(|b| b.visible) {
+                let key = edges_of_key(scene, body, &chosen);
+                let made = match kept.remove(&body.id) {
+                    Some(made) if made.0 == key => made,
+                    _ => {
+                        segments.clear();
+                        edges_of(scene, body, &chosen, &mut segments);
+                        let (drawn, on_top) = line_vertices(&segments);
+                        remade.push(spans.len());
+                        (key, drawn, on_top)
+                    }
+                };
+                spans.push((body.id, made.1.len(), made.2.len()));
+                self.body_lines.insert(body.id, made);
+            }
+            // With every body where it was and as long as it was, only the remade ones go to the graphics card: the
+            // whole of a big model's edges is hundreds of megabytes to send again for one face under the pointer.
+            for on_top in [false, true] {
+                let len = |span: &BodySpan| if on_top { span.2 } else { span.1 };
+                let stream = if on_top { &mut self.edge_overlays } else { &mut self.edges };
+                let same =
+                    spans.len() == self.body_spans.len() && spans.iter().zip(&self.body_spans).all(|(a, b)| a.0 == b.0 && len(a) == len(b));
+                if same {
+                    let mut at = 0;
+                    let mut next = remade.iter().copied().peekable();
+                    for (i, span) in spans.iter().enumerate() {
+                        if next.peek() == Some(&i) {
+                            next.next();
+                            if let Some(made) = self.body_lines.get(&span.0) {
+                                stream.patch(&self.queue, at, if on_top { &made.2 } else { &made.1 });
+                            }
+                        }
+                        at += len(span);
+                    }
+                } else {
+                    let mut all: Vec<LineVertex> = Vec::new();
+                    for span in &spans {
+                        if let Some(made) = self.body_lines.get(&span.0) {
+                            all.extend_from_slice(if on_top { &made.2 } else { &made.1 });
+                        }
+                    }
+                    stream.upload(&self.device, &self.queue, &all);
+                }
+            }
+            self.body_spans = spans;
         }
         let built = build(scene, camera, px);
         self.upload(&built);
@@ -1527,5 +1599,105 @@ mod cull_tests {
         assert!(off_screen(&vp, ([1.0e5, 1.0e5, 1.0e5], [1.0e5 + 1.0; 3])));
         // A big box around the eye is never culled.
         assert!(!off_screen(&vp, ([-1.0e5; 3], [1.0e5; 3])));
+    }
+
+    /// An empty B-rep shape for the renderer to ignore: it only ever reads a body's mesh.
+    struct NoShape;
+    impl shapecraft_kernel::ShapeData for NoShape {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    /// A body whose mesh has no triangles (a STEP import can arrive with one) draws nothing instead of panicking on
+    /// an empty buffer slice (#39; skipped where there's no graphics adapter).
+    #[test]
+    fn a_body_without_triangles_renders_as_nothing() {
+        let Ok(mut r) = crate::Renderer::headless() else { return };
+        let mut doc = shapecraft_doc::Document::new("t");
+        let id = doc.alloc_id();
+        doc.bodies.push(shapecraft_doc::Body {
+            id,
+            name: "empty".into(),
+            shape: shapecraft_kernel::Shape::new(NoShape),
+            mesh: Arc::new(Mesh::default()),
+            visible: true,
+            appearance: None,
+            face_colors: Vec::new(),
+            facets: None,
+        });
+        let scene = crate::SceneInput {
+            doc: &doc,
+            selection: &[],
+            hover: None,
+            active_sketch: None,
+            plane_tiles: &[],
+            overlays: &[],
+            colors: crate::SceneColors::default(),
+            show_axes: false,
+            show_edges: false,
+            show_hidden_edges: false,
+            show_decals: false,
+            grid: None,
+            display: Default::default(),
+            section: None,
+            presentation: false,
+            backdrop: crate::Rgba::hex(0x101010),
+            shadow: 0.0,
+            ghosts: &[],
+            tints: &[],
+            drawn: &[],
+            defined: &[],
+            boxing: false,
+        };
+        let camera = crate::Camera::standard(crate::StandardView::Front, glam::DVec3::ZERO, 50.0);
+        r.render(&scene, &camera, (64, 48)).expect("an empty mesh body must not panic the renderer");
+        let (w, h, px) = r.read_pixels().expect("pixels after an empty mesh body");
+        // Nothing was drawn: the backdrop reads the same everywhere, with no body tint over any of it.
+        let at = |x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            (px[i], px[i + 1], px[i + 2])
+        };
+        assert_eq!(at(0, 0), at(w - 1, h - 1), "the backdrop is uniform where no body draws");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod empty_scene_tests {
+    /// The Visualize look (shadow, contact shadow, environment) with no bodies at all, as after ⌘Z took the only body
+    /// back in Visualization (#38), renders the backdrop instead of panicking. Skipped without a graphics adapter.
+    #[test]
+    fn visualize_with_no_bodies_renders() {
+        let Ok(mut r) = crate::Renderer::headless() else { return };
+        let doc = shapecraft_doc::Document::new("t");
+        for (presentation, shadow) in [(true, 1.0), (true, 0.0), (false, 0.0)] {
+            let scene = crate::SceneInput {
+                doc: &doc,
+                selection: &[],
+                hover: None,
+                active_sketch: None,
+                plane_tiles: &[],
+                overlays: &[],
+                colors: crate::SceneColors::default(),
+                show_axes: false,
+                show_edges: true,
+                show_hidden_edges: false,
+                show_decals: true,
+                grid: None,
+                display: crate::DisplayMode::Visualized,
+                section: None,
+                presentation,
+                backdrop: crate::Rgba::hex(0x101010),
+                shadow,
+                ghosts: &[],
+                tints: &[],
+                drawn: &[],
+                defined: &[],
+                boxing: false,
+            };
+            let camera = crate::Camera::standard(crate::StandardView::Front, glam::DVec3::ZERO, 50.0);
+            r.render(&scene, &camera, (64, 48)).expect("an empty Visualize scene renders");
+        }
     }
 }

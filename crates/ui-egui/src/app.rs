@@ -102,48 +102,6 @@ struct TabletFiles {
     dir: PathBuf,
 }
 
-/// A file to open: the system's dialog, or on a tablet the page's picker (the file arrives later, see `Wanted`).
-fn open_path(tablet: &mut Option<TabletFiles>, wanted: Wanted, label: &str, filters: &[(&str, &[&str])]) -> Option<PathBuf> {
-    if let Some(t) = tablet {
-        t.next += 1;
-        let mut accept: Vec<String> = Vec::new();
-        for e in filters.iter().flat_map(|(_, exts)| exts.iter()) {
-            if !accept.iter().any(|a| a == e) {
-                accept.push((*e).to_string());
-            }
-        }
-        t.requests.push(TabletRequest::Pick { id: t.next, label: label.to_string(), accept });
-        t.picks.push((t.next, wanted));
-        return None;
-    }
-    filters.iter().fold(crate::dialogs::FileDialog::new(), |d, (name, exts)| d.add_filter(*name, exts)).pick_file()
-}
-
-/// A new folder whose files go to the tablet's page once this frame has written them.
-fn tablet_folder(t: &mut TabletFiles) -> Option<PathBuf> {
-    t.next += 1;
-    let dir = t.dir.join(format!("save-{}", t.next));
-    std::fs::create_dir_all(&dir).ok()?;
-    t.requests.push(TabletRequest::Saved(dir.clone()));
-    Some(dir)
-}
-
-/// Where to save a file: the system's dialog, or on a tablet a scratch file the page then downloads.
-fn save_path(tablet: &mut Option<TabletFiles>, name: &str, filter: (&str, &[&str])) -> Option<PathBuf> {
-    match tablet {
-        Some(t) => Some(tablet_folder(t)?.join(crate::tablet::safe_file_name(name))),
-        None => crate::dialogs::FileDialog::new().set_file_name(name).add_filter(filter.0, filter.1).save_file(),
-    }
-}
-
-/// A folder to export several files into (the page downloads each, on a tablet).
-fn save_folder(tablet: &mut Option<TabletFiles>) -> Option<PathBuf> {
-    match tablet {
-        Some(t) => tablet_folder(t),
-        None => crate::dialogs::FileDialog::new().set_title("Choose a folder to export to").pick_folder(),
-    }
-}
-
 /// A control request's answer, for whichever side gets to it first.
 type WaitingReply = Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<Result<Value, String>>>>>;
 
@@ -190,6 +148,8 @@ pub struct ShapeCraftApp {
     tablet_choice: Option<usize>,
     /// Preferences opened on the projects screen: its tab, and the Navigation Presets modal over it.
     home_prefs: Option<usize>,
+    /// Its Sync tab's folders being asked for while the window keeps answering.
+    home_prefs_picks: crate::workspace::prefs::SyncPicks,
     home_nav: Option<&'static str>,
     /// The first run's second question: the navigation style, preselected from the device's answer.
     welcome_nav: Option<&'static str>,
@@ -216,6 +176,8 @@ pub struct ShapeCraftApp {
     ask_open: Option<(PathBuf, String, std::time::Duration)>,
     /// The first-run setup (look, Work Folder, backups), while it's showing.
     setup: Option<crate::setup::Setup>,
+    /// System dialogs open while the window keeps answering, each with what carries on when it closes.
+    pending: crate::dialogs::Pending<ShapeCraftApp>,
 }
 
 impl ShapeCraftApp {
@@ -307,6 +269,8 @@ impl ShapeCraftApp {
             marked: None,
             ask_open: None,
             setup: None,
+            pending: Default::default(),
+            home_prefs_picks: Default::default(),
             folder,
             new_parent: None,
             ws: None,
@@ -824,6 +788,78 @@ impl ShapeCraftApp {
         self.landing.rescan();
     }
 
+    /// A file to open: the system's dialog, or on a tablet the page's picker (the file arrives later, see `Wanted`).
+    /// On the desktop the dialog opens on another thread and `done` carries on with the answer, so the window keeps
+    /// answering while it is up.
+    fn open_path(
+        &mut self,
+        wanted: Wanted,
+        label: &str,
+        filters: &[(&str, &[&str])],
+        done: impl FnOnce(&mut Self, Option<PathBuf>) + Send + 'static,
+    ) {
+        if let Some(t) = self.tablet_files.as_mut() {
+            t.next += 1;
+            let mut accept: Vec<String> = Vec::new();
+            for e in filters.iter().flat_map(|(_, exts)| exts.iter()) {
+                if !accept.iter().any(|a| a == e) {
+                    accept.push((*e).to_string());
+                }
+            }
+            t.requests.push(TabletRequest::Pick { id: t.next, label: label.to_string(), accept });
+            t.picks.push((t.next, wanted));
+            return;
+        }
+        let filters: Vec<(String, Vec<String>)> =
+            filters.iter().map(|(name, exts)| (name.to_string(), exts.iter().map(|e| e.to_string()).collect())).collect();
+        self.pending.open_file(
+            move |d| {
+                filters.iter().fold(d, |d, (name, exts)| {
+                    let exts: Vec<String> = exts.to_vec();
+                    d.add_filter(name.as_str(), &exts)
+                })
+            },
+            done,
+        );
+    }
+
+    /// A new folder whose files go to the tablet's page once this frame has written them.
+    fn tablet_folder(t: &mut TabletFiles) -> Option<PathBuf> {
+        t.next += 1;
+        let dir = t.dir.join(format!("save-{}", t.next));
+        std::fs::create_dir_all(&dir).ok()?;
+        t.requests.push(TabletRequest::Saved(dir.clone()));
+        Some(dir)
+    }
+
+    /// Where to save a file: the system's dialog, or on a tablet a scratch file the page then downloads. On the
+    /// desktop `done` carries on with the answer once the dialog has closed.
+    fn save_path(&mut self, name: &str, filter: (&str, &[&str]), done: impl FnOnce(&mut Self, Option<PathBuf>) + Send + 'static) {
+        if self.tablet_files.is_some() {
+            let Some(dir) = self.tablet_files.as_mut().and_then(Self::tablet_folder) else { return };
+            done(self, Some(dir.join(crate::tablet::safe_file_name(name))));
+            return;
+        }
+        let (kind, exts): (String, Vec<String>) = (filter.0.to_string(), filter.1.iter().map(|e| e.to_string()).collect());
+        let name = name.to_string();
+        self.pending.save_file(move |d| d.set_file_name(name).add_filter(kind.as_str(), &exts), done);
+    }
+
+    /// A folder to export several files into (the page downloads each, on a tablet). On the desktop `done` carries on
+    /// with the answer once the dialog has closed.
+    fn save_folder(&mut self, done: impl FnOnce(&mut Self, Option<PathBuf>) + Send + 'static) {
+        let dir = self.tablet_files.as_mut().and_then(Self::tablet_folder);
+        match dir {
+            Some(dir) => done(self, Some(dir)),
+            None => {
+                if self.tablet_files.is_some() {
+                    return;
+                }
+                self.pending.open_folder(|d| d.set_title("Choose a folder to export to"), done);
+            }
+        }
+    }
+
     fn import_dialog(&mut self) {
         let filters: [(&str, &[&str]); 7] = [
             ("All Supported Files", &["shapr", "step", "stp", "x_t", "x_b", "iges", "igs", "stl", "obj", "dxf", "svg"]),
@@ -834,8 +870,11 @@ impl ShapeCraftApp {
             ("Meshes (STL, OBJ)", &["stl", "obj"]),
             ("2D (DXF, SVG)", &["dxf", "svg"]),
         ];
-        let Some(path) = open_path(&mut self.tablet_files, Wanted::Import, "Import", &filters) else { return };
-        self.import_picked(path);
+        self.open_path(Wanted::Import, "Import", &filters, |app, path| {
+            if let Some(path) = path {
+                app.import_picked(path);
+            }
+        });
     }
 
     fn import_picked(&mut self, path: PathBuf) {
@@ -893,15 +932,16 @@ impl ShapeCraftApp {
     fn image_dialog(&mut self) {
         let Some(ws) = self.ws.as_deref_mut() else { return };
         ws.wants_image = false;
-        let Some(path) = open_path(
-            &mut self.tablet_files,
+        self.open_path(
             Wanted::Image,
             "Insert Image",
             &[("Image", &["png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "ico"])],
-        ) else {
-            return;
-        };
-        self.image_picked(path);
+            |app, path| {
+                if let Some(path) = path {
+                    app.image_picked(path);
+                }
+            },
+        );
     }
 
     fn image_picked(&mut self, path: PathBuf) {
@@ -918,30 +958,36 @@ impl ShapeCraftApp {
     fn decal_dialog(&mut self) {
         let Some(ws) = self.ws.as_deref_mut() else { return };
         ws.wants_decal = false;
-        let Some(path) = open_path(
-            &mut self.tablet_files,
+        self.open_path(
             Wanted::Decal,
             "Add a Decal",
             &[("Image", &["png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "ico"])],
-        ) else {
-            return;
-        };
-        let _ = ws.run("import_decal", json!({ "path": path }));
+            |app, path| {
+                if let Some(path) = path
+                    && let Some(ws) = app.ws.as_deref_mut()
+                {
+                    let _ = ws.run("import_decal", json!({ "path": path }));
+                }
+            },
+        );
     }
 
     /// Visualization ▸ Custom ⊕: makes a custom material from a PNG or JPEG picture.
     fn material_dialog(&mut self) {
         let Some(ws) = self.ws.as_deref_mut() else { return };
         ws.wants_material = false;
-        let Some(path) = open_path(
-            &mut self.tablet_files,
+        self.open_path(
             Wanted::Material,
             "Custom Material",
             &[("Image", &["png", "jpg", "jpeg", "tif", "tiff", "bmp", "gif", "ico"])],
-        ) else {
-            return;
-        };
-        let _ = ws.run("import_material", json!({ "path": path }));
+            |app, path| {
+                if let Some(path) = path
+                    && let Some(ws) = app.ws.as_deref_mut()
+                {
+                    let _ = ws.run("import_material", json!({ "path": path }));
+                }
+            },
+        );
     }
 
     /// Visualization ▸ Environment ▸ Import…: adds a panorama as a custom environment.
@@ -949,8 +995,13 @@ impl ShapeCraftApp {
         let Some(ws) = self.ws.as_deref_mut() else { return };
         ws.wants_environment = false;
         let filters: [(&str, &[&str]); 1] = [("Panorama", &["hdr", "exr", "png", "jpg", "jpeg"])];
-        let Some(path) = open_path(&mut self.tablet_files, Wanted::Environment, "Import Environment", &filters) else { return };
-        let _ = ws.run("import_environment", json!({ "path": path }));
+        self.open_path(Wanted::Environment, "Import Environment", &filters, |app, path| {
+            if let Some(path) = path
+                && let Some(ws) = app.ws.as_deref_mut()
+            {
+                let _ = ws.run("import_environment", json!({ "path": path }));
+            }
+        });
     }
 
     /// Saves the open drawing in each chosen format: one save dialog, the others written next to it.
@@ -960,11 +1011,14 @@ impl ShapeCraftApp {
             return;
         }
         let name = format!("{} {}.png", ws.session.doc.name, if ws.visualizing { "Capture" } else { "Screenshot" });
-        let Some(path) = save_path(&mut self.tablet_files, &name, ("PNG", &["png"])) else { return };
-        match ws.capture_png(&path) {
-            Ok(()) => ws.toast(format!("Saved {}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())),
-            Err(e) => ws.toast(format!("Couldn't save the image: {e}")),
-        }
+        self.save_path(&name, ("PNG", &["png"]), |app, path| {
+            let Some(path) = path else { return };
+            let Some(ws) = app.ws.as_deref_mut() else { return };
+            match ws.capture_png(&path) {
+                Ok(()) => ws.toast(format!("Saved {}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())),
+                Err(e) => ws.toast(format!("Couldn't save the image: {e}")),
+            }
+        });
     }
 
     fn export_drawing_dialog(&mut self) {
@@ -976,21 +1030,24 @@ impl ShapeCraftApp {
             .and_then(|id| ws.session.doc.drawing(shapecraft_doc::ItemId(id)))
             .map_or_else(|| ws.session.doc.name.clone(), |d| d.name.clone());
         let upper = first.to_uppercase();
-        let Some(path) = save_path(&mut self.tablet_files, &format!("{stem}.{first}"), (&upper, &[first])) else { return };
-        let mut written = Vec::new();
-        for f in &formats {
-            let out = path.with_extension(f);
-            let mut params = json!({ "path": out });
-            if let Some(id) = drawing {
-                params["drawing"] = json!(id);
+        self.save_path(&format!("{stem}.{first}"), (&upper, &[first]), move |app, path| {
+            let Some(path) = path else { return };
+            let Some(ws) = app.ws.as_deref_mut() else { return };
+            let mut written = Vec::new();
+            for f in &formats {
+                let out = path.with_extension(f);
+                let mut params = json!({ "path": out });
+                if let Some(id) = drawing {
+                    params["drawing"] = json!(id);
+                }
+                if ws.run("export_drawing", params).is_some() {
+                    written.push(out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+                }
             }
-            if ws.run("export_drawing", params).is_some() {
-                written.push(out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+            if !written.is_empty() {
+                ws.toast(format!("Exported {}", written.join(", ")));
             }
-        }
-        if !written.is_empty() {
-            ws.toast(format!("Exported {}", written.join(", ")));
-        }
+        });
     }
 
     /// Opens the Export dialog, optionally with one format picked.
@@ -1041,7 +1098,7 @@ impl ShapeCraftApp {
         // Slicer: a 3MF in a scratch folder, opened in the chosen slicer; no save dialog of its own.
         if d.chosen.contains(&Format::Slicer) {
             d.chosen.retain(|f| *f != Format::Slicer);
-            let tablet_dir = self.tablet_files.as_mut().and_then(tablet_folder);
+            let tablet_dir = self.tablet_files.as_mut().and_then(Self::tablet_folder);
             let on_tablet = tablet_dir.is_some();
             let dir = tablet_dir.unwrap_or_else(|| std::env::temp_dir().join("ShapeCraft Slicer"));
             let path = dir.join(format!("{name}.3mf"));
@@ -1067,21 +1124,33 @@ impl ShapeCraftApp {
             }
         }
         let single = d.chosen.len() == 1 && !(d.separately && d.chosen[0].per_body());
-        let folder = if let Some(dir) = d.quick.clone() {
-            (dir, name.clone())
+        if let Some(dir) = d.quick.clone() {
+            let stem = name.clone();
+            self.export_to(d, dir, stem);
         } else if single {
             let (ext, _) = d.chosen[0].ext_and_command();
             let upper = ext.to_uppercase();
-            let Some(path) = save_path(&mut self.tablet_files, &format!("{name}.{ext}"), (&upper, &[ext])) else { return };
-            match path.parent() {
-                Some(dir) => (dir.to_path_buf(), path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(name.clone())),
-                None => return,
-            }
+            self.save_path(&format!("{name}.{ext}"), (&upper, &[ext]), move |app, path| {
+                let Some(path) = path else { return };
+                let Some(parent) = path.parent() else { return };
+                let dir = parent.to_path_buf();
+                let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                app.export_to(d, dir, stem);
+            });
         } else {
-            let Some(dir) = save_folder(&mut self.tablet_files) else { return };
-            (dir, name.clone())
-        };
-        let (dir, stem) = folder;
+            self.save_folder(move |app, dir| {
+                if let Some(dir) = dir {
+                    let stem = name.clone();
+                    app.export_to(d, dir, stem);
+                }
+            });
+        }
+    }
+
+    /// Writes each format the export dialog chose into `dir`, under `stem`.
+    fn export_to(&mut self, d: ExportDialog, dir: PathBuf, stem: String) {
+        let Some(ws) = self.ws.as_deref_mut() else { return };
+        let (dir, stem) = (dir, stem);
         let mut written = Vec::new();
         let mut failed = Vec::new();
         for f in &d.chosen {
@@ -1990,7 +2059,7 @@ impl ShapeCraftApp {
         let mut nav = self.home_nav;
         egui::Area::new(ui.scope_id().with("home-prefs")).order(egui::Order::Foreground).fixed_pos(full.min).show(ui.ctx(), |ui| {
             let _ = ui.allocate_rect(full, egui::Sense::click());
-            let out = crate::workspace::prefs::window(ui, full, &mut tab, &mut s, false);
+            let out = crate::workspace::prefs::window(ui, full, &mut tab, &mut s, false, &mut self.home_prefs_picks);
             if out.presets {
                 nav = Some(s.preset().name);
             }
@@ -2115,6 +2184,9 @@ impl ShapeCraftApp {
                         continue;
                     }
                     match other {
+                        // Undo and Redo from the menus (Ctrl+Z in the window menu on Linux and Windows) put the running
+                        // tool down first, as ⌘Z and the on-screen buttons do (#38).
+                        MenuAction::Command(id @ ("undo" | "redo")) => ws.act(crate::workspace::toolbar::Action::Command(id), id),
                         MenuAction::Command(id) => {
                             let _ = ws.run(id, json!({}));
                         }
@@ -2279,6 +2351,15 @@ impl ShapeCraftApp {
 
     /// Every frame, shown or not: automatic checks, and the question when closing with an update downloaded.
     fn update_logic(&mut self, ctx: &egui::Context) {
+        // Answers that arrived while the window drew other things carry on here, once a frame.
+        let mut pending = std::mem::take(&mut self.pending);
+        pending.poll(self);
+        // A `done` that opened another dialog put it in `self.pending`, which the take left empty: keep both.
+        pending.picks_from(std::mem::take(&mut self.pending));
+        self.pending = pending;
+        if self.pending.is_open() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
         if !self.updating {
             return;
         }

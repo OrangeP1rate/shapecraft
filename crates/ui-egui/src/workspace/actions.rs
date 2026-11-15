@@ -485,7 +485,8 @@ impl Workspace {
 }
 
 impl Workspace {
-    /// Edit ▸ Copy (⌘C): remembers the selected bodies and construction planes. The system clipboard gets a tag,
+    /// Edit ▸ Copy (⌘C): remembers the selected bodies, construction planes and whole sketches (#37). The system
+    /// clipboard gets a tag,
     /// so ⌘V pastes them only while nothing else has been copied since.
     pub(super) fn copy_items(&mut self) {
         let mut ids = Vec::new();
@@ -493,6 +494,7 @@ impl Workspace {
             let id = match *p {
                 Pick::Body { body } | Pick::Face { body, .. } | Pick::Edge { body, .. } => body,
                 Pick::Plane { plane } => plane,
+                Pick::Sketch { sketch } => sketch,
                 _ => continue,
             };
             if !ids.contains(&id) {
@@ -500,7 +502,7 @@ impl Workspace {
             }
         }
         if ids.is_empty() {
-            self.toast("Select bodies to copy");
+            self.toast("Select bodies or sketches to copy");
             return;
         }
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
@@ -525,13 +527,31 @@ impl Workspace {
         let doc = &self.session.doc;
         let ids: Vec<u64> =
             self.clipboard.0.iter().filter(|id| doc.body(**id).is_some() || doc.plane(**id).is_some()).map(|id| id.0).collect();
-        if ids.is_empty() {
+        let sketches: Vec<u64> = self.clipboard.0.iter().filter(|id| doc.sketch(**id).is_some()).map(|id| id.0).collect();
+        if ids.is_empty() && sketches.is_empty() {
             self.toast(if self.clipboard.0.is_empty() { "Nothing copied yet" } else { "What was copied is gone" });
             return;
         }
+        // Inside a sketch the copies would land in another one: leave it first, as the other modeling actions do.
+        if self.session.active_sketch.is_some() && !sketches.is_empty() {
+            self.ui_action(UiAction::ExitSketching);
+        }
         self.tool = Tool::Idle;
-        let n = ids.len();
-        if self.run("translate", json!({ "items": ids, "by": [0, 0, 0], "copy": true, "linked": false })).is_some() {
+        let mut n = 0;
+        let mut picks = Vec::new();
+        if !ids.is_empty() && self.run("translate", json!({ "items": ids, "by": [0, 0, 0], "copy": true, "linked": false })).is_some() {
+            n += ids.len();
+            picks.extend(self.session.selection.iter().copied());
+        }
+        for k in sketches {
+            if self.run("duplicate_sketch", json!({ "sketch": k })).is_some() {
+                n += 1;
+                picks.extend(self.session.selection.iter().copied());
+            }
+        }
+        // Everything pasted ends up picked, ready to Move.
+        self.session.selection = picks;
+        if n > 0 {
             self.toast(if n == 1 { "Pasted in place: 1 item".to_string() } else { format!("Pasted in place: {n} items") });
         }
     }

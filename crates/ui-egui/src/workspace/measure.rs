@@ -20,6 +20,44 @@ pub struct Measured {
     pub anchor: DVec3,
 }
 
+impl Workspace {
+    /// The point modes' placed points can be moved: a press on one (within reach on screen) picks it up, it follows
+    /// the pointer over the model (snapping to notable points), and it stays where it's let go (#36). True while it
+    /// has the drag, so the view doesn't turn under it.
+    pub(super) fn measure_point_drag(&mut self, ui: &Ui, resp: &egui::Response) -> bool {
+        if !(self.measuring && matches!(self.tool, super::Tool::Idle) && mode(self) > 0) {
+            self.measure_drag = None;
+            return false;
+        }
+        if resp.drag_started()
+            && let Some(press) = ui.input(|i| i.pointer.press_origin())
+        {
+            self.measure_drag = self
+                .measure_points
+                .iter()
+                .enumerate()
+                .filter_map(|(i, q)| self.to_screen(*q).map(|s| (i, s.distance(press))))
+                .filter(|(_, d)| *d <= MEASURE_GRAB)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i);
+        }
+        let Some(i) = self.measure_drag else { return false };
+        if let Some(c) = self.cursor
+            && let Some(at) = self.snap_point(c)
+            && let Some(p) = self.measure_points.get_mut(i)
+        {
+            *p = at;
+        }
+        if resp.drag_stopped() || !resp.dragged() {
+            self.measure_drag = None;
+        }
+        true
+    }
+}
+
+/// How near (screen points) a press has to land to pick up a placed measure point.
+const MEASURE_GRAB: f32 = 10.0;
+
 /// The current mode: 0 objects, 1 point-to-point, 2 three-point angle.
 fn mode(ws: &Workspace) -> usize {
     ws.variant("Measure mode")
@@ -340,4 +378,67 @@ fn label(p: &egui::Painter, at: Pos2, m: &Measured) {
     p.rect_stroke(r, radius(3), Stroke::new(1.0, Color32::WHITE), StrokeKind::Inside);
     icons::paint(p, Rect::from_center_size(pos2(r.left() + 10.0, r.center().y), vec2(11.0, 11.0)), m.icon, Color32::WHITE);
     p.galley(pos2(r.left() + 19.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod point_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn frame(ctx: &egui::Context, ws: &mut Workspace, events: Vec<egui::Event>) {
+        let input =
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 900.0))), events, ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| ws.ui(ui, None));
+        out.textures_delta.clear();
+    }
+
+    fn button(at: Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }
+    }
+
+    /// Point-to-Point: a click a few pixels off a circle's center takes the center exactly (#33), and a placed point
+    /// dragged onto a corner moves there (#36).
+    #[test]
+    fn points_snap_and_can_be_moved() {
+        let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "M");
+        let mut ws = Workspace::new(session, crate::settings::Settings::default());
+        ws.session.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        ws.session.execute("circle", &json!({"center": [0, 0], "radius": 10})).unwrap();
+        let k = ws.session.active_sketch.unwrap().0;
+        ws.session.execute("extrude", &json!({"sketch": k, "region": 0, "distance": 8})).unwrap();
+        ws.session.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        ws.session.execute("rectangle", &json!({"corner": [30, 0], "opposite": [40, 10]})).unwrap();
+        let k = ws.session.active_sketch.unwrap().0;
+        ws.session.execute("extrude", &json!({"sketch": k, "region": 0, "distance": 5})).unwrap();
+        ws.session.selection.clear();
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut ws, Vec::new());
+        ws.ui_action(super::super::toolbar::UiAction::Measure);
+        ws.variants.insert("Measure mode".into(), 1);
+        ws.camera = shapecraft_render::Camera::standard(shapecraft_render::StandardView::Top, DVec3::new(20.0, 5.0, 0.0), 120.0);
+        for _ in 0..3 {
+            frame(&ctx, &mut ws, Vec::new());
+        }
+        let top = DVec3::new(0.0, 0.0, 8.0);
+        let near = ws.to_screen(top).unwrap() + vec2(4.0, 3.0);
+        frame(&ctx, &mut ws, vec![egui::Event::PointerMoved(near)]);
+        frame(&ctx, &mut ws, vec![button(near, true)]);
+        frame(&ctx, &mut ws, vec![button(near, false)]);
+        assert_eq!(ws.measure_points.len(), 1, "one point placed");
+        assert!(ws.measure_points[0].distance(top) < 0.05, "snapped to the center: {:?}", ws.measure_points[0]);
+        // Drag it onto the box's corner.
+        let corner = DVec3::new(40.0, 10.0, 5.0);
+        let from = ws.to_screen(ws.measure_points[0]).unwrap();
+        let to = ws.to_screen(corner).unwrap() + vec2(2.0, -2.0);
+        frame(&ctx, &mut ws, vec![egui::Event::PointerMoved(from), button(from, true)]);
+        for k in 1..=8 {
+            let at = from + (to - from) * (k as f32 / 8.0);
+            frame(&ctx, &mut ws, vec![egui::Event::PointerMoved(at)]);
+        }
+        frame(&ctx, &mut ws, vec![button(to, false)]);
+        frame(&ctx, &mut ws, Vec::new());
+        assert_eq!(ws.measure_points.len(), 1, "moved, not a new point");
+        assert!(ws.measure_points[0].distance(corner) < 0.05, "moved onto the corner: {:?}", ws.measure_points[0]);
+    }
 }

@@ -92,6 +92,9 @@ impl Workspace {
                             if d.length() > 2.0 {
                                 let n = vec2(d.y, -d.x).normalized() * 45.0;
                                 sketch_dimension(&painter, [a, b], [a + n, b + n], &text, typed, true);
+                            } else {
+                                // Still on the center: the typed value shows there (#32).
+                                sketch_dimension(&painter, [a, a], [a, a], &text, typed, true);
                             }
                         }
                     }

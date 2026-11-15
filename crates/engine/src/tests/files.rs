@@ -191,7 +191,7 @@ fn step_keeps_part_names_and_colors_both_ways() {
     s.execute("export_step", &json!({"path": path})).unwrap();
     let mut t = session();
     t.execute("import_file", &json!({"path": path})).unwrap();
-    // Everything lands in a folder named after the file (as Shapr3D's Import File does), assemblies as folders
+    // Everything lands in a folder named after the file (as Import File does), assemblies as folders
     // below it, nested like the assembly.
     let names: Vec<&str> = t.doc.folders.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, ["assembly.step", "Hinge"]);

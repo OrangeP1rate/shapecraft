@@ -392,7 +392,7 @@ fn import_step(s: &mut Session, path: &std::path::Path, heal: shapecraft_kernel:
         }
         ids.extend(made);
     }
-    // One nested folder per assembly step in the path (as Shapr3D's Items list shows them), not one flat folder
+    // One nested folder per assembly step in the path (as an Items list shows them), not one flat folder
     // wearing the whole path as its name.
     let made_folders = super::shapr::import_folder_tree(s, folders);
     // Nothing is selected after an import.

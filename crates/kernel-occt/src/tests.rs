@@ -649,7 +649,7 @@ fn used_offset_accepts_smooth_rational_joins_but_rejects_creases() {
     }
 }
 
-/// The same, with the line's own direction running through several Bézier segments — the case a real Shapr3D
+/// The same, with the line's own direction running through several Bézier segments — the case a real
 /// sweep hits: the profile is carried on by a straight piece (a C0 knot of full multiplicity in U, here with a
 /// sliver span beside it, as the file had), while the sweep direction has knots of its own (C1, so they don't
 /// count). The offset's normal carries on, so the face comes in; with a real crease it is refused, also far from

@@ -153,10 +153,13 @@ impl Pick {
     }
 }
 
+/// What carries on when a dialog closes, with the path chosen (None when it was cancelled).
+type Done<A> = Box<dyn FnOnce(&mut A, Option<std::path::PathBuf>) + Send>;
+
 /// Files and folders being asked for while the window keeps answering, each with what carries on when its dialog
 /// closes. Polled once a frame.
 pub struct Pending<A> {
-    picks: Vec<(Pick, Box<dyn FnOnce(&mut A, Option<std::path::PathBuf>) + Send>)>,
+    picks: Vec<(Pick, Done<A>)>,
 }
 
 impl<A> Default for Pending<A> {
@@ -173,6 +176,9 @@ impl<A> Pending<A> {
         build: impl FnOnce(FileDialog) -> FileDialog + Send + 'static,
         done: impl FnOnce(&mut A, Option<std::path::PathBuf>) + Send + 'static,
     ) {
+        if self.is_open() {
+            return;
+        }
         self.push(Pick::open(move || build(FileDialog::new()).pick_file()), done);
     }
 
@@ -182,6 +188,9 @@ impl<A> Pending<A> {
         build: impl FnOnce(FileDialog) -> FileDialog + Send + 'static,
         done: impl FnOnce(&mut A, Option<std::path::PathBuf>) + Send + 'static,
     ) {
+        if self.is_open() {
+            return;
+        }
         self.push(Pick::open(move || build(FileDialog::new()).pick_folder()), done);
     }
 
@@ -191,11 +200,25 @@ impl<A> Pending<A> {
         build: impl FnOnce(FileDialog) -> FileDialog + Send + 'static,
         done: impl FnOnce(&mut A, Option<std::path::PathBuf>) + Send + 'static,
     ) {
+        if self.is_open() {
+            return;
+        }
         self.push(Pick::open(move || build(FileDialog::new()).save_file()), done);
     }
 
     fn push(&mut self, pick: Pick, done: impl FnOnce(&mut A, Option<std::path::PathBuf>) + Send + 'static) {
         self.picks.push((pick, Box::new(done)));
+    }
+
+    /// A dialog is up: the window keeps drawing frames so its answer is taken as soon as it closes, and a second
+    /// click on the same menu item doesn't stack another dialog on top.
+    pub fn is_open(&self) -> bool {
+        !self.picks.is_empty()
+    }
+
+    /// Takes over another list's dialogs (those opened while this one was taken out to be polled).
+    pub fn picks_from(&mut self, other: Self) {
+        self.picks.extend(other.picks);
     }
 
     /// Carries on what the user answered.
@@ -205,5 +228,52 @@ impl<A> Pending<A> {
             let (_, done) = self.picks.remove(i);
             done(app, answer);
         }
+    }
+}
+
+#[cfg(test)]
+mod pending_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Answers(Vec<Option<std::path::PathBuf>>);
+
+    fn wait_for(p: &mut Pending<Answers>, a: &mut Answers, n: usize) {
+        for _ in 0..500 {
+            p.poll(a);
+            if a.0.len() >= n {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    /// An answer carries on once, cancelled ones too, and nothing is left open after.
+    #[test]
+    fn answers_carry_on_once_and_close() {
+        let mut p = Pending::<Answers>::default();
+        let mut a = Answers::default();
+        p.push(Pick::open(|| Some("/tmp/x.step".into())), |a: &mut Answers, path| a.0.push(path));
+        p.push(Pick::open(|| None), |a: &mut Answers, path| a.0.push(path));
+        assert!(p.is_open());
+        wait_for(&mut p, &mut a, 2);
+        assert_eq!(a.0.len(), 2);
+        assert!(a.0.contains(&Some("/tmp/x.step".into())) && a.0.contains(&None));
+        assert!(!p.is_open());
+        p.poll(&mut a);
+        assert_eq!(a.0.len(), 2, "each answer carries on only once");
+    }
+
+    /// Dialogs opened while a list was taken out to be polled are kept when it goes back.
+    #[test]
+    fn picks_opened_meanwhile_are_kept() {
+        let mut kept = Pending::<Answers>::default();
+        kept.push(Pick::open(|| None), |a: &mut Answers, path| a.0.push(path));
+        let mut meanwhile = Pending::<Answers>::default();
+        meanwhile.push(Pick::open(|| Some("/tmp/y.png".into())), |a: &mut Answers, path| a.0.push(path));
+        kept.picks_from(meanwhile);
+        let mut a = Answers::default();
+        wait_for(&mut kept, &mut a, 2);
+        assert_eq!(a.0.len(), 2);
     }
 }

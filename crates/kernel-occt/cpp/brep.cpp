@@ -165,6 +165,9 @@ static bool tangent_joins(const Handle(Geom_BSplineSurface)& s) {
     const int nk_line = v ? s->NbUKnots() : s->NbVKnots();
     if (mult(1) != deg + 1 || mult(nk) != deg + 1) return false;
     if (q > 25 || deg > 25) return false;
+    // The segment split below inserts knots into a clamped row (ends of multiplicity q + 1); anything else would
+    // index before the row's start, so it keeps being refused.
+    if (nk_line < 2 || line_mult(1) != q + 1 || line_mult(nk_line) != q + 1) return false;
     // The line's own knots: the other direction's, whose Bézier segments the proof walks.
     std::vector<double> aknots;
     std::vector<int> amults;

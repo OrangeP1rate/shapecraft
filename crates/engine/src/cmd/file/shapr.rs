@@ -91,12 +91,6 @@ pub(super) fn import_shapr(s: &mut Session, path: &std::path::Path) -> Result<Va
             }
         }
     }
-    for (name_id, id) in links.iter().filter_map(|(id, _, name_id)| name_id.map(|n| (n, *id))) {
-        by_name.insert(name_id, id);
-    }
-    // The file's own folder tree, in the order Shapr3D shows it — not the paths each body carries, which only know
-    // where it sits, and came out in step order.
-    let made_folders = import_named_folders(s, &project, &by_name);
     s.refresh_regions();
     let mut redone = 0;
     for (index, body, e) in deferred {
@@ -131,6 +125,13 @@ pub(super) fn import_shapr(s: &mut Session, path: &std::path::Path) -> Result<Va
             },
         }
     }
+    for (name_id, id) in links.iter().filter_map(|(id, _, name_id)| name_id.map(|n| (n, *id))) {
+        by_name.insert(name_id, id);
+    }
+    // The file's own folder tree, in the order the file lists it — not the paths each body carries, which only know
+    // where it sits, and came out in step order. After the deferred bodies, so those that came in as they are find
+    // their folders too.
+    let made_folders = import_named_folders(s, &project, &by_name);
     // A file Shapr3D hasn't opened since we wrote it keeps no solids for its own steps (Shapr3D rebuilds them): its
     // simple extrudes are redone from their profiles instead, or those bodies would be missing.
     if linking && !project.bodies.iter().any(|b| b.partition.is_some()) {
@@ -241,7 +242,7 @@ fn add_shapr_body(
 }
 
 /// The file's own folder tree, read straight from the root's `NamedChildren`: a folder's children are its
-/// subfolders and its items, in the order Shapr3D shows them, and that order is kept. A child names an item by one
+/// subfolders and its items, in the order the file lists them, and that order is kept. A child names an item by one
 /// of its metadata rows; the imported body with that name carries on. Bodies no folder child names stay loose at
 /// the top, and a body two folders both list sits in the first that does.
 fn import_named_folders(
@@ -249,59 +250,71 @@ fn import_named_folders(
     project: &shapecraft_shapr::Project,
     by_name: &std::collections::HashMap<i64, shapecraft_doc::ItemId>,
 ) -> Vec<u64> {
-    let mut made = Vec::new();
-    let root = project.folders.iter().find(|f| f.name == "root");
-    if let Some(root) = root {
-        let mut placed = std::collections::HashSet::new();
-        for (id, ty) in &root.children {
-            import_named_child(s, project, by_name, &mut placed, id, *ty, None, &mut made, 0);
-        }
+    let Some(root) = project.folders.iter().find(|f| f.name == "root") else {
+        // No tree to read (an older or trimmed file): each body's own folder path, as before.
+        let paths = project
+            .bodies
+            .iter()
+            .filter(|b| !b.folder.is_empty())
+            .filter_map(|b| b.item_name_id.and_then(|n| by_name.get(&n)).map(|id| (b.folder.clone(), vec![*id])))
+            .collect();
+        return import_folder_tree(s, paths);
+    };
+    let mut walk = TreeWalk { project, by_name, placed: Default::default(), opened: Default::default(), made: Vec::new() };
+    for (id, ty) in &root.children {
+        walk.child(s, id, *ty, None, 0);
     }
-    made
+    walk.made
 }
 
-fn import_named_child(
-    s: &mut Session,
-    project: &shapecraft_shapr::Project,
-    by_name: &std::collections::HashMap<i64, shapecraft_doc::ItemId>,
-    placed: &mut std::collections::HashSet<shapecraft_doc::ItemId>,
-    id: &str,
-    ty: i64,
-    parent: Option<shapecraft_doc::ItemId>,
-    made: &mut Vec<u64>,
-    depth: usize,
-) {
-    if depth > 100 {
-        return;
-    }
-    match ty {
-        // A subfolder: made, hung under its parent, and its children walked.
-        0 => {
-            let Some(f) = project.folders.iter().find(|f| f.id == id) else { return };
-            let fid = s.doc.alloc_id();
-            s.doc.folders.push(shapecraft_doc::Folder { id: fid, name: f.name.chars().take(200).collect(), items: Vec::new() });
-            made.push(fid.0);
-            if let Some(parent) = parent
-                && let Some(pf) = s.doc.folders.iter_mut().find(|f| f.id == parent)
-            {
-                pf.items.push(fid);
-            }
-            for (child, child_ty) in &f.children {
-                import_named_child(s, project, by_name, placed, child, *child_ty, Some(fid), made, depth + 1);
-            }
+/// Where the walk of a file's folder tree has got to: bodies already placed, folders already made (a file that
+/// lists a folder twice, or inside itself, makes it once), and the folders made, in order.
+struct TreeWalk<'a> {
+    project: &'a shapecraft_shapr::Project,
+    by_name: &'a std::collections::HashMap<i64, shapecraft_doc::ItemId>,
+    placed: std::collections::HashSet<shapecraft_doc::ItemId>,
+    opened: std::collections::HashSet<&'a str>,
+    made: Vec<u64>,
+}
+
+impl<'a> TreeWalk<'a> {
+    fn child(&mut self, s: &mut Session, id: &'a str, ty: i64, parent: Option<shapecraft_doc::ItemId>, depth: usize) {
+        if depth > 100 {
+            return;
         }
-        // An item: the imported body whose Items-list name the reference points at, placed in order.
-        6 => {
-            let Some(name_id) = project.item_by_meta.get(id) else { return };
-            let Some(item) = by_name.get(name_id) else { return };
-            if placed.insert(*item)
-                && let Some(parent) = parent
-                && let Some(pf) = s.doc.folders.iter_mut().find(|f| f.id == parent)
-            {
-                pf.items.push(*item);
+        let project = self.project;
+        match ty {
+            // A subfolder: made, hung under its parent, and its children walked.
+            0 => {
+                let Some(f) = project.folders.iter().find(|f| f.id == id) else { return };
+                if !self.opened.insert(f.id.as_str()) {
+                    return;
+                }
+                let fid = s.doc.alloc_id();
+                s.doc.folders.push(shapecraft_doc::Folder { id: fid, name: f.name.chars().take(200).collect(), items: Vec::new() });
+                self.made.push(fid.0);
+                if let Some(parent) = parent
+                    && let Some(pf) = s.doc.folders.iter_mut().find(|f| f.id == parent)
+                {
+                    pf.items.push(fid);
+                }
+                for (child, child_ty) in &f.children {
+                    self.child(s, child, *child_ty, Some(fid), depth + 1);
+                }
             }
+            // An item: the imported body whose Items-list name the child points at, placed in order.
+            6 => {
+                let Some(name_id) = project.item_by_meta.get(id) else { return };
+                let Some(item) = self.by_name.get(name_id) else { return };
+                if self.placed.insert(*item)
+                    && let Some(parent) = parent
+                    && let Some(pf) = s.doc.folders.iter_mut().find(|f| f.id == parent)
+                {
+                    pf.items.push(*item);
+                }
+            }
+            _ => {}
         }
-        _ => {}
     }
 }
 
@@ -1113,4 +1126,66 @@ fn relink(s: &Session, imported: &shapecraft_doc::Document) -> Option<shapecraft
         }
     });
     Some(link)
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+
+    fn folder(id: &str, name: &str, children: &[(&str, i64)]) -> shapecraft_shapr::Folder {
+        shapecraft_shapr::Folder {
+            id: id.into(),
+            name: name.into(),
+            hidden: false,
+            children: children.iter().map(|(c, t)| (c.to_string(), *t)).collect(),
+        }
+    }
+
+    /// A file whose folder lists itself and the same subfolder twice per level makes each folder once and stops,
+    /// instead of nesting a hundred levels deep (or doubling at every level).
+    #[test]
+    fn a_folder_tree_with_cycles_makes_each_folder_once() {
+        let mut s = Session::new(std::sync::Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "t");
+        let mut project = shapecraft_shapr::Project::default();
+        project.folders = vec![
+            folder("r", "root", &[("a", 0), ("a", 0)]),
+            folder("a", "A", &[("a", 0), ("b", 0), ("b", 0), ("m1", 6)]),
+            folder("b", "B", &[("a", 0), ("b", 0), ("m1", 6)]),
+        ];
+        let body = s.doc.alloc_id();
+        project.item_by_meta.insert("m1".into(), 77);
+        let by_name = std::collections::HashMap::from([(77, body)]);
+        let made = import_named_folders(&mut s, &project, &by_name);
+        assert_eq!(made.len(), 2, "A and B, once each");
+        let names: Vec<&str> = s.doc.folders.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["A", "B"]);
+        // B sits inside A; the body in the first folder the walk reaches that lists it (B, which A lists first).
+        assert_eq!(s.doc.folders[0].items, vec![s.doc.folders[1].id]);
+        assert_eq!(s.doc.folders[1].items, vec![body]);
+    }
+
+    /// Without a root folder the bodies' own folder paths still make the tree.
+    #[test]
+    fn without_a_root_folder_bodies_keep_their_paths() {
+        let mut s = Session::new(std::sync::Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "t");
+        let mut project = shapecraft_shapr::Project::default();
+        let body = s.doc.alloc_id();
+        project.bodies.push(shapecraft_shapr::Body {
+            partition: None,
+            import: None,
+            folder: vec!["Case".into(), "Lid".into()],
+            step: None,
+            name: Some("Lid".into()),
+            item_name_id: Some(5),
+            brep: Default::default(),
+            color: None,
+            hidden: false,
+            mesh: None,
+        });
+        let by_name = std::collections::HashMap::from([(5, body)]);
+        import_named_folders(&mut s, &project, &by_name);
+        let names: Vec<&str> = s.doc.folders.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["Case", "Lid"]);
+        assert_eq!(s.doc.folders[1].items, vec![body]);
+    }
 }

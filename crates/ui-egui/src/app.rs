@@ -2288,7 +2288,12 @@ impl ShapeCraftApp {
         // Answers that arrived while the window drew other things carry on here, once a frame.
         let mut pending = std::mem::take(&mut self.pending);
         pending.poll(self);
+        // A `done` that opened another dialog put it in `self.pending`, which the take left empty: keep both.
+        pending.picks_from(std::mem::take(&mut self.pending));
         self.pending = pending;
+        if self.pending.is_open() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+        }
         if !self.updating {
             return;
         }

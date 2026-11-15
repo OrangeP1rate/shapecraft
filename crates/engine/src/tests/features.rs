@@ -472,3 +472,25 @@ fn selection_radius_of_round_faces() {
     s.selection.clear();
     assert_eq!(s.selection_radius(), None);
 }
+
+/// #53: a sketch stays shown while it still has profiles nobody used, and hides once all of them are (as the
+/// reference does: a sketch with a rectangle and an ellipse stayed visible after the rectangle was extruded).
+#[test]
+fn sketch_hides_only_once_every_profile_is_used() {
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    for x in [0, 30, 60] {
+        s.execute("circle", &json!({"center": [x, 0], "radius": 5})).unwrap();
+    }
+    let sketch = s.active_sketch.unwrap();
+    assert_eq!(s.doc.sketches[0].regions().len(), 3);
+    s.execute("extrude", &json!({"sketch": sketch.0, "region": 0, "distance": 5})).unwrap();
+    assert!(s.doc.sketches[0].visible, "two holes left to use: the sketch stays");
+    s.execute("extrude", &json!({"sketch": sketch.0, "regions": [1, 2], "distance": 5})).unwrap();
+    assert!(!s.doc.sketches[0].visible, "every profile used: the sketch hides");
+    // Undo brings back the sketch as it was, and what had been used.
+    s.execute("undo", &json!({})).unwrap();
+    assert!(s.doc.sketches[0].visible);
+    s.execute("extrude", &json!({"sketch": sketch.0, "region": 1, "distance": 5})).unwrap();
+    assert!(s.doc.sketches[0].visible, "region 2 still unused");
+}

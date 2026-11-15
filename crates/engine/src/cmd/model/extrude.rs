@@ -302,6 +302,8 @@ pub(super) fn extrude(s: &mut Session, p: &Params) -> Result<Value> {
         return Err(EngineError::BadParams("draft must be between -85 and 85 degrees".into()));
     }
     let draft = draft.to_radians();
+    // The sketch regions this extrusion uses (none for a face).
+    let mut used: Vec<u32> = Vec::new();
     let (faces, plane_origin, plane_normal, on_body, sketch) = match extrude_target(s, p)? {
         ExtrudeTarget::Face { body, face } => {
             let b = s.doc.body(body).ok_or_else(|| EngineError::BadParams(format!("no body {}", body.0)))?;
@@ -337,6 +339,7 @@ pub(super) fn extrude(s: &mut Session, p: &Params) -> Result<Value> {
             }
             let plane = sk.plane;
             let on_body = sk.on_body.filter(|b| s.doc.body(*b).is_some());
+            used = faces.iter().map(|(r, _)| *r).collect();
             (faces.into_iter().map(|(_, f)| f).collect(), plane.origin, plane.normal(), on_body, Some(sketch))
         }
     };
@@ -418,8 +421,11 @@ pub(super) fn extrude(s: &mut Session, p: &Params) -> Result<Value> {
         None => add_body(s, block)?,
     };
     if let Some(sketch) = sketch {
-        // The reference app greys out a sketch once it has been used.
-        if let Some(sk) = s.doc.sketch_mut(sketch) {
+        // The reference hides a sketch once all of its profiles have been used (a sketch with profiles left stays
+        // shown, #53).
+        if let Some(sk) = s.doc.sketch_mut(sketch)
+            && sk.use_regions(&used)
+        {
             sk.visible = false;
         }
         if s.active_sketch == Some(sketch) {

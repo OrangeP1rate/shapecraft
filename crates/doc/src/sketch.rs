@@ -495,6 +495,9 @@ pub struct Sketch {
     /// Derived from the entities by the engine (see [`Sketch::regions_key`]); not saved.
     pub regions: Arc<Vec<Region>>,
     pub regions_for: u64,
+    /// Centers (sketch coordinates) of the regions a feature has used; the sketch hides once none is left. Not
+    /// saved: a reopened project starts counting again.
+    pub used: Vec<DVec2>,
 }
 
 impl PartialEq for Sketch {
@@ -525,11 +528,20 @@ impl Sketch {
             patterns: Vec::new(),
             regions: Arc::default(),
             regions_for: 0,
+            used: Vec::new(),
         }
     }
 
     pub fn regions(&self) -> &[Region] {
         &self.regions
+    }
+
+    /// Marks these regions used, and says whether every region of the sketch has been.
+    pub fn use_regions(&mut self, regions: &[u32]) -> bool {
+        let centers: Vec<DVec2> = regions.iter().filter_map(|i| self.region(*i)).map(|r| r.centroid).collect();
+        self.used.extend(centers);
+        let near = |a: DVec2, b: DVec2| a.distance(b) <= 1e-6 * (1.0 + a.length());
+        self.regions.iter().all(|r| self.used.iter().any(|u| near(*u, r.centroid)))
     }
 
     pub fn region(&self, index: u32) -> Option<&Region> {

@@ -16,8 +16,8 @@ use shapecraft_engine::{EngineError, Outcome, Session};
 use super::{Preview, Workspace};
 use crate::theme::{self, Tokens, radius};
 
-/// The steps that run off the window's thread.
-pub(crate) const HEAVY: &[&str] = &["offset_face"];
+/// The steps that run off the window's thread: the pulled tools whose kernel work can run long on a slow processor.
+pub(crate) const HEAVY: &[&str] = &["offset_face", "shell", "fillet", "chamfer"];
 /// How long the window waits for a step before it shows the card and lets it finish in the background.
 pub(super) const WAIT_INLINE: Duration = Duration::from_millis(150);
 /// The same for a live preview: the drag keeps its feel when previews are quick.
@@ -255,5 +255,39 @@ mod tests {
         assert!(ws.working.is_none());
         assert!((volume(&ws) - 20.0 * 20.0 * 25.0).abs() < 1e-3);
         assert_eq!(ws.live_step, Some(ws.session.revision), "the next pull amends it");
+    }
+
+    /// #59: Shell, Fillet and Chamfer go the same way: each finishes in the background when it takes a while, and a
+    /// second pull of the same tool replaces its step.
+    #[test]
+    fn shell_fillet_and_chamfer_work_in_the_background_too() {
+        let finish = |ws: &mut Workspace| {
+            let ctx = egui::Context::default();
+            let until = Instant::now() + Duration::from_secs(60);
+            while ws.poll_working(&ctx) && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(ws.working.is_none());
+        };
+        let (mut ws, body, top) = block();
+        ws.heavy_wait = Duration::ZERO;
+        assert!(ws.run_live("shell", json!({"body": body, "faces": [top], "thickness": 2}), false));
+        finish(&mut ws);
+        let solid = 20.0 * 20.0 * 20.0;
+        assert!((volume(&ws) - (solid - 16.0 * 16.0 * 18.0)).abs() < 1e-3, "{}", volume(&ws));
+        let steps = ws.session.undo_depth();
+        assert!(ws.run_live("shell", json!({"body": body, "faces": [top], "thickness": 1}), false));
+        finish(&mut ws);
+        assert_eq!(ws.session.undo_depth(), steps, "a second pull amends the first");
+        assert!((volume(&ws) - (solid - 18.0 * 18.0 * 19.0)).abs() < 1e-3, "{}", volume(&ws));
+
+        for (id, key) in [("fillet", "radius"), ("chamfer", "distance")] {
+            let (mut ws, body, _) = block();
+            ws.heavy_wait = Duration::ZERO;
+            assert!(ws.run_live(id, json!({"body": body, key: 2, "edges": [0]}), false));
+            finish(&mut ws);
+            let v = volume(&ws);
+            assert!(v < solid - 0.5 && v > solid * 0.95, "{id}: {v}");
+        }
     }
 }

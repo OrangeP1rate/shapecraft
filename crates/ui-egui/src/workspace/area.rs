@@ -335,7 +335,8 @@ impl Workspace {
         }
         let vp = self.viewport_rect;
         let p = ui.painter();
-        let r = Rect::from_min_size(pos2(vp.center().x - 250.0, vp.top() + 8.0), vec2(500.0, 102.0));
+        let r =
+            Rect::from_min_size(pos2(vp.center().x - 250.0, vp.top() + 8.0f32.max(crate::tablet::status_row() + 4.0)), vec2(500.0, 102.0));
         p.rect_filled(r, radius(8), Tokens::banner());
         p.rect_stroke(r, radius(8), Stroke::new(1.0, Tokens::chip_border()), StrokeKind::Inside);
         p.text(r.left_top() + vec2(12.0, 14.0), Align2::LEFT_CENTER, "Area Selection", theme::strong(13.0), Tokens::text_strong());

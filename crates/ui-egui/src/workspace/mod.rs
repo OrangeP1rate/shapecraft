@@ -972,7 +972,9 @@ impl Workspace {
             // A phone's corner title leaves the top middle free, unless a sidebar pushes the view's middle (and so
             // the banner, up to ~520 pt wide) over to it; the pen bubble beside it doesn't.
             let clear = self.viewport_rect.center().x - 270.0 > self.title_right;
-            return self.viewport_rect.top() + 8.0 + if bubble > 0.0 || !clear { 50.0 } else { 0.0 };
+            // A sideways iPhone keeps its clock in the middle of the top row: the banner goes under it.
+            let y = self.viewport_rect.top() + 8.0 + if bubble > 0.0 || !clear { 50.0 } else { 0.0 };
+            return y.max(self.viewport_rect.top() + crate::tablet::status_row() + 4.0);
         }
         (self.viewport_rect.top() + 8.0).max(self.pill_bottom + 10.0 + bubble)
     }

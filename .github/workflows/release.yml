@@ -180,7 +180,8 @@ jobs:
   ios:
     # An .ipa for sideloading (docs/ios.md): ad-hoc signed, so AltStore, Sideloadly and the like sign it with the
     # user's own Apple account. OpenCASCADE for iOS is built from pinned source and cached (cold: the longest step).
-    runs-on: macos-15
+    # It needs the iOS 27.1 SDK or newer: iOS runs an app built with an older SDK letterboxed on the iPhone Duo.
+    runs-on: macos-26
     timeout-minutes: 120
     defaults:
       run:
@@ -190,13 +191,21 @@ jobs:
       OCCT_SHA256: 5ecf094ec6b12d5413dfb851d8c3590c354058aee556e32e408bdfbf8c357d57
     steps:
       - uses: actions/checkout@v4
+      - name: Newest Xcode (iOS SDK 27.1 or newer)
+        run: |
+          ls -d /Applications/Xcode*.app
+          x=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "DEVELOPER_DIR=$x/Contents/Developer" >> "$GITHUB_ENV"
+          v=$(DEVELOPER_DIR="$x/Contents/Developer" xcrun --sdk iphoneos --show-sdk-version)
+          echo "$x: iOS SDK $v"
+          printf '27.1\n%s\n' "$v" | sort -V -C || { echo "::error::iOS SDK $v is older than 27.1 (the iPhone Duo would run it letterboxed)"; exit 1; }
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: aarch64-apple-ios }
       - uses: actions/cache@v4
         with:
           path: target/ios/occt-device
-          key: occt-ios-device-V7_9_3-${{ hashFiles('crates/kernel-occt/build.rs', 'xtask/src/ios.rs', 'xtask/src/android.rs') }}
-          restore-keys: occt-ios-device-V7_9_3-
+          key: occt-ios-device-V7_9_3-macos26-${{ hashFiles('crates/kernel-occt/build.rs', 'xtask/src/ios.rs', 'xtask/src/android.rs') }}
+          restore-keys: occt-ios-device-V7_9_3-macos26-
       - name: OCCT for iOS
         run: |
           if [ ! -f target/ios/occt-device/lib/libTKernel.a ]; then

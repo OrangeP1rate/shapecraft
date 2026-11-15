@@ -50,7 +50,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             menu: "Tools/Extrude/One-Sided",
             shortcut: Some("E"),
             help: "Pull the arrow or type a distance; negative cuts",
-            params: r#"{"distance": mm, "sketch": id, "region": n | "regions": [n, …]} | {"distance": mm, "body": id, "face": n}, "draft": degrees (0; positive leans the walls in), "sides": "one"|"symmetric", "extent": "distance"|"to_object"|"through_all" (distance then only gives the side, default -1), "to": {"body": id, "face": n}|{"plane": id} (to_object), "start_offset": mm, "start_plane": {"body", "face"}|{"plane"}? (From Plane), "result": "auto"|"new"|"union"|"subtract"|"intersect"  (default: the selected region or face; negative cuts)"#,
+            params: r#"{"distance": mm, "sketch": id, "region": n | "regions": [n, …]} | {"distance": mm, "body": id, "face": n}, "draft": degrees (0; positive leans the walls in), "sides": "one"|"symmetric", "extent": "distance"|"to_object"|"through_all" (distance then only gives the side, default -1), "to": {"body": id, "face": n}|{"plane": id} (to_object), "start_offset": mm, "start_plane": {"body", "face"}|{"plane"}? (From Plane), "result": "auto"|"new"|"union"|"subtract"|"intersect", "from": [body ids] (the bodies a union, cut or intersect works on, instead of the ones it finds)  (default: the selected region or face; negative cuts)"#,
             modifies: true,
             enabled: |_| true,
             run: extrude,

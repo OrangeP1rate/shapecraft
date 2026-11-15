@@ -511,6 +511,19 @@ impl Workspace {
 
     fn click_at(&mut self, c: Pos2, shift: bool) {
         self.items_focus = false;
+        // A cut step's Subtract From ▸ Edit...: a click on a body picks it or lets it go.
+        if self.cut_edit.is_some() {
+            let hit = self.pick_at(c).and_then(|(p, _)| p.body());
+            if let (Some(body), Some((_, list))) = (hit, self.cut_edit.as_mut()) {
+                if let Some(k) = list.iter().position(|b| *b == body) {
+                    list.remove(k);
+                } else {
+                    list.push(body);
+                }
+                self.session.selection = list.iter().map(|&body| Pick::Body { body }).collect();
+            }
+            return;
+        }
         // A step's Profile ▸ Edit...: a click on one of its sketch's regions picks it or lets it go.
         if let Some((_, sketch, _)) = self.profile_edit.clone() {
             let (o, d) = self.camera.ray(self.local(c), self.size());

@@ -293,6 +293,26 @@ pub(super) fn boolean_targets(s: &Session, block: &Shape, op: BoolOp) -> Result<
     Ok(ids)
 }
 
+/// The bodies a command's "from" names, to be joined, cut or intersected: at least one, each an exact body.
+fn explicit_targets(s: &Session, p: &Params) -> Result<Vec<ItemId>> {
+    let list = p.raw("from").and_then(Value::as_array).ok_or_else(|| EngineError::BadParams("from is a list of body ids".into()))?;
+    let mut out: Vec<ItemId> = Vec::new();
+    for v in list.iter().take(10_001) {
+        let id = ItemId(v.as_u64().ok_or_else(|| EngineError::BadParams("from is a list of body ids".into()))?);
+        let body = s.doc.body(id).ok_or_else(|| EngineError::BadParams(format!("no body {}", id.0)))?;
+        if body.is_mesh() {
+            return Err(EngineError::NotAvailable("a mesh body can't be cut by a feature".into()));
+        }
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    if out.is_empty() || out.len() > 10_000 {
+        return Err(EngineError::BadParams("pick at least one body".into()));
+    }
+    Ok(out)
+}
+
 pub(super) fn extrude(s: &mut Session, p: &Params) -> Result<Value> {
     let opts = extrude_options(p)?;
     let distance = if opts.through_all || opts.to_object { p.f64_or("distance", -1.0)? } else { p.f64("distance")? };
@@ -409,6 +429,8 @@ pub(super) fn extrude(s: &mut Session, p: &Params) -> Result<Value> {
     };
     let targets = match (op, on_body) {
         (None, _) => Vec::new(),
+        // The bodies named (Subtract From's list) work in place of the ones it would have found.
+        (Some(_), _) if p.has("from") => explicit_targets(s, p)?,
         (Some(_), Some(b)) => vec![b],
         (Some(op), None) => {
             let t = boolean_targets(s, &block, op)?;

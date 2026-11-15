@@ -461,6 +461,9 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
     if ws.profile_edit.as_ref().is_some_and(|(s, ..)| Some(*s) != ws.history.open || !matches!(ws.tool, Tool::Idle)) {
         ws.profile_edit = None;
     }
+    if ws.cut_edit.as_ref().is_some_and(|(s, _)| Some(*s) != ws.history.open || !matches!(ws.tool, Tool::Idle)) {
+        ws.cut_edit = None;
+    }
     // Show on Tool Start: a card tool that has just started opens its card once.
     // (A tool a pick started counts: the reference lights it as running, s29-010.)
     let tool_name = match &ws.tool {
@@ -527,6 +530,8 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
     let mut pick_hint: Option<&'static str> = None;
     let mut open_popup: Option<(&'static str, egui::Pos2)> = None;
     let mut profile_click: Option<usize> = None;
+    let mut cut_click: Option<usize> = None;
+    let mut cut_clear: Option<usize> = None;
     egui::Area::new(ui.scope_id().with("step-card")).fixed_pos(card.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         let (rect, _) = ui.allocate_exact_size(card.size(), Sense::click());
         let p = ui.painter().clone();
@@ -575,7 +580,14 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                 Row::Picks(label, noun, count) => {
                     p.text(pos2(lx, y + 18.0), Align2::LEFT_CENTER, tr(label), theme::body(13.0), Tokens::text());
                     // Edit... picks the step's regions again in the view; Done applies them.
-                    let editing = matches!((&source, ws.profile_edit.as_ref()), (Source::Step(i), Some((s, ..))) if s == i);
+                    let cut_step = match (&source, *label) {
+                        (Source::Step(i), "Subtract From") => Some(*i),
+                        _ => None,
+                    };
+                    let editing = match cut_step {
+                        Some(i) => ws.cut_edit.as_ref().is_some_and(|(s, _)| *s == i),
+                        None => matches!((&source, ws.profile_edit.as_ref()), (Source::Step(i), Some((s, ..))) if s == i),
+                    };
                     let link = Rect::from_min_max(pos2(rx - 50.0, y + 8.0), pos2(rx, y + 28.0));
                     // Split Body's rows are only their chips (s29-027).
                     let editable = !matches!(source, Source::Split { .. });
@@ -591,6 +603,7 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                     if editable && ui.interact(link, ui.scope_id().with(("profile-edit", n)), Sense::click()).clicked() {
                         match (&source, *label) {
                             (Source::Step(i), "Profile") => profile_click = Some(*i),
+                            (Source::Step(i), "Subtract From") => cut_click = Some(*i),
                             (_, "Subtract From") => pick_hint = Some("The cut goes into the body the profile rests on"),
                             (Source::Thread(_), _) => pick_hint = Some("Click cylindrical faces in the view to add or remove them"),
                             (Source::Step(_), "Faces to Thread") => {
@@ -603,7 +616,12 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                             _ => pick_hint = Some("Click edges in the view to add or remove them"),
                         }
                     }
-                    let count = if editing { ws.profile_edit.as_ref().map_or(*count, |(_, _, r)| r.len()) } else { *count };
+                    let count = match (cut_step, editing) {
+                        (Some(_), true) => ws.cut_edit.as_ref().map_or(*count, |(_, l)| l.len()),
+                        (Some(i), false) => cut_list(ws, i).map_or(*count, |l| l.len()),
+                        (None, true) => ws.profile_edit.as_ref().map_or(*count, |(_, _, r)| r.len()),
+                        (None, false) => *count,
+                    };
                     let g = p.layout_no_wrap(
                         format!("{count} {noun}{}", if count == 1 { "" } else { "s" }),
                         theme::strong(10.5),
@@ -615,6 +633,14 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                     let xc = pos2(chip.right() - 9.0, chip.center().y);
                     p.circle_filled(xc, 5.0, Color32::from_white_alpha(170));
                     p.text(xc, Align2::CENTER_CENTER, "×", theme::strong(8.0), theme::c(0x4a4848));
+                    // The × lets go of what the chip counts: for a cut, the bodies, picked again with Edit...
+                    if let Some(i) = cut_step
+                        && ui
+                            .interact(Rect::from_center_size(xc, vec2(16.0, 16.0)), ui.scope_id().with(("cut-clear", n)), Sense::click())
+                            .clicked()
+                    {
+                        cut_clear = Some(i);
+                    }
                 }
                 Row::Segments(label, sub, icons_, lit, key, values) => {
                     let label_sub = if *key == "result" { result_sub.as_str() } else { sub };
@@ -830,6 +856,16 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
     if let Some(i) = profile_click {
         profile_edit(ws, i);
     }
+    if let Some(i) = cut_click {
+        if ws.cut_edit.as_ref().is_some_and(|(s, _)| *s == i) {
+            cut_done(ws, i);
+        } else {
+            cut_begin(ws, i, false);
+        }
+    }
+    if let Some(i) = cut_clear {
+        cut_begin(ws, i, true);
+    }
     if let Some((key, value)) = change {
         apply(ws, source, key, value);
     }
@@ -994,6 +1030,49 @@ pub(super) fn fix(ws: &mut Workspace, step: usize) {
     }
 }
 
+/// The bodies a step's cut works on: the ones it names, else the ones the step changed (read off the models kept
+/// after each step, so nothing is rebuilt to ask).
+fn cut_list(ws: &Workspace, step: usize) -> Option<Vec<shapecraft_doc::ItemId>> {
+    let named = ws.session.doc.history.get(step)?.entries.first()?.params.get("from").and_then(Value::as_array);
+    if let Some(named) = named {
+        return Some(named.iter().filter_map(|v| v.as_u64().map(shapecraft_doc::ItemId)).collect());
+    }
+    let revision = ws.session.revision;
+    if let Some((r, s, list)) = ws.cut_found.borrow().as_ref()
+        && *r == revision
+        && *s == step
+    {
+        return Some(list.clone());
+    }
+    let list = ws.session.touches_kept()?.get(step)?.clone();
+    *ws.cut_found.borrow_mut() = Some((revision, step, list.clone()));
+    Some(list)
+}
+
+/// Subtract From ▸ Edit... (or its ×, which starts from nothing): the view picks the bodies, a click on one
+/// toggles it, and Done applies them to the step.
+fn cut_begin(ws: &mut Workspace, step: usize, empty: bool) {
+    let list = if empty { Vec::new() } else { cut_list(ws, step).unwrap_or_default() };
+    ws.session.selection = list.iter().map(|&body| shapecraft_doc::Pick::Body { body }).collect();
+    ws.cut_edit = Some((step, list));
+    ws.toast("Click the bodies to cut in the view, then Done");
+}
+
+fn cut_done(ws: &mut Workspace, step: usize) {
+    let Some((s, list)) = ws.cut_edit.take() else { return };
+    if s != step {
+        return;
+    }
+    if list.is_empty() {
+        ws.cut_edit = Some((s, list));
+        ws.toast("Pick at least one body to cut");
+        return;
+    }
+    ws.session.selection.clear();
+    let ids: Vec<u64> = list.iter().map(|b| b.0).collect();
+    let _ = ws.run("edit_step", json!({ "step": step, "params": { "from": ids } }));
+}
+
 fn profile_edit(ws: &mut Workspace, step: usize) {
     if let Some((s, sketch, regions)) = ws.profile_edit.take() {
         if s == step && !regions.is_empty() {
@@ -1013,4 +1092,50 @@ fn profile_edit(ws: &mut Workspace, step: usize) {
         None => vec![e.params.get("region").and_then(Value::as_u64).unwrap_or(0) as u32],
     };
     ws.profile_edit = Some((step, sketch, regions));
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod cut_tests {
+    use super::*;
+    use shapecraft_doc::ItemId;
+    use std::sync::Arc;
+
+    /// A cut step's Subtract From lists the bodies it cut; × starts over from none, Done refuses an empty list and
+    /// otherwise names the picked bodies in the step; Escape ends the picking, then closes the card.
+    #[test]
+    fn subtract_from_picks_the_bodies_a_cut_works_on() {
+        let mut s = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "Cut");
+        for (a, b) in [(0, 10), (20, 30)] {
+            s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+            s.execute("rectangle", &json!({"corner": [a, 0], "opposite": [b, 10]})).unwrap();
+            s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 10, "result": "new"})).unwrap();
+        }
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("rectangle", &json!({"corner": [-5, -5], "opposite": [35, 15]})).unwrap();
+        s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 5, "result": "subtract"})).unwrap();
+        let step = s.doc.history.len() - 1;
+        let (first, second) = (s.doc.bodies[0].id, s.doc.bodies[1].id);
+        let mut ws = Workspace::new(s, crate::settings::Settings::default());
+        ws.open_history_step(step);
+        // The cut found both bodies on its own.
+        assert_eq!(cut_list(&ws, step).map(|l| l.len()), Some(2));
+        // × starts from nothing: Done refuses until a body is picked.
+        cut_begin(&mut ws, step, true);
+        cut_done(&mut ws, step);
+        assert!(ws.cut_edit.is_some(), "an empty list is refused");
+        ws.cut_edit.as_mut().unwrap().1.push(second);
+        cut_done(&mut ws, step);
+        assert!(ws.cut_edit.is_none());
+        assert_eq!(cut_list(&ws, step), Some(vec![second]));
+        let volume = |ws: &Workspace, id: ItemId| ws.session.kernel.mass_props(&ws.session.doc.body(id).unwrap().shape).unwrap().volume;
+        assert!((volume(&ws, first) - 1000.0).abs() < 1e-6, "the first body is no longer cut");
+        assert!((volume(&ws, second) - 500.0).abs() < 1e-6);
+        // Escape ends the picking, then closes the step's card.
+        cut_begin(&mut ws, step, false);
+        ws.escape();
+        assert!(ws.cut_edit.is_none() && ws.history.open == Some(step));
+        ws.escape();
+        assert!(ws.history.open.is_none());
+    }
 }

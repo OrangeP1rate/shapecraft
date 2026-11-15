@@ -214,13 +214,13 @@ pub fn take_slow_warning() -> bool {
 pub fn report_failure(reason: &str) {
     let display = std::env::var_os("WAYLAND_DISPLAY").or_else(|| std::env::var_os("DISPLAY")).is_some();
     if cfg!(target_os = "linux") && !display {
-        eprintln!(
+        log::error!(
             "ShapeCraft needs a desktop to draw on, and this session has none (neither WAYLAND_DISPLAY nor DISPLAY is set).\n\
              For modeling without one, use shapecraft-cli (run, render, mcp)."
         );
         return;
     }
-    eprintln!("ShapeCraft couldn't start its graphics: {reason}");
+    log::error!("ShapeCraft couldn't start its graphics: {reason}");
     let _ = crate::dialogs::MessageDialog::new()
         .set_level(crate::dialogs::MessageLevel::Error)
         .set_title("ShapeCraft can't start")

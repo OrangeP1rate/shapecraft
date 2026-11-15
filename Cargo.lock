@@ -3560,6 +3560,7 @@ version = "0.9.1"
 dependencies = [
  "glam",
  "image",
+ "log",
  "manifold-rust",
  "serde",
  "serde_json",

@@ -29,6 +29,7 @@ mod ios {
 
     pub fn main() {
         crash_log::install();
+        shapecraft_ui::app_log::install();
         // The app's sandbox: HOME is its container; Documents shows in the Files app (UIFileSharingEnabled).
         let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
         let docs = home.join("Documents");

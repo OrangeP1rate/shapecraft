@@ -38,6 +38,8 @@ pub struct Settings {
     /// The View popover's Appearance tab: camera animations, and the field of view (0° = always orthographic).
     pub animate_camera: bool,
     pub field_of_view: f64,
+    /// Points on this screen per real millimetre, from View ▸ Calibrate Actual Size (0 = not calibrated yet).
+    pub screen_points_per_mm: f64,
     /// The Items sidebar's width; its right edge drags between 200 and 500 (as observed).
     pub items_width: f32,
     /// Constraint Settings (sketching): auto-constraining, the badges of every constraint (not just the selected
@@ -146,6 +148,7 @@ impl Default for Settings {
             tutorial_keys: false,
             animate_camera: true,
             field_of_view: 45.0,
+            screen_points_per_mm: 0.0,
             items_width: 300.0,
             auto_constrain: true,
             always_show_constraints: false,

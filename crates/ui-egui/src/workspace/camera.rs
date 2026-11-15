@@ -10,6 +10,26 @@ use super::{Anim, Workspace};
 /// A selection's box and a key for the picked bodies and meshes it was worked out from.
 pub(crate) type KeptBox = Option<(u64, Option<(DVec3, DVec3)>)>;
 
+/// A screen with fewer points per millimetre than this is a mistake (about 25 points per inch).
+const MIN_POINTS_PER_MM: f64 = 1.0;
+const MAX_POINTS_PER_MM: f64 = 20.0;
+/// Where calibration starts: a Mac's points run about 110 to the inch, other systems' 96 (their "100%").
+const GUESS_POINTS_PER_MM: f64 = if cfg!(target_os = "macos") { 110.0 / 25.4 } else { 96.0 / 25.4 };
+/// The card to match: a bank or ID card (ISO/IEC 7810 ID-1), 85.60 × 53.98 mm, which nearly everyone has at hand.
+pub(crate) const CARD_MM: (f64, f64) = (85.60, 53.98);
+
+/// The orthographic camera distance at which a viewport `height` points tall shows `per_mm` points per model mm.
+pub(crate) fn actual_size_distance(camera: &Camera, height: f64, per_mm: f64) -> f64 {
+    let half = (camera.fov_y / 2.0).tan().max(1e-6);
+    // world_per_pixel = 2 · distance · tan(fov/2) / height = 1 / per_mm.
+    height.max(1.0) / per_mm / (2.0 * half)
+}
+
+/// Keeps a tried calibration within what any screen could be.
+pub(crate) fn clamp_points_per_mm(v: f64) -> f64 {
+    if v.is_finite() { v.clamp(MIN_POINTS_PER_MM, MAX_POINTS_PER_MM) } else { GUESS_POINTS_PER_MM }
+}
+
 const STANDARD_VIEWS: [StandardView; 7] = [
     StandardView::Default,
     StandardView::Front,
@@ -61,17 +81,47 @@ impl Workspace {
         self.animate_to(to);
     }
 
-    /// Turns to the standard view nearest the current direction (View ▸ Nearest Ortho View).
-    pub fn nearest_ortho_view(&mut self) {
+    /// The straight-on view nearest the current direction.
+    fn nearest_standard(&self) -> Option<StandardView> {
         let back = self.camera.back();
-        let best = STANDARD_VIEWS[1..].iter().copied().max_by(|a, b| {
+        STANDARD_VIEWS[1..].iter().copied().max_by(|a, b| {
             let da = Camera::standard(*a, DVec3::ZERO, 1.0).back().dot(back);
             let db = Camera::standard(*b, DVec3::ZERO, 1.0).back().dot(back);
             da.total_cmp(&db)
-        });
-        if let Some(v) = best {
+        })
+    }
+
+    /// Turns to the standard view nearest the current direction (View ▸ Nearest Ortho View).
+    pub fn nearest_ortho_view(&mut self) {
+        if let Some(v) = self.nearest_standard() {
             self.standard_view(v);
         }
+    }
+
+    /// View ▸ Actual Size (#62): zooms so 1 mm of the model is 1 mm on the screen, to hold a part or a ruler against.
+    /// Only a flat (orthographic) view has one scale, so a perspective view turns straight-on first, as Nearest Ortho
+    /// View does. The first time it asks how big this screen's millimetres are.
+    pub fn actual_size(&mut self) {
+        let per_mm = self.settings.screen_points_per_mm;
+        if !(per_mm.is_finite() && per_mm >= MIN_POINTS_PER_MM) {
+            self.calibrate_actual_size(true);
+            return;
+        }
+        let mut to = match (self.camera.is_ortho() && self.anim.is_none(), self.nearest_standard()) {
+            (false, Some(v)) => Camera::standard(v, self.camera.target, self.camera.distance),
+            _ => self.camera,
+        };
+        self.settings.apply_view(&mut to);
+        to.distance = actual_size_distance(&to, self.size().y, per_mm);
+        self.animate_to(to);
+        self.toast("Actual size: 1 mm on the model is 1 mm on the screen");
+    }
+
+    /// Opens the calibration card, starting from the last calibration or a guess for this kind of screen.
+    pub fn calibrate_actual_size(&mut self, then_apply: bool) {
+        let s = self.settings.screen_points_per_mm;
+        let start = if s.is_finite() && s >= MIN_POINTS_PER_MM { s } else { GUESS_POINTS_PER_MM };
+        self.calibrating = Some((start, then_apply));
     }
 
     pub fn standard_view(&mut self, view: StandardView) {
@@ -278,5 +328,23 @@ impl Workspace {
 
     pub fn camera_eye(&self) -> DVec3 {
         self.camera.eye()
+    }
+}
+
+#[cfg(test)]
+mod actual_size_tests {
+    use super::*;
+
+    #[test]
+    fn actual_size_puts_one_model_mm_on_one_screen_mm() {
+        for (fov, height, per_mm) in [(30.0f64, 800.0, 4.33), (60.0, 1324.0, 3.78), (10.0, 500.0, 6.1)] {
+            let mut c = Camera::standard(StandardView::Top, DVec3::ZERO, 50.0);
+            c.fov_y = fov.to_radians();
+            c.distance = actual_size_distance(&c, height, per_mm);
+            let mm_per_point = c.world_per_pixel(height);
+            assert!((mm_per_point * per_mm - 1.0).abs() < 1e-9, "{fov} {height} {per_mm}: {mm_per_point}");
+        }
+        assert_eq!(clamp_points_per_mm(f64::NAN), GUESS_POINTS_PER_MM);
+        assert_eq!(clamp_points_per_mm(0.01), MIN_POINTS_PER_MM);
     }
 }

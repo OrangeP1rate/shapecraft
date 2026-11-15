@@ -120,6 +120,7 @@ fn run(lines: &[Value], out: Option<&Path>, outcome: &mut Outcome) -> Result<()>
         settings_file: None,
         hosted: false,
     };
+    shapecraft_ui::app_log::install_in_memory();
     let mut h = Harness::builder()
         .with_size(size.to_vec2())
         .with_pixels_per_point(scale)

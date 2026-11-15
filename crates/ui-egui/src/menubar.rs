@@ -32,6 +32,8 @@ pub enum AppAction {
     Tutorials,
     /// Help: opens a web page in the browser.
     OpenPage(&'static str),
+    /// Help ▸ Show Log…: this run's log in a card.
+    ShowLog,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -432,6 +434,8 @@ pub fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 item("Right", Some("CmdOrCtrl+6"), View(StandardView::Right), InProject),
                 item("Left", Some("CmdOrCtrl+7"), View(StandardView::Left), InProject),
                 item("Nearest Ortho View", Some("CmdOrCtrl+8"), Ui(UiAction::NearestOrtho), InProject),
+                item("Actual Size", None, Ui(UiAction::ActualSize), InProject),
+                item("Calibrate Actual Size…", None, Ui(UiAction::CalibrateActualSize), InProject),
                 Entry::Sub {
                     label: "Rotate View",
                     items: vec![
@@ -527,6 +531,7 @@ pub fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 item("ShapeCraft Website", None, App(OpenPage(WEBSITE)), Always),
                 sep(),
                 item("Report a Problem or Idea…", None, App(OpenPage(ISSUES)), Always),
+                item("Show Log…", None, App(ShowLog), Always),
                 sep(),
                 item("Release Notes", None, App(OpenPage(RELEASES)), Always),
                 item("Check for Updates…", None, App(CheckUpdates), Always),

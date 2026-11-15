@@ -76,6 +76,10 @@ pub enum ToolKind {
 pub enum UiAction {
     /// View menu entries (the reference's View menu, 04-menu-tree-workspace).
     NearestOrtho,
+    /// View ▸ Actual Size: 1 mm of the model is 1 mm on the screen (ours, #62).
+    ActualSize,
+    /// View ▸ Calibrate Actual Size…: match a card on the screen to a real one.
+    CalibrateActualSize,
     /// Rotate View: 0–3 left/right/up/down by 15°, 4–7 the same by 45°.
     RotateView(u8),
     /// Grid Position: 0 XY, 1 YZ, 2 ZX.

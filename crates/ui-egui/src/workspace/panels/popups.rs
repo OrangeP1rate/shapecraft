@@ -525,6 +525,7 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
     if ws.show_shortcuts {
         crate::workspace::shortcuts::window(ws, ui);
     }
+    crate::workspace::calibrate::card(ws, ui);
     select_through(ws, ui);
 
     command_search(ws, ui);

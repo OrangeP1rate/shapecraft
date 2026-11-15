@@ -49,6 +49,8 @@ impl Workspace {
     pub fn ui_action(&mut self, u: UiAction) {
         match u {
             UiAction::NearestOrtho => self.nearest_ortho_view(),
+            UiAction::ActualSize => self.actual_size(),
+            UiAction::CalibrateActualSize => self.calibrate_actual_size(false),
             UiAction::RotateView(i) => self.rotate_view(i % 4, i >= 4),
             UiAction::GridPosition(i) => self.grid_plane = (i as usize).min(2),
             UiAction::ToggleGrid => self.view_opts.grid = !self.view_opts.grid,

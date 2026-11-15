@@ -155,6 +155,8 @@ pub struct ShapeCraftApp {
     welcome_nav: Option<&'static str>,
     /// For textures made outside a frame (a tutorial step's picture).
     egui: egui::Context,
+    /// Help ▸ Show Log is open.
+    show_log: bool,
     /// The desktop app checks for updates and shows them (snapshots and tests don't).
     updating: bool,
     updates: crate::updates::UpdateUi,
@@ -214,11 +216,11 @@ impl ShapeCraftApp {
             let ctx = ctx.clone();
             match Server::start(port, move || ctx.request_repaint()) {
                 Ok(s) => {
-                    eprintln!("control channel on 127.0.0.1:{}", s.port);
+                    log::info!("control channel on 127.0.0.1:{}", s.port);
                     Some(s)
                 }
                 Err(e) => {
-                    eprintln!("control channel: {e}");
+                    log::warn!("control channel: {e}");
                     None
                 }
             }
@@ -260,6 +262,7 @@ impl ShapeCraftApp {
             home_nav: None,
             welcome_nav: None,
             egui: ctx.clone(),
+            show_log: false,
             updating,
             updates: Default::default(),
             kernel,
@@ -755,7 +758,7 @@ impl ShapeCraftApp {
             let dir = ws.session.path.clone().unwrap_or_else(|| project::unique_dir(&root, &ws.session.doc.name));
             match project::save(&ws.session.doc, ws.session.kernel.as_ref(), &dir) {
                 Ok(()) => open = Some(dir),
-                Err(e) => eprintln!("couldn't save before restarting: {e}"),
+                Err(e) => log::warn!("couldn't save before restarting: {e}"),
             }
         }
         let mut args = Vec::new();
@@ -773,7 +776,7 @@ impl ShapeCraftApp {
         }
         let started = std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(args).env(RESTARTED_ENV, "1").spawn());
         if let Err(e) = started {
-            eprintln!("couldn't restart: {e}");
+            log::error!("couldn't restart: {e}");
         }
         std::process::exit(0);
     }
@@ -1407,6 +1410,10 @@ impl ShapeCraftApp {
                     "bottom" => StandardView::Bottom,
                     "right" => StandardView::Right,
                     "left" => StandardView::Left,
+                    "actual_size" => {
+                        ws.actual_size();
+                        return Ok(json!({ "calibrating": ws.calibrating.is_some() }));
+                    }
                     _ => StandardView::Default,
                 };
                 ws.standard_view(v);
@@ -1635,6 +1642,11 @@ impl ShapeCraftApp {
                 self.home_prefs = Some(params.get("tab").and_then(Value::as_u64).unwrap_or(0).min(4) as usize);
                 Ok(Value::Null)
             }
+            // Help ▸ Show Log, on either screen.
+            "ui.toggle" if params.get("panel").and_then(Value::as_str) == Some("log") => {
+                self.show_log = !self.show_log;
+                Ok(json!({ "open": self.show_log }))
+            }
             "ui.edit" => {
                 // Edit ▸ Copy / Paste as the menu runs them.
                 let ws = self.ws.as_deref_mut().ok_or("no project open")?;
@@ -1811,7 +1823,7 @@ impl ShapeCraftApp {
         match self.ws.as_deref_mut() {
             Some(ws) => {
                 // The first-run windows sit over the workspace: its keys wait until they're answered.
-                ws.keys_blocked = first_run_open;
+                ws.keys_blocked = first_run_open || self.show_log;
                 ws.ui(ui, render_state);
                 // Tutorials run on the default tool types and leave the remembered ones alone.
                 if ws.tutorial.is_none() {
@@ -2105,6 +2117,7 @@ impl ShapeCraftApp {
                 self.landing.section =
                     if a == AppAction::Tutorials { crate::landing::Section::Tutorials } else { crate::landing::Section::GetStarted };
             }
+            AppAction::ShowLog => self.show_log = true,
             AppAction::OpenPage(url) if self.hosted => self.egui.open_url(egui::OpenUrl::new_tab(url)),
             AppAction::OpenPage(url) => open_page(url),
         }
@@ -2539,6 +2552,9 @@ impl eframe::App for ShapeCraftApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let rs = frame.wgpu_render_state().cloned();
         self.frame(ui, rs.as_ref());
+        if self.show_log {
+            crate::app_log::window(ui, &mut self.show_log);
+        }
         if let Some(url) = crate::landing::take_tablet_link() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }

@@ -9,6 +9,7 @@ mod actions;
 mod annotate;
 mod area;
 mod badges;
+mod calibrate;
 mod camera;
 mod commands;
 mod constraints;
@@ -367,6 +368,8 @@ pub struct Workspace {
     /// Isolate: only these bodies are shown (and pickable).
     pub isolated: Option<Vec<ItemId>>,
     pub show_shortcuts: bool,
+    /// View ▸ Calibrate Actual Size is open: the points per mm being tried, and whether Actual Size follows Done.
+    pub calibrating: Option<(f64, bool)>,
     /// Keyboard Shortcuts being customised: the keys changed so far (label, keys) and the row taking a key.
     pub key_edits: Option<KeyEdits>,
     /// App preferences (copied back to the app, which saves them).
@@ -749,6 +752,7 @@ impl Workspace {
             dim_edit: None,
             isolated: None,
             show_shortcuts: false,
+            calibrating: None,
             key_edits: None,
             settings,
             help_open: false,
@@ -841,7 +845,9 @@ impl Workspace {
     }
 
     pub fn toast(&mut self, text: impl Into<String>) {
-        self.toasts.push(Toast { text: text.into(), until: self.now + 3.0 });
+        let text = text.into();
+        log::info!("shown: {text}");
+        self.toasts.push(Toast { text, until: self.now + 3.0 });
     }
 
     /// Move/Rotate's Auto-orientation (on unless switched off; remembered like a variant).

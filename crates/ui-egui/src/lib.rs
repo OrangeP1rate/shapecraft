@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod app;
+pub mod app_log;
 pub mod backup;
 pub mod cloud;
 pub mod control;

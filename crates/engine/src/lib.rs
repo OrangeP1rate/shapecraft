@@ -171,7 +171,9 @@ impl Session {
         let vars = self.doc.variables.clone();
         let p = Params::with_variables(params, &vars);
         self.log_params = None;
+        let started = std::time::Instant::now();
         let mut result = catch_unwind(AssertUnwindSafe(|| (spec.run)(self, &p)));
+        let took = started.elapsed().as_millis();
         if strict_params()
             && matches!(result, Ok(Ok(_)))
             && let Some(k) = p.unread().into_iter().find(|k| !matches!(k.as_str(), "construction"))
@@ -224,14 +226,22 @@ impl Session {
                 {
                     self.adopt_history(h);
                 }
+                // Only steps that change the model: picks and camera moves would bury them. A replay is quiet too.
+                if changed && !self.replaying {
+                    log::info!("{} ({id}): done in {took} ms", spec.label);
+                }
                 Ok(Outcome { value, changed })
             }
             Ok(Err(e)) => {
                 self.restore(before, selection_before);
+                if !self.replaying {
+                    log::warn!("{} ({id}) didn't work after {took} ms: {e}", spec.label);
+                }
                 Err(e)
             }
             Err(_) => {
                 self.restore(before, selection_before);
+                log::error!("{} ({id}) failed inside and was undone (see crash.log)", spec.label);
                 Err(EngineError::Panicked(id.to_string()))
             }
         }

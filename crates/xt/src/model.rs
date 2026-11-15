@@ -794,7 +794,423 @@ fn body(f: &XtFile, n: &Node) -> Result<Body> {
         _ => None,
     });
     join_split_walls(&mut cx.b);
+    split_wall_rings(&mut cx.b);
     Ok(Body { node: n.index, brep: cx.b, name, color, attributes, mesh })
+}
+
+/// A clamped B-spline curve value at `t`.
+fn nurbs_point(n: &Nurbs<DVec3>, t: f64) -> DVec3 {
+    let full = expanded(&n.knots, &n.mults);
+    let basis = blend::basis(&full, n.degree as usize, t);
+    let weight = |i: usize| n.weights.as_ref().map_or(1.0, |w| w[i]);
+    let (mut p, mut w) = (DVec3::ZERO, 0.0);
+    for (i, b) in basis.iter().enumerate() {
+        let k = b * weight(i);
+        p += k * n.poles[i];
+        w += k;
+    }
+    if w != 0.0 { p / w } else { p }
+}
+
+fn expanded(knots: &[f64], mults: &[u32]) -> Vec<f64> {
+    knots.iter().zip(mults).flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize)).collect()
+}
+
+/// A point along a curve at parameter `t` (0..1 of its natural span).
+fn curve_point(c: &Curve, t: f64) -> Option<DVec3> {
+    Some(match c {
+        Curve::Line { origin, dir } => origin + *dir * t,
+        Curve::BSpline(n) => nurbs_point(n, t),
+        Curve::Through(pts) => {
+            let last = pts.len().checked_sub(1)?;
+            let x = t * last as f64;
+            let i = (x.floor() as usize).min(last.saturating_sub(1));
+            let f = x - i as f64;
+            pts[i] * (1.0 - f) + pts[i + 1] * f
+        }
+        _ => return None,
+    })
+}
+
+/// The curve's parameter and distance of the point on it nearest to `p`.
+fn curve_nearest(c: &Curve, p: DVec3) -> Option<(f64, f64)> {
+    // A line spans its whole infinite length; its parameter is the projection (the vertices trim it).
+    if let Curve::Line { origin, dir } = c {
+        let l2 = dir.length_squared();
+        if !(l2 > 0.0) {
+            return None;
+        }
+        let t = (p - *origin).dot(*dir) / l2;
+        let d = (*origin + *dir * t).distance(p);
+        return Some((t, d));
+    }
+    let steps = 64usize;
+    let mut best = (0.0, f64::INFINITY);
+    for i in 0..=steps {
+        let t = i as f64 / steps as f64;
+        let d = curve_point(c, t)?.distance(p);
+        if d < best.1 {
+            best = (t, d);
+        }
+    }
+    // Local refinement around the best sample.
+    let (mut lo, mut hi) = ((best.0 - 1.0 / steps as f64).max(0.0), (best.0 + 1.0 / steps as f64).min(1.0));
+    for _ in 0..48 {
+        let m1 = lo + (hi - lo) / 3.0;
+        let m2 = hi - (hi - lo) / 3.0;
+        if curve_point(c, m1)?.distance(p) < curve_point(c, m2)?.distance(p) {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    let t = (lo + hi) / 2.0;
+    Some((t, curve_point(c, t)?.distance(p)))
+}
+
+/// Splits a clamped B-spline at `t`: the piece before and the piece after it.
+fn nurbs_split(n: &Nurbs<DVec3>, t: f64) -> Option<(Nurbs<DVec3>, Nurbs<DVec3>)> {
+    let p = n.degree as usize;
+    let mut full = expanded(&n.knots, &n.mults);
+    let mut poles = n.poles.clone();
+    let mut weights = n.weights.clone();
+    if poles.len() <= p || full.len() != poles.len() + p + 1 {
+        return None;
+    }
+    // Insert `t` up to multiplicity `p` (NURBS book A4.1).
+    let have = full.iter().filter(|&&k| (k - t).abs() < 1e-12).count();
+    for _ in have..p {
+        let k = span(&full, p, t);
+        let np = poles.len();
+        let mut q = Vec::with_capacity(np + 1);
+        let mut wq = Vec::with_capacity(np + 1);
+        for i in 0..np + 1 {
+            if i <= k - p {
+                q.push(poles[i]);
+                wq.push(weights.as_ref().map_or(1.0, |w| w[i]));
+            } else if i >= k + 1 {
+                q.push(poles[i - 1]);
+                wq.push(weights.as_ref().map_or(1.0, |w| w[i - 1]));
+            } else {
+                let a = if full[i + p] - full[i] > 1e-12 { (t - full[i]) / (full[i + p] - full[i]) } else { 0.0 };
+                let (pa, wa) = (&poles[i - 1], weights.as_ref().map_or(1.0, |w| w[i - 1]));
+                let (pb, wb) = (&poles[i], weights.as_ref().map_or(1.0, |w| w[i]));
+                q.push(*pa * (1.0 - a) + *pb * a);
+                wq.push(wa * (1.0 - a) + wb * a);
+            }
+        }
+        full.insert(k + 1, t);
+        poles = q;
+        weights = if n.weights.is_some() { Some(wq) } else { None };
+    }
+    // With `t` at multiplicity `p`, the split point is pole `k`.
+    let k = span(&full, p, t);
+    let compress = |v: &[f64]| -> Vec<(f64, u32)> {
+        let mut out: Vec<(f64, u32)> = Vec::new();
+        for &k in v {
+            match out.last_mut() {
+                Some((value, count)) if (*value - k).abs() < 1e-12 => *count += 1,
+                _ => out.push((k, 1)),
+            }
+        }
+        out
+    };
+    let part = |poles: &[DVec3], knots: &[f64], weights: &Option<Vec<f64>>| -> Option<Nurbs<DVec3>> {
+        let mut k2 = knots.to_vec();
+        let runs = compress(&k2);
+        let kn: Vec<f64> = runs.iter().map(|(k, _)| *k).collect();
+        let mu: Vec<u32> = runs.iter().map(|(_, m)| *m).collect();
+        let np = kn.len() - 1 - p;
+        if np != poles.len() || np < p + 1 {
+            return None;
+        }
+        Some(Nurbs { degree: n.degree, poles: poles.to_vec(), weights: weights.clone(), knots: kn, mults: mu, periodic: false })
+    };
+    // Left: poles 0..=k over knots ..=t (end clamped), right: poles k.. over knots t.. (start clamped).
+    let left = {
+        let mut kk = full[..k + p + 1].to_vec();
+        kk.push(t);
+        part(&poles[..=k], &kk, &weights.as_ref().map(|w| w[..=k].to_vec()))?
+    };
+    let right = {
+        let mut kk = full[k..].to_vec();
+        kk.insert(0, t);
+        part(&poles[k..], &kk, &weights.as_ref().map(|w| w[k..].to_vec()))?
+    };
+    Some((left, right))
+}
+
+/// The knot span index holding `t`.
+fn span(full: &[f64], p: usize, t: f64) -> usize {
+    let n = full.len() - 1;
+    if t >= full[n] - 1e-12 {
+        return n - p - 1;
+    }
+    let mut k = p;
+    while k < n - p - 1 && t >= full[k + 1] - 1e-12 {
+        k += 1;
+    }
+    k
+}
+
+/// Cuts a curve at parameter `t` into the piece before and after it. `pa` and `pb` are the curve's own endpoints
+/// in curve order, so line pieces can be rebuilt exactly through them and the cut point.
+fn curve_split(c: &Curve, t: f64, pa: DVec3, pb: DVec3) -> Option<(Curve, Curve)> {
+    let corner = curve_point(c, t)?;
+    Some(match c {
+        Curve::Line { .. } => (Curve::Line { origin: pa, dir: corner - pa }, Curve::Line { origin: corner, dir: pb - corner }),
+        Curve::BSpline(n) => {
+            let (a, b) = nurbs_split(n, t)?;
+            (Curve::BSpline(a), Curve::BSpline(b))
+        }
+        Curve::Through(pts) => {
+            let last = pts.len().checked_sub(1)?;
+            let x = t * last as f64;
+            let i = (x.floor() as usize).min(last.saturating_sub(1));
+            let f = x - i as f64;
+            let mid = pts[i] * (1.0 - f) + pts[i + 1] * f;
+            let mut a = pts[..=i].to_vec();
+            a.push(mid);
+            let mut b = vec![mid];
+            b.extend_from_slice(&pts[i + 1..]);
+            (Curve::Through(a), Curve::Through(b))
+        }
+        _ => return None,
+    })
+}
+
+/// A wall stored with its rim rings and holes as closed loops of one face on a surface closed in u: Parasolid
+/// needs no seam edges there, but a face on a non-periodic surface does. Cut the two rim rings at the surface's
+/// seam and join the halves with two seam edges, so the outer boundary is one wire, as the STEP form of such a
+/// body has it. Holes stay; the seams and rims are left without pcurves for the kernel to project.
+fn split_wall_rings(b: &mut Brep) {
+    for fi in 0..b.faces.len() {
+        split_face_rings(b, fi);
+    }
+}
+
+/// The plan for one face: the ring to cut at each seam corner, and the parameter of the cut on the fin that
+/// carries it. `None` when the face is not a closed-wall face or anything refuses.
+fn ring_plan(b: &Brep, fi: usize) -> Option<(usize, [DVec3; 2], [usize; 2], [f64; 2])> {
+    let face = &b.faces[fi];
+    if face.loops.len() < 3 {
+        return None;
+    }
+    let Surface::BSpline(s) = &b.surfaces[face.surface] else { return None };
+    if s.nv < 2 {
+        return None;
+    }
+    // The surface must be exactly closed in u: its end pole columns coincide.
+    let scale = s.poles.iter().fold(1.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()).max(p.z.abs()));
+    let mut gap = 0.0f64;
+    for j in 0..s.nv {
+        gap = gap.max(s.poles[j].distance(s.poles[(s.nu - 1) * s.nv + j]));
+    }
+    if gap > 1e-6 * scale {
+        return None;
+    }
+    // Each seam corner must sit on exactly one closed ring (the rims run along the surface's v ends).
+    let corners = [s.poles[0], s.poles[s.nv - 1]];
+    let mut rings = [None; 2];
+    let mut holes = 0;
+    for (li, l) in face.loops.iter().enumerate() {
+        if !loop_closes(b, l) {
+            return None;
+        }
+        let mut which = None;
+        let mut samplable = true;
+        for (ci, &c) in corners.iter().enumerate() {
+            let mut best = f64::INFINITY;
+            for fin in l {
+                let Some(curve_index) = b.edges[fin.edge].curve else {
+                    samplable = false;
+                    break;
+                };
+                let Some((_, d)) = curve_nearest(&b.curves[curve_index], c) else {
+                    samplable = false;
+                    break;
+                };
+                best = best.min(d);
+            }
+            if !samplable {
+                break;
+            }
+            if best < 1e-3 {
+                if which.is_some() {
+                    return None;
+                }
+                which = Some(ci);
+            }
+        }
+        let which = if samplable { which } else { None };
+        match which {
+            Some(0) if rings[0].is_none() => rings[0] = Some(li),
+            Some(1) if rings[1].is_none() => rings[1] = Some(li),
+            Some(_) => return None,
+            None => holes += 1,
+        }
+    }
+    let (ra, rb) = (rings[0]?, rings[1]?);
+    if ra == rb {
+        return None;
+    }
+    // On each rim ring, the fin to cut and where.
+    let mut cuts = [0.0; 2];
+    for (ci, &ring) in [ra, rb].iter().enumerate() {
+        let mut best = (f64::INFINITY, 0usize, 0.0);
+        for (ki, fin) in face.loops[ring].iter().enumerate() {
+            let e = &b.edges[fin.edge];
+            let curve = b.curves.get(e.curve?)?;
+            let (t, d) = curve_nearest(curve, corners[ci])?;
+            if d < best.0 {
+                best = (d, ki, t);
+            }
+        }
+        if best.0 > 1e-3 {
+            return None;
+        }
+        cuts[ci] = best.2;
+    }
+    Some((fi, corners, [ra, rb], cuts))
+}
+
+/// Applies one face's ring plan: cuts its rim rings at the seam corners, adds the two seam edges, and rebuilds
+/// the face's loops as one outer wire over both rims plus the kept holes.
+fn split_face_rings(b: &mut Brep, fi: usize) -> Option<()> {
+    let (_, corners, rings, cuts) = ring_plan(b, fi)?;
+    let surface = match &b.surfaces[b.faces[fi].surface] {
+        Surface::BSpline(s) => s.clone(),
+        _ => return None,
+    };
+    // The seam's 3D curve is the surface's own u iso: its pole column.
+    let iso = Nurbs {
+        degree: surface.v_degree,
+        poles: (0..surface.nv).map(|j| surface.poles[j]).collect(),
+        weights: surface.weights.as_ref().map(|w| (0..surface.nv).map(|j| w[j]).collect()),
+        knots: surface.v_knots.clone(),
+        mults: surface.v_mults.clone(),
+        periodic: false,
+    };
+    // Plan everything with the new vertices' and edges' future indices, so nothing mutates before the checks pass.
+    let vi = [b.vertices.len(), b.vertices.len() + 1];
+    let mut all_edges = b.edges.clone();
+    let mut new_curves = Vec::new();
+    let mut ring_fins = [b.faces[fi].loops[rings[0]].clone(), b.faces[fi].loops[rings[1]].clone()];
+    for (ci, ring) in ring_fins.iter_mut().enumerate() {
+        // The fin that carries the corner: its curve is cut at the corner into two edges.
+        let k = (0..ring.len())
+            .map(|ki| {
+                let curve = b.curves.get(b.edges[ring[ki].edge].curve?)?;
+                let (_, d) = curve_nearest(curve, corners[ci])?;
+                Some((d, ki))
+            })
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .min_by(|x, y| x.0.total_cmp(&y.0))
+            .map(|(_, ki)| ki)?;
+        let fin = ring[k];
+        let e = &b.edges[fin.edge];
+        let curve = &b.curves[e.curve?];
+        let Some((sv, ev)) = e.start.zip(e.end) else { return None };
+        let (ps, pe) = (b.vertices[sv], b.vertices[ev]);
+        // Per the edge's sense against its curve, the half at the walked-from end comes first.
+        let (pa, pb) = if e.reversed { (pe, ps) } else { (ps, pe) };
+        let (before, after) = curve_split(curve, cuts[ci], pa, pb)?;
+        // Both halves keep the edge's own sense: the shim reverses their curve for a reversed edge.
+        let e1 = all_edges.len();
+        let e2 = all_edges.len() + 1;
+        let c0i = b.curves.len() + new_curves.len();
+        new_curves.push(before);
+        new_curves.push(after);
+        all_edges.push(Edge { curve: Some(c0i), reversed: e.reversed, start: e.start, end: Some(vi[ci]), tolerance: e.tolerance });
+        all_edges.push(Edge { curve: Some(c0i + 1), reversed: e.reversed, start: Some(vi[ci]), end: e.end, tolerance: e.tolerance });
+        let halves = if fin.forward { [e1, e2] } else { [e2, e1] };
+        ring[k] = Fin { edge: halves[0], forward: fin.forward, pcurve: None };
+        ring.insert(k + 1, Fin { edge: halves[1], forward: fin.forward, pcurve: None });
+    }
+    let chain_a = walk_chain(&all_edges, &ring_fins[0], vi[0])?;
+    let chain_b = walk_chain(&all_edges, &ring_fins[1], vi[1])?;
+    let seam = all_edges.len();
+    let iso_curve = b.curves.len() + new_curves.len();
+    all_edges.push(Edge { curve: Some(iso_curve), reversed: false, start: Some(vi[0]), end: Some(vi[1]), tolerance: None });
+    all_edges.push(Edge { curve: Some(iso_curve), reversed: false, start: Some(vi[0]), end: Some(vi[1]), tolerance: None });
+    let mut outer = vec![Fin { edge: seam, forward: true, pcurve: None }];
+    outer.extend(chain_b);
+    outer.push(Fin { edge: seam + 1, forward: false, pcurve: None });
+    outer.extend(chain_a);
+    if !loop_closes_on(&all_edges, &outer) {
+        return None;
+    }
+    // All checks passed: commit.
+    b.vertices.push(corners[0]);
+    b.vertices.push(corners[1]);
+    for curve in new_curves {
+        b.curves.push(curve);
+    }
+    b.curves.push(Curve::BSpline(iso));
+    b.edges.extend(all_edges[b.edges.len()..].to_vec());
+    let mut loops = vec![outer];
+    for (li, l) in b.faces[fi].loops.iter().enumerate() {
+        if li != rings[0] && li != rings[1] {
+            loops.push(l.clone());
+        }
+    }
+    b.faces[fi].loops = loops;
+    Some(())
+}
+
+/// Walks a closed ring of fins from `start` (a vertex the ring passes once), orienting each fin along the walk.
+fn walk_chain(edges: &[Edge], fins: &[Fin], start: usize) -> Option<Vec<Fin>> {
+    let ends = |f: &Fin| {
+        let e = &edges[f.edge];
+        let (s, t) = if e.reversed { (e.end, e.start) } else { (e.start, e.end) };
+        if f.forward { (s, t) } else { (t, s) }
+    };
+    let mut cur = start;
+    let mut used = vec![false; fins.len()];
+    let mut out = Vec::new();
+    for _ in 0..fins.len() {
+        let mut pick = None;
+        for (i, f) in fins.iter().enumerate() {
+            if used[i] {
+                continue;
+            }
+            let (s, t) = ends(f);
+            if s == Some(cur) {
+                pick = Some((i, *f));
+                break;
+            }
+            if t == Some(cur) {
+                pick = Some((i, Fin { edge: f.edge, forward: !f.forward, pcurve: f.pcurve }));
+                break;
+            }
+        }
+        let (i, f) = pick?;
+        cur = ends(&f).1?;
+        used[i] = true;
+        out.push(f);
+    }
+    (cur == start).then_some(out)
+}
+
+/// [`loop_closes`] over an edge list that still contains planned (uncommitted) edges.
+fn loop_closes_on(edges: &[Edge], fins: &[Fin]) -> bool {
+    if fins.len() < 3 {
+        return false;
+    }
+    let ends = |f: &Fin| {
+        let e = &edges[f.edge];
+        let (s, t) = if e.reversed { (e.end, e.start) } else { (e.start, e.end) };
+        if f.forward { (s, t) } else { (t, s) }
+    };
+    (0..fins.len())
+        .map(|i| {
+            let f = &fins[i];
+            let (s, t) = ends(f);
+            let (gs, _) = ends(&fins[(i + 1) % fins.len()]);
+            (s.is_some() && t.is_some(), t == gs)
+        })
+        .all(|(known, joins)| known && joins)
 }
 
 /// A clamped B-spline surface value at `(u, v)`, for comparing two surfaces' geometry.
@@ -875,10 +1291,11 @@ fn domain(s: &NurbsSurface) -> Option<(f64, f64, f64, f64)> {
     (u1 > u0 && v1 > v0).then_some((u0, u1, v0, v1))
 }
 
-/// Where a fin starts and ends (vertex indices), following the edge's and the fin's senses.
+/// Where a fin starts and ends (vertex indices), following the edge's and the fin's senses. The edge's
+/// `reversed` flag is about its curve, not its topology, so the walk uses the vertices directly.
 fn fin_ends(b: &Brep, f: &Fin) -> (Option<usize>, Option<usize>) {
     let e = &b.edges[f.edge];
-    let (s, t) = if e.reversed { (e.end, e.start) } else { (e.start, e.end) };
+    let (s, t) = (e.start, e.end);
     if f.forward { (s, t) } else { (t, s) }
 }
 
@@ -1132,5 +1549,81 @@ mod tests {
             pole.y += 5.0;
         }
         assert!(!surfaces_coincide(&a, &c));
+    }
+
+    /// A quad ring: four vertices, four line edges, four fins, returned with the first edge's index.
+    fn ring(b: &mut Brep, corners: [(f64, f64, f64); 4]) -> (Vec<Fin>, usize) {
+        let base_v = b.vertices.len();
+        let base_e = b.edges.len();
+        let mut fins = Vec::new();
+        for k in 0..4 {
+            let (x, y, z) = corners[k];
+            let (x2, y2, z2) = corners[(k + 1) % 4];
+            let start = DVec3::new(x, y, z);
+            let end = DVec3::new(x2, y2, z2);
+            b.vertices.push(start);
+            b.curves.push(Curve::Line { origin: start, dir: end - start });
+            b.edges.push(Edge {
+                curve: Some(b.curves.len() - 1),
+                reversed: false,
+                start: Some(base_v + k),
+                end: Some(base_v + (k + 1) % 4),
+                tolerance: None,
+            });
+            fins.push(Fin { edge: base_e + k, forward: true, pcurve: None });
+        }
+        (fins, base_e)
+    }
+
+    #[test]
+    fn rim_rings_of_a_closed_wall_get_seam_edges() {
+        // The wall surface's pole columns 0 and 2 coincide, so it is closed in u. Its face holds the two rim
+        // rings and a hole as closed loops; the seam corner passes through the middle of a line edge of each rim.
+        let s = wall_surface();
+        let corner = s.poles[0];
+        let corner2 = s.poles[s.nv - 1];
+        let mut b = Brep::default();
+        let (bottom, bottom_base) = ring(&mut b, [(0.0, 1.0, 1.5), (1.0, 1.0, 1.5), (1.0, -1.0, 0.5), (0.0, -1.0, 0.5)]);
+        let (top, _top_base) = ring(&mut b, [(0.0, 1.0, 0.5), (1.0, 1.0, 0.5), (1.0, -1.0, -0.5), (0.0, -1.0, -0.5)]);
+        let (hole, _hole_base) = ring(&mut b, [(0.5, 0.1, 0.1), (0.7, 0.1, 0.1), (0.7, -0.1, 0.3), (0.5, -0.1, 0.3)]);
+        b.surfaces = vec![Surface::BSpline(s)];
+        b.faces = vec![Face { surface: 0, flip: false, loops: vec![bottom, top, hole], color: None }];
+        b.shells = vec![vec![0]];
+        // Sanity: each seam corner sits mid-edge on its rim (the fourth edge of each ring).
+        let mid_bottom = b.curves[b.edges[bottom_base + 3].curve.unwrap()].clone();
+        assert!(curve_nearest(&mid_bottom, corner2).unwrap().1 < 1e-9, "corner2 sits on the bottom ring's last edge");
+        let edges_before = b.edges.len();
+        let curves_before = b.curves.len();
+        split_wall_rings(&mut b);
+        assert_eq!(b.faces[0].loops.len(), 2, "the outer wire joins the rims; the hole survives");
+        assert!(loop_closes(&b, &b.faces[0].loops[0]), "the new outer wire closes");
+        assert!(loop_closes(&b, &b.faces[0].loops[1]), "the hole stays closed");
+        // Two distinct new seam edges over the surface's own u iso (the last new curve), from one corner to the other.
+        let iso_curve = curves_before + 4;
+        let seams: Vec<usize> = b.faces[0].loops[0].iter().map(|f| f.edge).filter(|e| b.edges[*e].curve == Some(iso_curve)).collect();
+        assert_eq!(seams.len(), 2, "two seam fins in the outer wire");
+        assert_eq!(b.edges[seams[0]].curve, b.edges[seams[1]].curve, "both seams on the surface's u iso");
+        assert_eq!(b.vertices[b.edges[seams[0]].start.unwrap()], corner, "the seam starts at the corner");
+        assert_eq!(b.vertices[b.edges[seams[0]].end.unwrap()], corner2, "and ends at the other corner");
+    }
+
+    #[test]
+    fn rings_on_an_open_surface_stay_alone() {
+        let mut s = wall_surface();
+        // Break the closure: the last pole column moves away.
+        for j in 0..s.nv {
+            s.poles[(s.nu - 1) * s.nv + j] = DVec3::new(2.0, 0.0, 0.0);
+        }
+        let mut b = Brep::default();
+        let (bottom, _base) = ring(&mut b, [(0.0, 1.0, 1.5), (1.0, 1.0, 1.5), (1.0, -1.0, 0.5), (0.0, -1.0, 0.5)]);
+        let (top, _base) = ring(&mut b, [(0.0, 1.0, 0.5), (1.0, 1.0, 0.5), (1.0, -1.0, -0.5), (0.0, -1.0, -0.5)]);
+        b.surfaces = vec![Surface::BSpline(s)];
+        b.faces = vec![Face { surface: 0, flip: false, loops: vec![bottom, top], color: None }];
+        b.shells = vec![vec![0]];
+        let (edges, curves, loops) = (b.edges.len(), b.curves.len(), b.faces[0].loops.len());
+        split_wall_rings(&mut b);
+        assert_eq!(b.edges.len(), edges, "an open surface's rings are left alone");
+        assert_eq!(b.curves.len(), curves);
+        assert_eq!(b.faces[0].loops.len(), loops);
     }
 }

@@ -1027,6 +1027,12 @@ fn name_from_calls(
             }
         }
     }
+    // The item each imported body is, named through the file's own chain (#66), and which imported body each
+    // partition an import step made is: an import's bodies need not line up with its anchors one by one.
+    let chained = imported_items(c, items)?;
+    let import_of: BTreeMap<i64, i64> = import_slots(c, steps)?.into_iter().filter_map(|(id, pid)| Some((pid?, id))).collect();
+    // By position only an item the chain gives no body.
+    let chained_ids: std::collections::HashSet<i64> = chained.values().map(|i| i.name_id).collect();
     let mut claimed = std::collections::HashSet::new();
     let mut item_of: BTreeMap<i64, (Option<i64>, Option<Item>)> = BTreeMap::new(); // partition → (creating step, item)
     for step in steps {
@@ -1063,10 +1069,14 @@ fn name_from_calls(
             if !claimed.insert(*pid) {
                 continue;
             }
-            item_of.insert(*pid, (Some(step.node), named.get(k).map(|i| (*i).clone())));
+            let item = import_of
+                .get(pid)
+                .and_then(|id| chained.get(id).copied())
+                .or_else(|| named.get(k).copied().filter(|i| !chained_ids.contains(&i.name_id)));
+            item_of.insert(*pid, (Some(step.node), item.cloned()));
             if let Some(b) = bodies.iter_mut().find(|b| b.partition == Some(*pid)) {
                 b.step = Some(step.node);
-                if let Some(item) = named.get(k) {
+                if let Some(item) = item {
                     b.name = Some(item.name.clone());
                     b.item_name_id = Some(item.name_id);
                     b.folder = item.folder.clone();
@@ -1111,7 +1121,11 @@ fn name_from_calls(
         for b in bodies.iter_mut().filter(|b| b.partition.is_none()) {
             let Some(k) = b.import.and_then(|id| ids.iter().position(|&i| i == id)) else { continue };
             b.step = Some(step.node);
-            if let Some(item) = named.get(k) {
+            let item = b
+                .import
+                .and_then(|id| chained.get(&id).copied())
+                .or_else(|| named.get(k).copied().filter(|i| !chained_ids.contains(&i.name_id)));
+            if let Some(item) = item {
                 b.name = Some(item.name.clone());
                 b.item_name_id = Some(item.name_id);
                 b.folder = item.folder.clone();
@@ -1123,6 +1137,39 @@ fn name_from_calls(
     resolve_transformed_items(c, steps, items, folders, gone, bodies)?;
     name_by_topology(c, steps, items, gone, bodies)?;
     Ok(())
+}
+
+/// Imported body → the item that names it, read through the file's chain instead of by position: an item's name
+/// anchors (type 18, `nameToAnchor`) a name whose one source (type 0, `sourceTopologyNames`) is the imported body's
+/// own name (type 11, `bodyID`). Several bodies of one file can share a display name, so the chain is the only sure
+/// way. A body two items claim is left to the other ways of naming it.
+fn imported_items<'a>(c: &rusqlite::Connection, items: &'a [Item]) -> Result<BTreeMap<i64, &'a Item>> {
+    let mut out: BTreeMap<i64, &Item> = BTreeMap::new();
+    if !has_table(c, "HistoryNames") {
+        return Ok(out);
+    }
+    let mut q = c.prepare("SELECT Type, Data FROM HistoryNames WHERE NameID = ?1")?;
+    let mut name = |id: i64| -> Option<(i64, serde_json::Value)> {
+        let (ty, data) = q.query_row([id], |r| Ok((r.get::<_, i64>(0)?, text(r.get(1)?)))).ok()?;
+        Some((ty, serde_json::from_str(&data).ok()?))
+    };
+    let mut twice = std::collections::HashSet::new();
+    for item in items.iter().take(1_000_000) {
+        let Some((18, a)) = name(item.name_id) else { continue };
+        let Some((0, anchor)) = a["nameToAnchor"].as_i64().and_then(&mut name) else { continue };
+        let [source] = anchor["sourceTopologyNames"].as_array().map(Vec::as_slice).unwrap_or_default() else { continue };
+        let Some((11, body)) = source.as_i64().and_then(&mut name) else { continue };
+        // A face's name carries its identifier too; an item names a whole body.
+        if body.get("identifier").is_some() {
+            continue;
+        }
+        let Some(id) = body["bodyID"].as_i64() else { continue };
+        if out.insert(id, item).is_some() {
+            twice.insert(id);
+        }
+    }
+    out.retain(|id, _| !twice.contains(id));
+    Ok(out)
 }
 
 /// A body a step changes is told apart by its faces, not by its place in the call: each changed-body record lists the
@@ -1937,6 +1984,69 @@ mod identity_tests {
         let mut other = body(vec![42, 43, 44]);
         paint.apply(&mut other, Some(8));
         assert!(other.brep.faces.iter().all(|f| f.color.is_none()));
+        Ok(())
+    }
+
+    /// #66: an import's bodies are named through the file's chain (item name → anchor → imported body), not by
+    /// position: two items sharing a display name still land on their own bodies, with their own folders, and a
+    /// body with no item stays loose.
+    #[test]
+    fn imported_bodies_are_named_through_the_chain_not_by_position() -> Result<()> {
+        let c = rusqlite::Connection::open_in_memory()?;
+        c.execute_batch(
+            "CREATE TABLE HistoryNameAnchoringPoints (AnchoredNameID INTEGER, HistoryTreeNodeID INTEGER);
+             INSERT INTO HistoryNameAnchoringPoints VALUES (100, 10), (101, 10), (102, 10);
+             CREATE TABLE HistoryNames (NameID INTEGER, Type INT, Data BLOB, Version INT);",
+        )?;
+        // Item 100 is body 9, item 101 body 7; item 102 anchors a face's name, which is no body.
+        for (item, anchor, source, data) in
+            [(100, 200, 300, r#"{"bodyID":9}"#), (101, 201, 301, r#"{"bodyID":7}"#), (102, 202, 302, r#"{"bodyID":8,"identifier":42}"#)]
+        {
+            for (id, ty, json) in [
+                (item, 18, format!(r#"{{"nameToAnchor":{anchor}}}"#)),
+                (anchor, 0, format!(r#"{{"qualifier":0,"sourceTopologyNames":[{source}]}}"#)),
+                (source, 11, data.to_string()),
+            ] {
+                c.execute("INSERT INTO HistoryNames VALUES (?1, ?2, ?3, 1)", (id, ty, json))?;
+            }
+        }
+        let refs = Value::Array([7, 8, 9].into_iter().map(|n| Value::Array(vec![Value::from(11), Value::from(n)])).collect());
+        let steps = vec![Step { node: 10, name: "Import".into(), op: "MaterializeImportedBodies".into(), params: vec![(1, refs)] }];
+        let item = |name_id: i64, folder: &str, hidden: bool| Item {
+            name_id,
+            name: "Top Cover (3)".into(),
+            folder: if folder.is_empty() { vec![] } else { vec![folder.into()] },
+            hidden,
+            color: None,
+        };
+        let items = vec![item(100, "v1", true), item(101, "", false), item(102, "v2", false)];
+        let mut bodies: Vec<Body> = [7, 8, 9]
+            .into_iter()
+            .map(|import| Body {
+                partition: None,
+                import: Some(import),
+                folder: vec![],
+                step: None,
+                name: None,
+                item_name_id: None,
+                brep: Brep::default(),
+                color: None,
+                hidden: false,
+                mesh: None,
+            })
+            .collect();
+        name_from_calls(&c, &steps, &items, &[], &Default::default(), &mut bodies, &BTreeMap::new())?;
+        let got: Vec<(Option<i64>, Option<i64>, Vec<String>, bool)> =
+            bodies.iter().map(|b| (b.import, b.item_name_id, b.folder.clone(), b.hidden)).collect();
+        assert_eq!(
+            got,
+            vec![
+                (Some(7), Some(101), vec![], false),
+                // No chain reaches body 8, and the item its place would give it is body 7's: it keeps its own name.
+                (Some(8), None, vec![], false),
+                (Some(9), Some(100), vec!["v1".to_string()], true),
+            ]
+        );
         Ok(())
     }
 

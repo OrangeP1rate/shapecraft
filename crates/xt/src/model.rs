@@ -1647,7 +1647,6 @@ mod tests {
         // Sanity: each seam corner sits mid-edge on its rim (the fourth edge of each ring).
         let mid_bottom = b.curves[b.edges[bottom_base + 3].curve.unwrap()].clone();
         assert!(curve_nearest(&mid_bottom, corner2).unwrap().1 < 1e-9, "corner2 sits on the bottom ring's last edge");
-        let edges_before = b.edges.len();
         let curves_before = b.curves.len();
         split_wall_rings(&mut b);
         assert_eq!(b.faces[0].loops.len(), 2, "the outer wire joins the rims; the hole survives");

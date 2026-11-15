@@ -310,7 +310,7 @@ fn small_button(ui: &mut Ui, at: Pos2, id: &str, text: &str) -> bool {
 /// no accounts). Changes apply at once and are saved by the app.
 fn preferences(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
     let mut s = ws.settings.clone();
-    let out = window(ui, full, &mut ws.prefs_tab, &mut s, true);
+    let out = window(ui, full, &mut ws.prefs_tab, &mut s, true, &mut ws.prefs_picks);
     if s != ws.settings {
         ws.settings = s;
     }
@@ -334,9 +334,9 @@ pub(crate) struct PrefsOut {
 
 /// The Preferences window itself, with no Workspace behind it, so the projects screen can show it too.
 /// `shortcuts` is false where the Keyboard Shortcuts window can't open (projects screen).
-pub(crate) fn window(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings, shortcuts: bool) -> PrefsOut {
+pub(crate) fn window(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings, shortcuts: bool, picks: &mut SyncPicks) -> PrefsOut {
     if full.height() >= PREFS_H + 2.0 * PREFS_MARGIN {
-        return window_in(ui, full, tab, s, shortcuts);
+        return window_in(ui, full, tab, s, shortcuts, picks);
     }
     // A short screen (a phone held sideways): the whole window scrolls, so every setting and Done stay in reach.
     let mut out = PrefsOut { done: false, customize: false, presets: false };
@@ -344,7 +344,7 @@ pub(crate) fn window(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings,
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(full));
     egui::ScrollArea::vertical().id_salt("prefs-scroll").auto_shrink([false, false]).show(&mut child, |ui| {
         let (tall, _) = ui.allocate_exact_size(vec2(full.width(), PREFS_H + 2.0 * PREFS_MARGIN), Sense::hover());
-        out = window_in(ui, tall, tab, s, shortcuts);
+        out = window_in(ui, tall, tab, s, shortcuts, picks);
     });
     out
 }
@@ -353,7 +353,7 @@ pub(crate) fn window(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings,
 const PREFS_H: f32 = 848.0;
 const PREFS_MARGIN: f32 = 12.0;
 
-fn window_in(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings, shortcuts: bool) -> PrefsOut {
+fn window_in(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings, shortcuts: bool, picks: &mut SyncPicks) -> PrefsOut {
     let r = dialog(ui, full, vec2(560.0, PREFS_H), "Preferences");
     let p = ui.painter().clone();
     // Touch screens: a round ✕ in the top corner closes it, as on iPad (Done sits at
@@ -400,7 +400,7 @@ fn window_in(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings, shortcu
         1 => shapecraft_tab(ui, r, s),
         2 => tablet_tab(ui, r, s),
         3 => plugins_tab(ui, r),
-        4 => sync_tab(ui, r, s),
+        4 => sync_tab(ui, r, s, picks),
         _ => (customize, presets) = general_tab(ui, r, s, shortcuts),
     }
     let footer = Rect::from_min_max(pos2(r.left(), r.bottom() - 52.0), r.max);
@@ -659,7 +659,15 @@ fn plugins_tab(ui: &mut Ui, r: Rect) {
 /// Preferences ▸ Sync: the cloud storage apps on this computer (see `crate::cloud`). ShapeCraft saves into their
 /// folders and they do the syncing; this shows which are set up, which locations the projects screen lists, any
 /// folders added by hand, and where new projects go.
-fn sync_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
+/// The Sync tab's Work Folder and backup folders being asked for: their dialogs are open while the window keeps
+/// answering, so their buttons wait and their answers land here.
+#[derive(Default)]
+pub struct SyncPicks {
+    work: crate::dialogs::Pick,
+    backup: crate::dialogs::Pick,
+}
+
+fn sync_tab(ui: &mut Ui, r: Rect, s: &mut Settings, picks: &mut SyncPicks) {
     use crate::backup::{self, Target};
     use crate::cloud::{self, State};
     let p = ui.painter().clone();
@@ -716,11 +724,17 @@ fn sync_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
     detail(ui, pos2(left + 4.0, y + 9.0), crate::landing::shorten_home(&work), right - left - 150.0, Tokens::text_dim());
     let pending_id = ui.scope_id().with("sync-work-pending");
     let mut pending: Option<std::path::PathBuf> = ui.data(|d| d.get_temp(pending_id)).flatten();
-    if small_button(ui, pos2(right - 136.0, y + 2.0), "sync-work-change", "Change…")
-        && let Some(dir) = crate::dialogs::FileDialog::new().set_title("Choose your Work Folder").set_directory(&work).pick_folder()
+    if picks.work.is_open() {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+    }
+    if let Some(Some(dir)) = picks.work.taken()
         && dir != work
     {
         pending = Some(dir);
+    }
+    if small_button(ui, pos2(right - 136.0, y + 2.0), "sync-work-change", "Change…") && !picks.work.is_open() {
+        let work = work.clone();
+        picks.work.start(move || crate::dialogs::FileDialog::new().set_title("Choose your Work Folder").set_directory(&work).pick_folder());
     }
     if small_button(ui, pos2(right - 62.0, y + 2.0), "sync-work-show", "Show") {
         crate::landing::reveal(&work);
@@ -850,15 +864,19 @@ fn sync_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
             x = left - 20.0;
             y += 26.0;
         }
-        if small_button(ui, pos2(x, y), "sync-add-folder", "+ Folder or NAS…")
-            && let Some(dir) = crate::dialogs::FileDialog::new().set_title("Choose a folder to back up to").pick_folder()
-        {
+        if picks.backup.is_open() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+        }
+        if let Some(Some(dir)) = picks.backup.taken() {
             let setting = Target::Folder(dir.clone()).setting();
             if dir.starts_with(&work) || work.starts_with(&dir) {
                 backup::set_note("A backup can't be inside the Work Folder (or hold it).".into());
             } else if !s.backups.contains(&setting) {
                 s.backups.push(setting);
             }
+        }
+        if small_button(ui, pos2(x, y), "sync-add-folder", "+ Folder or NAS…") && !picks.backup.is_open() {
+            picks.backup.start(|| crate::dialogs::FileDialog::new().set_title("Choose a folder to back up to").pick_folder());
         }
         y += 28.0;
     }

@@ -687,6 +687,46 @@ mod undo_in_visualization {
         assert!(still, "and stayed in Visualization");
         assert!(idle);
     }
+    /// #38, as the reporter did it: a material on the body in Visualization, then Ctrl+Z (window menu) twice and
+    /// ⌘Z once: the material, then the pick, then the extrude go back, and the window keeps drawing.
+    #[test]
+    fn undo_after_a_material_in_visualization() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "Vis");
+            let mut ws = Workspace::new(session, crate::settings::Settings::default());
+            ws.session.execute("sketch", &serde_json::json!({"plane": "xy"})).unwrap();
+            ws.session.execute("circle", &serde_json::json!({"center": [0, 0], "radius": 5})).unwrap();
+            ws.session.execute("circle", &serde_json::json!({"center": [0, 0], "radius": 3})).unwrap();
+            let k = ws.session.active_sketch.unwrap().0;
+            ws.session.execute("extrude", &serde_json::json!({"sketch": k, "region": 0, "distance": 10})).unwrap();
+            let body = ws.session.doc.bodies[0].id;
+            let ctx = egui::Context::default();
+            frame(&ctx, &mut ws, Vec::new());
+            ws.visualizing = true;
+            frame(&ctx, &mut ws, Vec::new());
+            let _ = ws.run("select", serde_json::json!({ "picks": [{"kind": "body", "body": body.0}] }));
+            let _ = ws.run("set_appearance", serde_json::json!({ "items": [body.0], "appearance": "Aluminum" }));
+            let had = ws.session.doc.bodies[0].appearance.is_some();
+            for _ in 0..3 {
+                frame(&ctx, &mut ws, Vec::new());
+            }
+            for _ in 0..2 {
+                ws.act(crate::workspace::toolbar::Action::Command("undo"), "Undo");
+                frame(&ctx, &mut ws, Vec::new());
+            }
+            frame(&ctx, &mut ws, vec![undo_key(true), undo_key(false)]);
+            for _ in 0..5 {
+                frame(&ctx, &mut ws, Vec::new());
+            }
+            let _ = tx.send((had, ws.session.doc.bodies.len(), ws.visualizing));
+        });
+        let (had, after, still) = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("the window kept drawing frames");
+        assert!(had, "the material went on");
+        assert_eq!(after, 0, "three undos: material, pick, extrude");
+        assert!(still);
+    }
+
     /// The same through the window menu's Ctrl+Z (Linux and Windows have no native menu), with the body picked as
     /// when giving it a color: the menu's undo goes through `run`, not the key handler.
     #[test]

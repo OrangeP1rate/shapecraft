@@ -595,3 +595,30 @@ fn a_cut_through_everything_leaves_no_empty_body() {
     let k = s.active_sketch.unwrap();
     s.execute("extrude", &json!({"sketch": k.0, "region": 0, "distance": 3, "result": "union"})).unwrap_err();
 }
+
+/// #47: a counterbore. A cylinder with a hole through it; a bigger circle drawn on the top face around the hole
+/// and pushed 1 mm in cuts the step, it doesn't add material (the profile sits partly over the hole).
+#[test]
+fn bigger_circle_over_a_hole_cuts_a_counterbore() {
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 20})).unwrap();
+    let out = s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 10})).unwrap();
+    let body = out.value["body"].as_u64().unwrap();
+    let top = out.value["face"].as_u64().unwrap();
+    s.execute("sketch", &json!({"body": body, "face": top})).unwrap();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 5})).unwrap();
+    s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": -10})).unwrap();
+    let pi = std::f64::consts::PI;
+    let holed = pi * (400.0 - 25.0) * 10.0;
+    assert!((volume(&mut s) - holed).abs() < 1e-3, "the hole: {}", volume(&mut s));
+    let top = super::top_face(&mut s);
+    s.execute("sketch", &json!({"body": body, "face": top})).unwrap();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 8})).unwrap();
+    let k = s.active_sketch.unwrap();
+
+    s.execute("extrude", &json!({"sketch": k.0, "region": 0, "distance": -1})).unwrap();
+    assert_eq!(s.doc.bodies.len(), 1, "no new body");
+    let want = holed - pi * (64.0 - 25.0) * 1.0;
+    assert!((volume(&mut s) - want).abs() < 1e-3, "counterbore: {} want {want}", volume(&mut s));
+}

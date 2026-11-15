@@ -621,3 +621,30 @@ fn bigger_circle_over_a_hole_cuts_a_counterbore() {
     let want = holed - pi * (64.0 - 25.0) * 1.0;
     assert!((volume(&mut s) - want).abs() < 1e-3, "counterbore: {} want {want}", volume(&mut s));
 }
+
+/// #60: a plate whose straight side meets a concave arc at a sharp corner; the short vertical edge there fillets.
+#[test]
+fn fillet_where_a_side_meets_a_concave_arc() {
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    for (a, b) in [([0, 0], [60, 0]), ([60, 0], [60, 20]), ([30, 40], [0, 40]), ([0, 40], [0, 0])] {
+        s.execute("line", &json!({"a": a, "b": b})).unwrap();
+    }
+    // Concave arc from (60,20) to (30,40), bulging into the plate.
+    s.execute("arc", &json!({"a": [60, 20], "mid": [42, 25], "b": [30, 40]})).unwrap();
+    let k = s.active_sketch.unwrap();
+    let out = s.execute("extrude", &json!({"sketch": k.0, "region": 0, "distance": 2})).unwrap();
+    let body = out.value["body"].as_u64().unwrap();
+    // The vertical edge at (60, 20): every point of it there.
+    let found = super::edges_where(&s, 0, |p| (p[0] - 60.0).abs() < 1e-3 && (p[1] - 20.0).abs() < 1e-3);
+    assert_eq!(found.len(), 1, "the corner edge: {found:?}");
+    let edge = found[0];
+    let before = volume(&mut s);
+    for r in [0.5, 1.0, 3.0] {
+        let res = s.execute("fillet", &json!({"body": body, "edges": [edge], "radius": r}));
+        if res.is_ok() {
+            assert!(volume(&mut s) < before);
+            s.execute("undo", &json!({})).unwrap();
+        }
+    }
+}

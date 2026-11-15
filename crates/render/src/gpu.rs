@@ -19,7 +19,7 @@ pub(crate) const SAMPLES: u32 = 4;
 const MAX_SELECTED_FACES: usize = 16;
 
 const MESH_ATTRS: [wgpu::VertexAttribute; 5] =
-    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Uint32, 3 => Float32, 4 => Float32x4];
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Uint32, 3 => Float32, 4 => Unorm8x4];
 const LINE_ATTRS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x4];
 const DOT_ATTRS: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32x4];
 const FILL_ATTRS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
@@ -98,8 +98,9 @@ struct MeshVertex {
     face: u32,
     /// The triangle's Gaussian curvature (for the Curvature Map).
     curv: f32,
-    /// The face's own colour (linear, a = 1) when it is painted, else zero: any number of faces, unlike a uniform.
-    paint: [f32; 4],
+    /// The face's own colour (sRGB bytes, a = 255) when it is painted, else zero: any number of faces, unlike a
+    /// uniform, at four bytes a vertex.
+    paint: [u8; 4],
 }
 
 #[repr(C)]
@@ -883,15 +884,15 @@ impl Renderer {
     }
 
     fn upload_body(&self, mesh: &Arc<Mesh>, face_colors: &[(u32, [f32; 3])], paint_key: u64) -> BodyGpu {
-        let lin = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
-        let painted: HashMap<u32, [f32; 4]> = face_colors.iter().map(|(f, c)| (*f, [lin(c[0]), lin(c[1]), lin(c[2]), 1.0])).collect();
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let painted: HashMap<u32, [u8; 4]> = face_colors.iter().map(|(f, c)| (*f, [byte(c[0]), byte(c[1]), byte(c[2]), 255])).collect();
         // Faces are per triangle in the mesh but flat per vertex in the shader, so every triangle gets its
         // own three vertices.
         let mut verts = Vec::with_capacity(mesh.indices.len());
         for (t, tri) in mesh.indices.chunks(3).enumerate() {
             let face = mesh.triangle_faces.get(t).copied().unwrap_or(0);
             let curv = gaussian_curvature(mesh, tri);
-            let paint = painted.get(&face).copied().unwrap_or([0.0; 4]);
+            let paint = painted.get(&face).copied().unwrap_or([0; 4]);
             for &i in tri {
                 if let Some(p) = mesh.positions.get(i as usize) {
                     let normal = mesh.normals.get(i as usize).copied().unwrap_or([0.0, 0.0, 1.0]);

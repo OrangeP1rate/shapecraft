@@ -90,7 +90,7 @@ struct MeshIn {
     @location(1) normal: vec3<f32>,
     @location(2) face: u32,
     @location(3) curv: f32,
-    // A face painted its own colour (linear rgb; a = 1), else a = 0.
+    // A face painted its own colour (sRGB; a = 1), else a = 0.
     @location(4) paint: vec4<f32>,
 };
 
@@ -163,7 +163,8 @@ fn fs_mesh(v: MeshOut) -> @location(0) vec4<f32> {
     let key = pow(max(dot(n, normalize(g.light.xyz)), 0.0), 1.5);
     let top = pow(1.0 / length(g.light.xyz) * g.light.z, 1.5);
     let shade = (0.08 + 0.92 * key) / (0.08 + 0.92 * top);
-    var base = select(b.color.rgb, v.paint.rgb, v.paint.a > 0.5);
+    let painted = select(pow((v.paint.rgb + 0.055) / 1.055, vec3<f32>(2.4)), v.paint.rgb / 12.92, v.paint.rgb <= vec3<f32>(0.04045));
+    var base = select(b.color.rgb, painted, v.paint.a > 0.5);
     base = mix(base, vec3<f32>(b.wash.y), b.wash.x);
     // Surface analysis replaces the colour (selection still shows).
     if (g.analysis.x > 0.5 && !face_selected(v.face) && b.flags.x == 0u) {

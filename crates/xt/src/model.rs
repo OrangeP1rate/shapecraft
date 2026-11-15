@@ -793,7 +793,148 @@ fn body(f: &XtFile, n: &Node) -> Result<Body> {
         Some(AttrValue::Reals(r)) if r.len() >= 3 => Some([r[0] as f32, r[1] as f32, r[2] as f32]),
         _ => None,
     });
+    join_split_walls(&mut cx.b);
     Ok(Body { node: n.index, brep: cx.b, name, color, attributes, mesh })
+}
+
+/// A clamped B-spline surface value at `(u, v)`, for comparing two surfaces' geometry.
+fn bspline_at(s: &NurbsSurface, u: f64, v: f64) -> DVec3 {
+    let expand = |k: &[f64], m: &[u32]| -> Vec<f64> { k.iter().zip(m).flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize)).collect() };
+    let knots = expand(&s.u_knots, &s.u_mults);
+    let vknots = expand(&s.v_knots, &s.v_mults);
+    let nu = blend::basis(&knots, s.u_degree as usize, u);
+    let nv = blend::basis(&vknots, s.v_degree as usize, v);
+    let weight = |i: usize, j: usize| s.weights.as_ref().map_or(1.0, |w| w[i * s.nv + j]);
+    let (mut p, mut w) = (DVec3::ZERO, 0.0);
+    for (i, bu) in nu.iter().enumerate() {
+        for (j, bv) in nv.iter().enumerate() {
+            let k = bu * bv * weight(i, j);
+            p += k * s.poles[i * s.nv + j];
+            w += k;
+        }
+    }
+    if w != 0.0 { p / w } else { p }
+}
+
+/// Whether two B-spline surfaces describe the same geometry on their shared interior, and the second is closed
+/// along u (its two u ends meet).
+fn surfaces_coincide(a: &NurbsSurface, b: &NurbsSurface) -> bool {
+    if a.u_degree != b.u_degree || a.v_degree != b.v_degree || a.nv != b.nv {
+        return false;
+    }
+    if a.v_knots != b.v_knots || a.v_mults != b.v_mults {
+        return false;
+    }
+    // The u knot vectors differ only at the ends of a clamped closed surface; the interior is the same.
+    for &u in &[0.25, 0.5, 0.75] {
+        for &v in &[0.25, 0.5, 0.75] {
+            if bspline_at(a, u, v).distance(bspline_at(b, u, v)) > 1e-6 {
+                return false;
+            }
+        }
+    }
+    let expand = |k: &[f64], m: &[u32]| -> Vec<f64> { k.iter().zip(m).flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize)).collect() };
+    let k = expand(&b.u_knots, &b.u_mults);
+    let (u0, u1) = (k[b.u_degree as usize], k[k.len() - 1 - b.u_degree as usize]);
+    (0..=4).all(|i| {
+        let v = 0.25 + 0.5 * i as f64 / 4.0;
+        bspline_at(b, u0, v).distance(bspline_at(b, u1, v)) < 1e-2
+    })
+}
+
+/// Where a fin starts and ends (vertex indices), following the edge's and the fin's senses.
+fn fin_ends(b: &Brep, f: &Fin) -> (Option<usize>, Option<usize>) {
+    let e = &b.edges[f.edge];
+    let (s, t) = if e.reversed { (e.end, e.start) } else { (e.start, e.end) };
+    if f.forward { (s, t) } else { (t, s) }
+}
+
+/// Whether the fins form one closed ring: each fin ends where the next begins.
+fn loop_closes(b: &Brep, fins: &[Fin]) -> bool {
+    if fins.len() < 3 || fins.iter().any(|f| matches!(fin_ends(b, f), (None, _) | (_, None))) {
+        return false;
+    }
+    (0..fins.len()).all(|i| fin_ends(b, &fins[i]).1 == fin_ends(b, &fins[(i + 1) % fins.len()]).0)
+}
+
+/// Some files store a closed wall as two faces that share both of the wall's seam edges: one carries the top
+/// rim, the other the bottom rim and the holes. Neither closes on its own (the first has no far rim to bound it),
+/// so the shell comes out invalid. Join each such pair into the one face the geometry describes, as the STEP form
+/// of the same body has it: both seam edges stay, one on each side of the parameter rectangle.
+fn join_split_walls(b: &mut Brep) {
+    loop {
+        let mut found = None;
+        'shells: for shell in &b.shells {
+            for (ia, &a) in shell.iter().enumerate() {
+                if b.faces[a].loops.len() != 1 {
+                    continue;
+                }
+                for &c in &shell[ia + 1..] {
+                    if let Some(pair) = split_wall_pair(b, a, c) {
+                        found = Some(pair);
+                        break 'shells;
+                    }
+                }
+            }
+        }
+        let Some((keep, drop, seams)) = found else { break };
+        let moved = b.faces[keep].loops[0].len();
+        let mut outer = std::mem::take(&mut b.faces[keep].loops[0]);
+        outer.extend(b.faces[drop].loops[0].iter().copied().filter(|f| !seams.contains(&f.edge)));
+        b.faces[drop].loops[0] = outer;
+        // The moved fins carried curves in the other face's (u, v); let the kernel project them instead.
+        for fin in &mut b.faces[drop].loops[0][moved..] {
+            fin.pcurve = None;
+        }
+        b.faces.remove(keep);
+        for shell in &mut b.shells {
+            shell.retain(|&f| f != keep);
+            for f in shell.iter_mut() {
+                if *f > keep {
+                    *f -= 1;
+                }
+            }
+        }
+    }
+}
+
+/// The fins of `face`'s outer loop besides the wall's two seam edges.
+fn outer_chain(b: &Brep, face: usize, seams: &[usize; 2]) -> Vec<Fin> {
+    b.faces[face].loops[0].iter().copied().filter(|f| !seams.contains(&f.edge)).collect()
+}
+
+/// If `a` (one loop) and `c` are the two halves of one closed wall, how to join them: the face whose outer loop
+/// to keep, the one whose rim joins it, and the two seam edges between them. `None` if no order closes the ring.
+fn split_wall_pair(b: &Brep, a: usize, c: usize) -> Option<(usize, usize, [usize; 2])> {
+    let (fa, fc) = (&b.faces[a], &b.faces[c]);
+    if fc.loops.is_empty() || fa.loops[0].len() < 4 || fc.loops[0].len() < 4 {
+        return None;
+    }
+    let (Surface::BSpline(sa), Surface::BSpline(sc)) = (&b.surfaces[fa.surface], &b.surfaces[fc.surface]) else {
+        return None;
+    };
+    if !surfaces_coincide(sa, sc) {
+        return None;
+    }
+    // Both loops must share exactly two edges, once each: the wall's two seam edges.
+    let a_edges: Vec<usize> = fa.loops[0].iter().map(|f| f.edge).collect();
+    let seams: Vec<usize> = a_edges.iter().copied().filter(|e| fc.loops[0].iter().any(|f| f.edge == *e)).collect();
+    if seams.len() != 2 || seams[0] == seams[1] {
+        return None;
+    }
+    let seams = [seams[0], seams[1]];
+    let ca = outer_chain(b, a, &seams);
+    let cc = outer_chain(b, c, &seams);
+    if ca.is_empty() || cc.is_empty() {
+        return None;
+    }
+    // Keep the face whose loop plus the other's rim closes; the one-loop rim strip usually comes first.
+    let try_order = |keep: usize, drop: usize, chain: &[Fin]| {
+        let mut fins = b.faces[keep].loops[0].clone();
+        fins.extend_from_slice(chain);
+        loop_closes(b, &fins).then_some((keep, drop, seams))
+    };
+    try_order(a, c, &cc).or_else(|| try_order(c, a, &ca))
 }
 
 /// Every number a node's array field holds, in order.
@@ -854,4 +995,77 @@ fn facets(cx: &Cx<'_>, surf: &Node, mesh: &mut Mesh) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A closed-in-`u` strip: `u = 0` and `u = 1` land on the same poles.
+    fn wall_surface() -> NurbsSurface {
+        let poles =
+            [(0.0, 0.0), (1.0, 0.0), (0.0, 0.0)].into_iter().flat_map(|(x, y)| [DVec3::new(x, y, 0.0), DVec3::new(x, y, 1.0)]).collect();
+        NurbsSurface {
+            u_degree: 1,
+            v_degree: 1,
+            nu: 3,
+            nv: 2,
+            poles,
+            weights: None,
+            u_knots: vec![0.0, 0.5, 1.0],
+            u_mults: vec![2, 1, 2],
+            v_knots: vec![0.0, 1.0],
+            v_mults: vec![2, 2],
+            u_periodic: false,
+            v_periodic: false,
+        }
+    }
+
+    fn fin(edge: usize) -> Fin {
+        Fin { edge, forward: true, pcurve: None }
+    }
+
+    /// A wall stored as two faces sharing both seam edges: one loop with the top rim, one with the bottom rim and
+    /// a hole. Joining them must leave one face with both rims and keep the hole.
+    #[test]
+    fn two_faces_of_one_closed_wall_become_one() {
+        let mut b = Brep {
+            // b(0) and t(1) are the seam ends; m1(2) is on the top rim, m2(3) on the bottom.
+            vertices: vec![DVec3::ZERO, DVec3::Z, DVec3::new(1.0, 0.0, 1.0), DVec3::new(1.0, 0.0, 0.0)],
+            edges: vec![
+                Edge { curve: None, reversed: false, start: Some(0), end: Some(1), tolerance: None }, // seam A
+                Edge { curve: None, reversed: false, start: Some(1), end: Some(2), tolerance: None }, // top rim
+                Edge { curve: None, reversed: false, start: Some(2), end: Some(1), tolerance: None },
+                Edge { curve: None, reversed: false, start: Some(1), end: Some(0), tolerance: None }, // seam B
+                Edge { curve: None, reversed: false, start: Some(0), end: Some(3), tolerance: None }, // bottom rim
+                Edge { curve: None, reversed: false, start: Some(3), end: Some(0), tolerance: None },
+            ],
+            surfaces: vec![Surface::BSpline(wall_surface()), Surface::BSpline(wall_surface())],
+            faces: vec![
+                // Top rim strip: seam A, the top rim, seam B.
+                Face { surface: 0, flip: false, loops: vec![vec![fin(0), fin(1), fin(2), fin(3)]], color: None },
+                // The rest: both seams, the bottom rim, and a hole.
+                Face { surface: 1, flip: false, loops: vec![vec![fin(3), fin(0), fin(4), fin(5)], vec![fin(1), fin(2)]], color: None },
+            ],
+            shells: vec![vec![0, 1]],
+            ..Brep::default()
+        };
+        join_split_walls(&mut b);
+        assert_eq!(b.faces.len(), 1, "the two halves join into one face");
+        assert_eq!(b.faces[0].loops.len(), 2, "the hole survives");
+        let outer: Vec<usize> = b.faces[0].loops[0].iter().map(|f| f.edge).collect();
+        assert_eq!(outer, [0, 1, 2, 3, 4, 5], "both rims and both seams, each seam once");
+        assert_eq!(b.shells, vec![vec![0]]);
+    }
+
+    #[test]
+    fn coincident_surfaces_are_recognised_and_shifted_ones_are_not() {
+        let a = wall_surface();
+        let mut c = wall_surface();
+        assert!(surfaces_coincide(&a, &c));
+        for pole in &mut c.poles {
+            pole.x += 1.0;
+        }
+        assert!(!surfaces_coincide(&a, &c));
+    }
 }

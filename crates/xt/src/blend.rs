@@ -402,7 +402,7 @@ fn averaged_knots(params: &[f64], p: usize) -> Option<(Vec<f64>, Vec<u32>, Vec<f
 }
 
 /// The B-spline basis functions of degree `p` at `t` (all of them, by the triangular scheme).
-fn basis(full: &[f64], p: usize, t: f64) -> Vec<f64> {
+pub(crate) fn basis(full: &[f64], p: usize, t: f64) -> Vec<f64> {
     let count = full.len() - p - 1;
     // Degree 0: the span holding t (the last span takes t = 1).
     let mut n: Vec<f64> = (0..full.len() - 1)

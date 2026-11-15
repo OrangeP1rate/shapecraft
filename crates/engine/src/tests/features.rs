@@ -473,8 +473,7 @@ fn selection_radius_of_round_faces() {
     assert_eq!(s.selection_radius(), None);
 }
 
-/// #53: a sketch stays shown while it still has profiles nobody used, and hides once all of them are (as the
-/// reference does: a sketch with a rectangle and an ellipse stayed visible after the rectangle was extruded).
+/// #53: a sketch stays shown while it still has profiles nobody used, and hides once all of them are.
 #[test]
 fn sketch_hides_only_once_every_profile_is_used() {
     let mut s = session();

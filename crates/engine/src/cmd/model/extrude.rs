@@ -423,8 +423,7 @@ pub(super) fn extrude(s: &mut Session, p: &Params) -> Result<Value> {
         None => add_body(s, block)?,
     };
     if let Some(sketch) = sketch {
-        // The reference hides a sketch once all of its profiles have been used (a sketch with profiles left stays
-        // shown, #53).
+        // A sketch hides once all of its profiles have been used; one with profiles left stays shown (#53).
         if let Some(sk) = s.doc.sketch_mut(sketch)
             && sk.use_regions(&used)
         {

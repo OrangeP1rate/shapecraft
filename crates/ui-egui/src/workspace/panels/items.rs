@@ -736,8 +736,8 @@ mod rename_tests {
         }
     }
 
-    /// #46: a double click on a body's row renames it; on a sketch's row it opens the sketch, as the reference
-    /// does (i46-013), and renaming stays in the row's menu.
+    /// #46: a double click on a body's row renames it; on a sketch's row it opens the sketch, and renaming stays
+    /// in the row's menu.
     #[test]
     fn double_click_renames_a_body_and_opens_a_sketch() {
         let (ctx, mut ws, row) = setup();

@@ -2,6 +2,23 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.9.1-alpha
+**Fixes from your reports: sketches stay out while they still have profiles to use, text is easier to set up, and an
+emptied body can't block extruding any more.**
+### Changed
+- **A sketch stays shown until every profile in it is used.** Extrude one of four holes and the other three stay
+  there for the next pull; the sketch hides once the last one is used. Thanks [@jan-tdy](https://github.com/jan-tdy) (#53).
+### Fixed
+- **"bounds failed: shape has no extent" no longer blocks extruding.** A cut that would take away all of a body is
+  refused with a message instead of leaving an empty body behind, and an empty body already in a project is passed
+  over, so new sketches extrude again. Thanks [@jan-tdy](https://github.com/jan-tdy) (#50).
+- **Scrolling the Add Text font list scrolls the list.** The view behind the Add Text dialog no longer zooms while you
+  scroll over the dialog or its font list. Thanks [@jan-tdy](https://github.com/jan-tdy) (#57).
+- **Capital Height takes any value you type**, like 0.5 mm or 1.5 mm. Before, a value starting with 0 or holding a
+  decimal point couldn't be typed. Thanks [@jan-tdy](https://github.com/jan-tdy) (#58).
+- **.shapr import: a closed wall stored as two faces joins into one**, so a solid that came in invalid, with the wrong
+  volume and size, imports whole. Thanks [@pablohc](https://github.com/pablohc) (#55, #56).
+
 ## 0.9.0-alpha
 **ShapeCraft on iPhone: the whole modeler as a native app, laid out for a phone, iPhone Duo included.**
 ### New

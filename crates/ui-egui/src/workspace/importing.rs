@@ -3,11 +3,13 @@
 //! (with the import in its undo history) takes the session's place. Until then the window shows the import, and
 //! nothing else edits the project. Cancel stops the kernel at its next check and drops whatever comes back.
 
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::Value;
+use shapecraft_engine::progress::Progress;
 use shapecraft_engine::{EngineError, Outcome, Session};
 use shapecraft_render::StandardView;
 
@@ -21,6 +23,8 @@ pub struct Importing {
     pub file: String,
     started: Instant,
     rx: Receiver<Done>,
+    /// What the import says it is doing.
+    progress: Arc<Progress>,
 }
 
 impl Workspace {
@@ -31,6 +35,9 @@ impl Workspace {
             return;
         }
         let mut fork = self.session.fork();
+        let progress = Arc::new(Progress::default());
+        progress.stage("Reading the file…", 0);
+        fork.progress = Some(progress.clone());
         let (tx, rx) = channel();
         fork.kernel.cancel(false);
         let started = std::thread::Builder::new().name("import".into()).spawn(move || {
@@ -39,7 +46,7 @@ impl Workspace {
             let _ = tx.send((fork, out));
         });
         match started {
-            Ok(_) => self.importing = Some(Importing { file, started: Instant::now(), rx }),
+            Ok(_) => self.importing = Some(Importing { file, started: Instant::now(), rx, progress }),
             Err(e) => self.toast(format!("Couldn't start the import: {e}")),
         }
     }
@@ -111,6 +118,7 @@ pub(super) fn card(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
     let Some(imp) = &ws.importing else { return };
     let secs = imp.started.elapsed().as_secs_f32();
     let file = imp.file.clone();
+    let (stage, done, total) = imp.progress.snapshot();
     let title_h = match (crate::tablet::touch_ui(), full.height() > full.width()) {
         (false, _) => Tokens::TITLEBAR_H,
         (true, true) => 44.0,
@@ -144,7 +152,19 @@ pub(super) fn card(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
     p.add(egui::Shape::line(arc, Stroke::new(3.0, theme::c(0x2e68ff))));
     p.text(mid + vec2(0.0, -10.0), Align2::CENTER_CENTER, "Importing", theme::strong(21.0), Color32::WHITE);
     p.text(mid + vec2(0.0, 22.0), Align2::CENTER_CENTER, file, theme::body(14.0), Color32::WHITE);
-    p.text(mid + vec2(0.0, 50.0), Align2::CENTER_CENTER, "Reading the file…", theme::body(14.0), theme::c(0xa1a1a6));
+    let line = if total > 0 { format!("{stage}  {} of {}", group(done.min(total)), group(total)) } else { stage };
+    p.text(mid + vec2(0.0, 50.0), Align2::CENTER_CENTER, line, theme::body(14.0), theme::c(0xa1a1a6));
+    // How far along, when the stage counts its steps, and how long it has been going.
+    if total > 0 {
+        let bar = Rect::from_center_size(mid + vec2(0.0, 70.0), vec2(220.0, 3.0));
+        p.rect_filled(bar, 1.5, theme::c(0x3a3a3c));
+        let part = (done as f32 / total as f32).clamp(0.0, 1.0);
+        p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * part, bar.height())), 1.5, theme::c(0x2e68ff));
+    }
+    let t = secs as u64;
+    if t >= 5 {
+        p.text(mid + vec2(0.0, 122.0), Align2::CENTER_CENTER, format!("{}:{:02}", t / 60, t % 60), theme::body(12.0), theme::c(0x6e6e73));
+    }
     let g = p.layout_no_wrap("Cancel".to_string(), theme::body(13.0), theme::c(0x8e8e93));
     let cancel = Rect::from_center_size(mid + vec2(0.0, 92.0), g.size() + vec2(16.0, 8.0));
     let cr = ui.interact(cancel, ui.scope_id().with("import-running-cancel"), Sense::click());
@@ -159,6 +179,19 @@ pub(super) fn card(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
     if cr.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         ws.cancel_import();
     }
+}
+
+/// A count with thousands separated by commas.
+fn group(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// A soft elliptical glow: `color` at `center`, fading to transparent at `radii`.

@@ -1576,6 +1576,17 @@ impl ShapeCraftApp {
                 self.switch_work_folder(PathBuf::from(path), bring);
                 Ok(json!({ "root": self.landing.root, "note": crate::backup::note() }))
             }
+            "ui.import_file" => {
+                // Imports a file as the Import command does, on its own thread behind the import screen
+                // (heal: "quality" | "speed", default speed).
+                let path = params.get("path").and_then(Value::as_str).ok_or("'path' is required")?;
+                if self.ws.is_none() {
+                    self.new_project();
+                }
+                let heal = json!(params.get("heal").and_then(Value::as_str).unwrap_or("speed"));
+                self.import_file(PathBuf::from(path), heal);
+                Ok(Value::Null)
+            }
             "ui.import_project" => {
                 // Opens Import Project's sheet over the local projects.
                 self.ws.as_deref().ok_or("no project open")?;

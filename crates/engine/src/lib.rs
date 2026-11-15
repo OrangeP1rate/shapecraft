@@ -20,6 +20,7 @@ pub mod history;
 mod keep;
 pub mod meshops;
 mod params;
+pub mod progress;
 mod refs;
 pub mod thread;
 pub use cmd::{CommandSpec, body_edge_entities, face_offset, offset_body_edges, offset_entities, registry};
@@ -72,6 +73,8 @@ pub struct Session {
     /// The model as it stood after each step of the last rebuild, so the next one starts after the steps that
     /// didn't change instead of from an empty document (an import's step reads its whole file again).
     pub(crate) replayed: Arc<Vec<history::Replayed>>,
+    /// Where a long command says what it is doing, when something is waiting to show it.
+    pub progress: Option<Arc<progress::Progress>>,
 }
 
 #[derive(Clone)]
@@ -109,6 +112,22 @@ impl Session {
             replaying: false,
             log_params: None,
             replayed: Arc::new(Vec::new()),
+            progress: None,
+        }
+    }
+
+    /// A new stage of a long command, for whatever is waiting to show it (nothing, mostly): its line of text and its
+    /// number of steps, 0 when that isn't known.
+    pub(crate) fn stage(&self, text: impl Into<String>, total: u64) {
+        if let Some(p) = &self.progress {
+            p.stage(text, total);
+        }
+    }
+
+    /// One more step of the stage done.
+    pub(crate) fn progress_step(&self) {
+        if let Some(p) = &self.progress {
+            p.step();
         }
     }
 
@@ -131,6 +150,7 @@ impl Session {
             replaying: false,
             log_params: None,
             replayed: self.replayed.clone(),
+            progress: None,
         }
     }
 
@@ -159,6 +179,7 @@ impl Session {
             replaying: false,
             log_params: None,
             replayed: self.replayed.clone(),
+            progress: None,
         }
     }
 

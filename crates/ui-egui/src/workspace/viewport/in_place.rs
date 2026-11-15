@@ -26,6 +26,9 @@ impl Workspace {
     fn text_dialog(&mut self, ui: &mut Ui) {
         let vp = self.viewport_rect;
         let rect = Rect::from_center_size(vp.center(), vec2(320.0, 286.0));
+        // The dialog takes the pointer (wheel and clicks) before its own fields, so the view under it doesn't zoom
+        // or pick through it (#57).
+        ui.interact(rect, ui.scope_id().with("text-dialog-under"), Sense::click_and_drag());
         let p = ui.painter().clone();
         p.rect_filled(rect.expand(1.0), radius(12), theme::c(0x48474a));
         p.rect_filled(rect, radius(11), theme::c(0x232224));
@@ -134,17 +137,20 @@ impl Workspace {
         if !ui.memory(|m| m.has_focus(ui.scope_id().with("text-height")) || m.has_focus(ui.scope_id().with("font-search"))) {
             edit.request_focus();
         }
-        let mut h = format!("{size}");
+        // While the field has focus it keeps what was typed ("0", "1.", "0.5"), not the last number it could
+        // read, or a value starting "0." or with a decimal point could never be typed (#58).
+        let hid = ui.scope_id().with("text-height");
+        let typing = ui.memory(|m| m.has_focus(hid));
+        let mut h = typing.then(|| ui.data(|d| d.get_temp::<String>(hid))).flatten().unwrap_or_else(|| format!("{size}"));
         let hr = Rect::from_min_size(pos2(rows.right() - 132.0, rows.bottom() - 32.0), vec2(90.0, 22.0));
         p.rect_filled(hr, radius(5), theme::c(0x3a393c));
         let hresp = ui.put(
             hr.shrink2(vec2(6.0, 2.0)),
-            egui::TextEdit::singleline(&mut h)
-                .id(ui.scope_id().with("text-height"))
-                .align(egui::Align2::RIGHT_CENTER)
-                .frame(egui::Frame::NONE)
-                .font(theme::body(13.0)),
+            egui::TextEdit::singleline(&mut h).id(hid).align(egui::Align2::RIGHT_CENTER).frame(egui::Frame::NONE).font(theme::body(13.0)),
         );
+        if hresp.changed() || hresp.gained_focus() {
+            ui.data_mut(|d| d.insert_temp(hid, h.clone()));
+        }
         if hresp.changed()
             && let Ok(v) = h.trim().parse::<f64>()
             && v.is_finite()
@@ -171,6 +177,8 @@ impl Workspace {
     fn font_picker(&mut self, ui: &mut Ui, at: Pos2) {
         let Some(mut query) = self.font_list.clone() else { return };
         let rect = Rect::from_min_size(at, vec2(240.0, 320.0));
+        // The wheel over the list scrolls the list, not the view behind it (#57).
+        ui.interact(rect, ui.scope_id().with("font-list-under"), Sense::click_and_drag());
         let p = ui.painter().clone();
         p.rect_filled(rect.expand(1.0), radius(10), theme::c(0x48474a));
         p.rect_filled(rect, radius(9), theme::c(0x232224));
@@ -426,6 +434,91 @@ impl Workspace {
             Some("Cancel") => self.tool = Tool::Idle,
             Some(_) => self.commit_tool(),
             None => {}
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod text_dialog_tests {
+    use super::*;
+    use egui::{Event, Key, Modifiers, PointerButton};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn frame(ctx: &egui::Context, ws: &mut Workspace, events: Vec<Event>) {
+        let input =
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 900.0))), events, ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| ws.ui(ui, None));
+        out.textures_delta.clear();
+    }
+
+    fn click(ctx: &egui::Context, ws: &mut Workspace, at: Pos2) {
+        frame(ctx, ws, vec![Event::PointerMoved(at)]);
+        frame(ctx, ws, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        frame(ctx, ws, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+    }
+
+    /// An open sketch with the Add Text dialog up, and the dialog's rect.
+    fn open_dialog() -> (egui::Context, Workspace, Rect) {
+        let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "M");
+        let mut ws = Workspace::new(session, crate::settings::Settings::default());
+        ws.session.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        ws.session.execute("circle", &json!({"center": [0, 0], "radius": 10})).unwrap();
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut ws, Vec::new());
+        ws.tool = Tool::Text { at: None, text: "AB".into(), size: 10.0, align: 0, angle: 0.0 };
+        for _ in 0..2 {
+            frame(&ctx, &mut ws, Vec::new());
+        }
+        let rect = Rect::from_center_size(ws.viewport_rect.center(), vec2(320.0, 286.0));
+        (ctx, ws, rect)
+    }
+
+    fn size(ws: &Workspace) -> f64 {
+        match &ws.tool {
+            Tool::Text { size, .. } => *size,
+            _ => f64::NAN,
+        }
+    }
+
+    /// #57: the wheel over the font list scrolls the list; the view behind it keeps its zoom. Same over the dialog.
+    #[test]
+    fn wheel_over_the_font_list_does_not_zoom() {
+        let (ctx, mut ws, rect) = open_dialog();
+        click(&ctx, &mut ws, pos2(rect.right() - 40.0, rect.top() + 126.0 + 21.0));
+        assert!(ws.font_list.is_some(), "the font list opened");
+        let before = ws.camera.distance;
+        for at in [pos2(rect.right() + 128.0, rect.top() + 180.0), rect.center()] {
+            frame(&ctx, &mut ws, vec![Event::PointerMoved(at)]);
+            for _ in 0..3 {
+                let wheel = Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Line,
+                    delta: vec2(0.0, -3.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
+                    modifiers: Modifiers::NONE,
+                };
+                frame(&ctx, &mut ws, vec![wheel]);
+            }
+            assert_eq!(ws.camera.distance, before, "the view zoomed under {at:?}");
+        }
+    }
+
+    /// #58: Capital Height takes values typed a key at a time, through "0." and "1." on the way.
+    #[test]
+    fn capital_height_takes_typed_decimals() {
+        for (typed, want) in [("0.5", 0.5), ("1.5", 1.5), ("2", 2.0)] {
+            let (ctx, mut ws, rect) = open_dialog();
+            let field = pos2(rect.left() + 215.0, rect.top() + 189.0);
+            click(&ctx, &mut ws, field);
+            let all = Event::Key { key: Key::A, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND };
+            frame(&ctx, &mut ws, vec![all]);
+            for ch in typed.chars() {
+                frame(&ctx, &mut ws, vec![Event::Text(ch.to_string())]);
+            }
+            frame(&ctx, &mut ws, Vec::new());
+            assert!((size(&ws) - want).abs() < 1e-9, "typed {typed}: size is {}", size(&ws));
         }
     }
 }

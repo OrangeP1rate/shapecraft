@@ -663,3 +663,100 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, r: Rect, more: Rect) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod rename_tests {
+    use super::*;
+    use egui::{Event, Key, Modifiers, PointerButton, Pos2};
+    use std::sync::Arc;
+
+    fn frame(ctx: &egui::Context, ws: &mut Workspace, events: Vec<Event>) {
+        let input =
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 900.0))), events, ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| ws.ui(ui, None));
+        out.textures_delta.clear();
+    }
+
+    fn click(ctx: &egui::Context, ws: &mut Workspace, at: Pos2, button: PointerButton) {
+        frame(ctx, ws, vec![Event::PointerMoved(at)]);
+        frame(ctx, ws, vec![Event::PointerButton { pos: at, button, pressed: true, modifiers: Modifiers::NONE }]);
+        frame(ctx, ws, vec![Event::PointerButton { pos: at, button, pressed: false, modifiers: Modifiers::NONE }]);
+    }
+
+    fn type_name(ctx: &egui::Context, ws: &mut Workspace, name: &str) {
+        frame(ctx, ws, Vec::new());
+        frame(ctx, ws, vec![Event::Text(name.into())]);
+        let enter = |pressed| Event::Key { key: Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+        frame(ctx, ws, vec![enter(true), enter(false)]);
+        frame(ctx, ws, Vec::new());
+    }
+
+    /// A workspace with Body 01 and its sketch, the Items list open, and where row `i` (newest first) sits.
+    fn setup() -> (egui::Context, Workspace, impl Fn(&Workspace, usize) -> Pos2) {
+        let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "M");
+        let mut ws = Workspace::new(session, crate::settings::Settings::default());
+        ws.session.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        ws.session.execute("rectangle", &json!({"corner": [0, 0], "opposite": [10, 10]})).unwrap();
+        ws.session.execute("circle", &json!({"center": [30, 0], "radius": 4})).unwrap();
+        let k = ws.session.active_sketch.unwrap().0;
+        ws.session.execute("extrude", &json!({"sketch": k, "region": 0, "distance": 5})).unwrap();
+        ws.session.selection.clear();
+        ws.show_items = true;
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            frame(&ctx, &mut ws, Vec::new());
+        }
+        let row = |ws: &Workspace, i: usize| pos2(Tokens::GAP + 90.0, ws.left_top - 1.0 + 74.0 + Tokens::ROW_H * (i as f32 + 0.5));
+        (ctx, ws, row)
+    }
+
+    fn names(ws: &Workspace) -> Vec<String> {
+        let d = &ws.session.doc;
+        d.bodies
+            .iter()
+            .map(|b| d.item_name(b.id).unwrap_or_default().to_string())
+            .chain(d.sketches.iter().map(|s| d.item_name(s.id).unwrap_or_default().to_string()))
+            .collect()
+    }
+
+    /// #46: right-click a row, Rename, type, Return: the item takes the new name.
+    #[test]
+    fn right_click_rename_renames_each_row() {
+        for i in 0..2 {
+            let (ctx, mut ws, row) = setup();
+            let at = row(&ws, i);
+            click(&ctx, &mut ws, at, PointerButton::Secondary);
+            assert!(ws.item_menu.is_some(), "row {i}: the row's menu opens");
+            // Rename is the first entry: 4 px in, 28 px rows.
+            click(&ctx, &mut ws, at + vec2(20.0, 4.0 + 14.0), PointerButton::Primary);
+            assert!(ws.renaming.is_some(), "row {i}: renaming started");
+            type_name(&ctx, &mut ws, "Lid");
+            assert!(names(&ws).iter().any(|n| n == "Lid"), "row {i}: renamed, names now {:?}", names(&ws));
+        }
+    }
+
+    /// #46: a double click on a body's row renames it; on a sketch's row it opens the sketch, as the reference
+    /// does (i46-013), and renaming stays in the row's menu.
+    #[test]
+    fn double_click_renames_a_body_and_opens_a_sketch() {
+        let (ctx, mut ws, row) = setup();
+        let body = ws.session.doc.bodies[0].id;
+        let rows = [row(&ws, 0), row(&ws, 1)];
+        for at in rows {
+            click(&ctx, &mut ws, at, PointerButton::Primary);
+            click(&ctx, &mut ws, at, PointerButton::Primary);
+            if matches!(ws.renaming, Some((Some(id), ..)) if id == body) {
+                type_name(&ctx, &mut ws, "Lid");
+                assert_eq!(ws.session.doc.item_name(body), Some("Lid"));
+            } else {
+                assert!(ws.session.active_sketch.is_some(), "a sketch row's double click opens the sketch");
+                let _ = ws.run("exit_sketching", json!({}));
+                ws.session.selection.clear();
+                ws.end_model_tool();
+                frame(&ctx, &mut ws, Vec::new());
+            }
+        }
+        assert_eq!(ws.session.doc.item_name(body), Some("Lid"), "the body's row was renamed");
+    }
+}

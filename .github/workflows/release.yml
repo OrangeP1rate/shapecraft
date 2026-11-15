@@ -264,10 +264,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: ilammy/msvc-dev-cmd@v1
         with: { arch: arm64 }
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: occt-cache
         with:
           path: target/windows-occt-arm64
-          key: occt-windows-arm64-V7_9_3-${{ hashFiles('crates/kernel-occt/build.rs', 'xtask/src/windows.rs', 'xtask/src/android.rs') }}
+          key: occt-windows-arm64-V7_9_3-${{ hashFiles('crates/kernel-occt/build.rs') }}
           restore-keys: occt-windows-arm64-V7_9_3-
       - name: OCCT for Windows on Arm
         shell: pwsh
@@ -282,6 +283,12 @@ jobs:
             cargo xtask windows-occt
             if ($LASTEXITCODE -ne 0) { throw "windows-occt failed" }
           }
+      # Saved as soon as it's built (OCCT takes ~40 min here), even if a later step fails.
+      - uses: actions/cache/save@v4
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        with:
+          path: target/windows-occt-arm64
+          key: occt-windows-arm64-V7_9_3-${{ hashFiles('crates/kernel-occt/build.rs') }}
       - name: Point the build at OCCT
         shell: pwsh
         run: |

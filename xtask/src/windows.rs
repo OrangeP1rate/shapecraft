@@ -66,14 +66,32 @@ pub fn occt() -> Result<()> {
             copy(&found, &install.join(into).join(&name))?;
         }
     }
-    let headers = build.join("include").join("opencascade");
+    // Headers: where the configure step laid them out (it does on Linux and Android), else gathered flat from the
+    // source tree as `install` would (on Windows the build folder has none).
     let into = install.join("include").join("opencascade");
     std::fs::create_dir_all(&into)?;
-    for entry in std::fs::read_dir(&headers).with_context(|| format!("no headers in {}", headers.display()))? {
-        let path = entry?.path();
-        if let Some(name) = path.file_name() {
-            std::fs::copy(&path, into.join(name)).with_context(|| format!("copying {}", path.display()))?;
+    let from = match find(&build, "Standard.hxx").and_then(|p| p.parent().map(Path::to_path_buf)) {
+        Some(dir) => vec![dir],
+        None => vec![src.join("src")],
+    };
+    let mut copied = 0usize;
+    let mut stack = from;
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).with_context(|| format!("no headers in {}", dir.display()))? {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let header = path.extension().is_some_and(|x| ["hxx", "lxx", "gxx", "h", "pxx"].iter().any(|e| x.eq_ignore_ascii_case(e)));
+            if let (true, Some(name)) = (header, path.file_name()) {
+                std::fs::copy(&path, into.join(name)).with_context(|| format!("copying {}", path.display()))?;
+                copied += 1;
+            }
         }
+    }
+    if !into.join("Standard.hxx").exists() {
+        bail!("no OCCT headers found ({copied} files copied)");
     }
     println!("OCCT for Windows {} ({} toolkits) → {}", arch(), toolkits.len(), install.display());
     Ok(())

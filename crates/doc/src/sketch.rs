@@ -599,6 +599,33 @@ impl Sketch {
     }
 
     /// The sketch elements that run along a region's boundary (the curves that make it).
+    /// The whole text a region belongs to (#49): every letter's region of the text that bounds `region`, without
+    /// the counters (the inside of an O or the holes of a B), which a region-by-region pick would fill. Letters are
+    /// told from counters by nesting, even-odd: a region inside an even number of the text's other outlines is ink.
+    /// None when no text bounds the region.
+    pub fn text_regions(&self, region: u32) -> Option<Vec<u32>> {
+        let text =
+            self.region_entities(region).into_iter().find(|&e| matches!(self.entities.get(e as usize), Some(SketchEntity::Text { .. })))?;
+        let mine: Vec<&Region> = self.regions().iter().filter(|r| self.region_entities(r.index).contains(&text)).collect();
+        // Each region's outside, and a point well inside it (the middle of its biggest triangle).
+        let outer: Vec<Vec<[DVec2; 2]>> = mine.iter().map(|r| r.loops().into_iter().next().unwrap_or_default()).collect();
+        let inside = |r: &Region| r.triangles.iter().max_by(|a, b| tri_area(a).total_cmp(&tri_area(b))).map(|t| (t[0] + t[1] + t[2]) / 3.0);
+        let within = |q: DVec2, poly: &[[DVec2; 2]]| {
+            poly.iter().filter(|[a, b]| (a.y > q.y) != (b.y > q.y) && q.x < a.x + (q.y - a.y) / (b.y - a.y) * (b.x - a.x)).count() % 2 == 1
+        };
+        let ink = mine
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| {
+                let Some(q) = inside(r) else { return false };
+                let depth = outer.iter().enumerate().filter(|(j, poly)| j != i && within(q, poly)).count();
+                depth % 2 == 0
+            })
+            .map(|(_, r)| r.index)
+            .collect();
+        Some(ink)
+    }
+
     pub fn region_entities(&self, region: u32) -> Vec<u32> {
         let Some(r) = self.region(region) else { return Vec::new() };
         let boundary: Vec<Vec<DVec2>> = r

@@ -226,6 +226,34 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             },
         },
         CommandSpec {
+            id: "select_text",
+            label: "Select Whole Text",
+            menu: "",
+            shortcut: None,
+            help: "Pick every letter of a sketch text in one go, leaving out the insides of letters like O and B, ready to extrude",
+            params: r#"{"sketch": id, "region": n}  (any letter's region; default: the picked one)"#,
+            modifies: false,
+            enabled: always,
+            run: |s, p| {
+                let picked = s.selection.iter().find_map(|q| match q {
+                    Pick::Region { sketch, region } => Some((sketch.0, *region)),
+                    _ => None,
+                });
+                let (sketch, region) = match (p.opt_id("sketch"), p.has("region")) {
+                    (Some(k), true) => (k, p.parse::<u32>("region")?),
+                    _ => picked
+                        .map(|(k, r)| (shapecraft_doc::ItemId(k), r))
+                        .ok_or_else(|| EngineError::BadParams("pick a letter, or give sketch and region".into()))?,
+                };
+                let sk = s.doc.sketch(sketch).ok_or_else(|| EngineError::BadParams(format!("no sketch {}", sketch.0)))?;
+                let regions =
+                    sk.text_regions(region).ok_or_else(|| EngineError::NotAvailable("that region isn't part of a text".into()))?;
+                let id = sk.id;
+                s.selection = regions.iter().map(|&region| Pick::Region { sketch: id, region }).collect();
+                Ok(json!({ "regions": regions }))
+            },
+        },
+        CommandSpec {
             id: "deselect_all",
             label: "Deselect All",
             menu: "",

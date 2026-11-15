@@ -581,3 +581,41 @@ fn duplicate_sketch_copies_a_whole_sketch() {
     s.execute("undo", &json!({})).unwrap();
     assert_eq!(s.doc.sketches.len(), 2);
 }
+
+/// #49: one letter of a text picks the whole text, every letter and none of the counters, beside a rectangle that
+/// isn't part of it; extruding that pick gives one body per letter with the holes kept.
+#[test]
+fn select_text_takes_every_letter_but_no_counters() {
+    let mut s = super::session();
+    if !shapecraft_doc::text::available() {
+        return;
+    }
+    s.execute("sketch", &serde_json::json!({"plane": "xy"})).unwrap();
+    s.execute("rectangle", &serde_json::json!({"center": [30, -40], "size": [40, 10]})).unwrap();
+    s.execute("text", &serde_json::json!({"at": [0, 0], "text": "OBA", "size": 20})).unwrap();
+    let sk = s.active_sketch.unwrap();
+    s.execute("exit_sketching", &serde_json::json!({})).unwrap();
+    let all = s.doc.sketch(sk).unwrap().regions().len();
+    assert_eq!(all, 1 + 3 + 4, "rectangle, three letters, four counters");
+    // Any letter: the O's region is the one with the most area left of x = 15.
+    let o = s
+        .doc
+        .sketch(sk)
+        .unwrap()
+        .regions()
+        .iter()
+        .filter(|r| r.centroid.x < 15.0 && r.centroid.y > -20.0)
+        .max_by(|a, b| a.area.total_cmp(&b.area))
+        .unwrap()
+        .index;
+    let v = s.execute("select_text", &serde_json::json!({"sketch": sk.0, "region": o})).unwrap().value;
+    assert_eq!(v["regions"].as_array().unwrap().len(), 3, "{v}");
+    assert_eq!(s.selection.len(), 3);
+    // From a pick too.
+    s.selection = vec![shapecraft_doc::Pick::Region { sketch: sk, region: o }];
+    s.execute("select_text", &serde_json::json!({})).unwrap();
+    assert_eq!(s.selection.len(), 3);
+    // The rectangle is no text.
+    let rect = s.doc.sketch(sk).unwrap().regions().iter().find(|r| r.centroid.y < -30.0).unwrap().index;
+    assert!(s.execute("select_text", &serde_json::json!({"sketch": sk.0, "region": rect})).is_err());
+}

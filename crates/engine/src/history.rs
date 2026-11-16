@@ -477,7 +477,10 @@ impl Session {
         if index + 1 < steps.len() {
             let mut held = steps[index + 1..].to_vec();
             held.append(&mut self.doc.future);
+            // The models kept after the later steps stay kept: leaving the sketch unchanged finds them again.
+            let kept = std::sync::Arc::clone(&self.replayed);
             self.replay(steps[..=index].to_vec())?;
+            self.replayed = kept;
             self.doc.future = held;
         }
         if let Some(sk) = self.doc.sketch_mut(sketch) {

@@ -81,6 +81,9 @@ pub enum Icon {
     Revolve,
     Sweep,
     WrapEmboss,
+    Thread,
+    ThreadFull,
+    ThreadCustom,
     Visualize,
     More,
     Union,
@@ -1086,6 +1089,37 @@ fn paint_dark(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             let curl = Pen { p: painter, o, s: pen.s, stroke: Stroke::new(3.2 * pen.s, light) };
             curl.arc(9.5, 13.0, 5.0, 120.0, 400.0);
             pen.fill(&[(9.0, 18.0), (20.0, 15.5), (20.5, 19.0), (9.5, 21.0)], grey);
+        }
+        // A short white rod with grooves round its middle.
+        Thread => {
+            let (light, grey) = two_tone(color);
+            pen.fill(&[(6.0, 6.5), (18.0, 6.5), (18.0, 18.5), (6.0, 18.5)], light);
+            painter.add(Shape::ellipse_filled(pen.at(12.0, 18.5), vec2(6.0, 2.3) * pen.s, light));
+            painter.add(Shape::ellipse_filled(pen.at(12.0, 6.5), vec2(6.0, 2.3) * pen.s, grey));
+            for y in [10.5_f32, 13.2, 15.9] {
+                let pts: Vec<Pos2> = (0..=12)
+                    .map(|k| {
+                        let x = 6.0 + k as f32;
+                        let u = (x - 12.0) / 6.0;
+                        pen.at(x, y + 2.0 * (1.0 - u * u).max(0.0).sqrt())
+                    })
+                    .collect();
+                painter.add(Shape::line(pts, Stroke::new(1.1 * pen.s, gap())));
+            }
+        }
+        // Extent ▸ Full Length / Custom Length: a rod outline grooved all along, or on its lower half with a
+        // height mark (ours).
+        ThreadFull | ThreadCustom => {
+            let full = matches!(icon, ThreadFull);
+            pen.closed(&[(8.0, 3.5), (16.0, 3.5), (16.0, 20.5), (8.0, 20.5)]);
+            let ys: &[f32] = if full { &[7.0, 10.5, 14.0, 17.5] } else { &[14.0, 17.5] };
+            for &y in ys {
+                pen.line(&[(8.0, y), (16.0, y - 1.5)]);
+            }
+            if !full {
+                pen.line(&[(19.5, 11.0), (19.5, 20.5)]);
+                pen.line(&[(18.0, 11.0), (21.0, 11.0)]);
+            }
         }
         // A colour wheel, white towards the middle (as observed).
         Visualize => color_wheel(painter, pen.at(12.0, 12.0), 10.0 * pen.s),

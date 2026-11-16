@@ -63,6 +63,10 @@ impl Workspace {
             }
         }
         self.numeric_fresh = false;
+        // Thread's size pill, ≡, ↔ and ↕.
+        if self.thread_click(ui, c) {
+            return;
+        }
         // A running tool's badges open their menus.
         if self.badge_click(ui, c) {
             return;
@@ -615,6 +619,49 @@ impl Workspace {
                 _ => {}
             },
             Tool::EdgePlane(_) | Tool::BodyEdgeOffset(_) => {}
+            Tool::Thread(mut t) => {
+                // A cylindrical face of the same body joins (or, clicked again, leaves) the faces to thread, read
+                // on the model as it was; a click on empty space finishes.
+                if self.working.is_some() {
+                    return;
+                }
+                let base = if self.is_live() {
+                    let mut before = self.session.fork();
+                    before.drop_last_step();
+                    before
+                } else {
+                    self.session.fork()
+                };
+                let hit = self.pick_at(c);
+                let Some((Pick::Face { body, .. }, at)) = hit else {
+                    self.ui_action(crate::workspace::toolbar::UiAction::ToolDone);
+                    return;
+                };
+                if body != t.body {
+                    return;
+                }
+                // The face under the pointer on the model before the thread (the live one has other faces).
+                let Some(face) = round_face_at(&base, body, at) else {
+                    self.toast("Thread works on cylindrical faces");
+                    return;
+                };
+                match t.faces.iter().position(|f| *f == face) {
+                    Some(k) => {
+                        t.faces.remove(k);
+                    }
+                    None => t.faces.push(face),
+                }
+                if t.faces.is_empty() {
+                    if self.is_live() {
+                        self.session.drop_last_step();
+                    }
+                    self.live_step = None;
+                    self.preview = None;
+                    self.await_selection(crate::workspace::toolbar::ToolKind::Thread, "Pick a cylindrical face to add a thread to.");
+                    return;
+                }
+                self.apply_thread(t);
+            }
             Tool::Onto(mut t) => {
                 // Every pick works on the model as it was: the live step comes off first.
                 if self.is_live() {
@@ -1274,4 +1321,24 @@ mod stroke_tests {
         }
         assert!(round);
     }
+}
+
+/// The cylindrical face of `body` (in `s`) a point lies on or near: within its run along the axis, the one whose
+/// radius is nearest (a thread moves the surface in or out by up to its depth).
+fn round_face_at(s: &shapecraft_engine::Session, body: shapecraft_doc::ItemId, at: glam::DVec3) -> Option<u32> {
+    let b = s.doc.body(body)?;
+    let n = s.kernel.face_count(&b.shape).ok()?;
+    let mut best: Option<(u32, f64)> = None;
+    for f in 0..n {
+        let Some(tf) = shapecraft_engine::cmd::thread_face(s, body, f) else { continue };
+        let along = (at - tf.axis.origin).dot(tf.axis.dir);
+        if along < tf.lo - 1e-3 || along > tf.hi + 1e-3 {
+            continue;
+        }
+        let off = ((at - tf.axis.origin - tf.axis.dir * along).length() - tf.radius).abs();
+        if off < (0.25 * tf.radius).max(1.0) && best.is_none_or(|(_, o)| off < o) {
+            best = Some((f, off));
+        }
+    }
+    best.map(|(f, _)| f)
 }

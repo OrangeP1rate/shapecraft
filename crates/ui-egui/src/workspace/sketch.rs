@@ -171,6 +171,7 @@ impl Workspace {
         matches!(&self.tool, Tool::Extrude(_))
             || matches!(&self.tool, Tool::Fillet(t) if !t.chamfer)
             || matches!(&self.tool, Tool::Mirror(t) if t.split)
+            || matches!(&self.tool, Tool::Thread(_))
     }
 
     pub(super) fn sketch_column_no_plane(&self) -> bool {

@@ -2,6 +2,21 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.10.0-alpha
+**Threads: pick a hole or a cylinder and it becomes a nut or a bolt, ready to print.**
+### New
+- **Thread.** Pick a cylindrical face and press Thread (after Visualize in the face's tools, last under Tools, or
+  Tools ▸ Thread): a hole gets an internal thread, a cylinder an external one, at once. Choose ISO metric (M0.35 to
+  M600, coarse and fine pitches), ANSI inch (#0 to 4", UNC/UNF/UNEF) or ACME, right or left hand, the whole face or
+  a custom length from either end. The size starts at the one nearest the face; change it from the pill on the model,
+  by typing a diameter, or in the card behind the button's ≡. Threads are modelled at the standard's medium fit
+  (6g bolt, 6H nut), and a Thread step in History changes later like any other.
+- **Print Fit for threads.** FDM prints swell, so a bolt and nut modelled exactly can jam. Print Fit (Snug 0.1 mm,
+  Normal 0.2 mm, Loose 0.3 mm, or your own Clearance) makes a bolt that much smaller and a nut that much larger all
+  round. ShapeCraft remembers the setting for your next thread, so both parts get it.
+- **Bolts and nuts line up.** Every thread of the same pitch on the same axis line follows one helix, so a bolt and
+  its nut threaded separately, at any length or height, screw together without turning one of them to match.
+
 ## 0.9.4-alpha
 **Big boards come in with their colours, sketching on them is fast, and editing an early import no longer means
 waiting for it all over again.**

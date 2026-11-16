@@ -253,6 +253,7 @@ fn tool_for(id: &str) -> Option<crate::workspace::toolbar::ToolKind> {
         "sweep" => K::Sweep,
         "offset_face" => K::OffsetFace,
         "replace_face" => K::ReplaceFace,
+        "thread" => K::Thread,
         "project_edge" => K::ProjectEdge,
         "split_body" => K::SplitBody,
         "rotate" => K::Move,

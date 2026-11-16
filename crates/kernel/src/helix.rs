@@ -14,6 +14,11 @@ fn refuse(message: &str) -> KernelError {
 /// around `axis` while it rises `height` along it. Refuses a profile touching the axis and turns that would run into
 /// each other.
 pub fn path(mesh: &Mesh, axis: Axis, angle: f64, height: f64) -> Result<Vec<(DVec3, DVec3)>> {
+    path_with(mesh, axis, angle, height, 24)
+}
+
+/// [`path`] with `per_turn` points a turn (fewer make a lighter surface: the Thread tool's long coils use 12).
+pub fn path_with(mesh: &Mesh, axis: Axis, angle: f64, height: f64, per_turn: u32) -> Result<Vec<(DVec3, DVec3)>> {
     if !angle.is_finite() || !height.is_finite() || angle.abs() < 1e-9 {
         return Err(KernelError::InvalidInput("a helical revolve needs an angle and a height".into()));
     }
@@ -57,8 +62,8 @@ pub fn path(mesh: &Mesh, axis: Axis, angle: f64, height: f64) -> Result<Vec<(DVe
         _ => (d.any_orthonormal_vector(), 1.0),
     };
     let y = d.cross(x);
-    // 24 points a turn, the tangent being how the helix runs with the angle (flipped when it turns backwards).
-    let n = ((turns * 24.0).ceil() as usize + 1).clamp(9, 100_000);
+    // `per_turn` points a turn, the tangent being how the helix runs with the angle (flipped when it turns backwards).
+    let n = ((turns * f64::from(per_turn.clamp(6, 96))).ceil() as usize + 1).clamp(9, 100_000);
     let way = angle.signum();
     Ok((0..n)
         .map(|k| {

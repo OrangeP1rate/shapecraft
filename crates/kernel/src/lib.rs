@@ -313,6 +313,12 @@ pub trait Kernel: Send + Sync {
         Err(KernelError::InvalidInput("this kernel can't make helical revolves".into()))
     }
 
+    /// [`Kernel::revolve_helix`] with `per_turn` path points a turn (a lighter surface for long coils).
+    fn revolve_helix_with(&self, face: &Shape, axis: Axis, angle: f64, height: f64, per_turn: u32) -> Result<Shape> {
+        let _ = per_turn;
+        self.revolve_helix(face, axis, angle, height)
+    }
+
     /// Hollows a solid to `thickness` (inwards), leaving `open_faces` open.
     fn shell(&self, shape: &Shape, open_faces: &[u32], thickness: f64) -> Result<Shape>;
 

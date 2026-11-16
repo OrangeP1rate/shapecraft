@@ -26,6 +26,7 @@ mod paint;
 mod picking;
 mod scene;
 mod snap;
+mod thread_overlay;
 
 use egui::{Align2, Color32, Pos2, Rect, Sense, Ui, pos2, vec2};
 use glam::{DVec2, DVec3};
@@ -203,6 +204,7 @@ impl Workspace {
             }
         }
         self.draw_annotations(ui);
+        self.draw_thread_overlay(ui);
         self.paint_area(ui);
         self.text_field(ui);
         // Moving sketch curves: a "Copy" pill under the gizmo (bodies have theirs already), s11-088.

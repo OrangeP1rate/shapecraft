@@ -904,6 +904,29 @@ pub fn home_art(args: &[String]) -> Result<()> {
             ("deselect_all", json!({})),
         ];
         cli_run(&cli, &scratch, "new-meshes", &meshes, true)?;
+        // Threads (0.10.0): a hex bolt with its top 18 mm threaded M10 and a hex nut beside it.
+        let threads: Vec<(&str, Value)> = vec![
+            ("sketch", json!({ "plane": "xy" })),
+            ("polygon", json!({ "center": [0, 0], "radius": 9, "sides": 6 })),
+            ("exit_sketching", json!({})),
+            ("extrude", json!({ "sketch": 1, "region": 0, "distance": 6 })),
+            ("sketch", json!({ "origin": [0, 0, 6], "normal": [0, 0, 1], "x_dir": [1, 0, 0] })),
+            ("circle", json!({ "center": [0, 0], "radius": 5 })),
+            ("exit_sketching", json!({})),
+            ("extrude", json!({ "sketch": 3, "region": 0, "distance": 26, "result": "union" })),
+            ("sketch", json!({ "plane": "xy" })),
+            ("polygon", json!({ "center": [26, 0], "radius": 9, "sides": 6 })),
+            ("circle", json!({ "center": [26, 0], "radius": 4.25 })),
+            ("exit_sketching", json!({})),
+            ("extrude", json!({ "sketch": 4, "region": 0, "distance": 8, "result": "new" })),
+            ("thread", json!({ "body": 5, "faces": [6], "size": "M10" })),
+            ("thread", json!({ "body": 2, "faces": [8], "size": "M10", "extent": "custom", "length": 18, "flip": true })),
+            (
+                "set_appearance",
+                json!({ "items": [2, 5], "appearance": { "name": "Steel", "color": [0.62, 0.64, 0.68], "metal": 0.9, "gloss": 0.6 } }),
+            ),
+        ];
+        cli_run(&cli, &scratch, "new-threads", &threads, true)?;
         if let Ok(shapr) = std::env::var("SHAPR_SAMPLE")
             && !shapr.is_empty()
         {

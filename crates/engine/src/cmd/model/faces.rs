@@ -239,7 +239,7 @@ pub(super) fn shell(s: &mut Session, p: &Params) -> Result<Value> {
 }
 
 /// Faces of one body (possibly none, when a whole body is picked), from params or the selection.
-fn face_target(s: &Session, p: &Params, missing: &str) -> Result<(ItemId, Vec<u32>)> {
+pub(super) fn face_target(s: &Session, p: &Params, missing: &str) -> Result<(ItemId, Vec<u32>)> {
     if p.has("body") {
         return Ok((p.id("body")?, if p.has("faces") { p.u32s("faces")? } else { Vec::new() }));
     }

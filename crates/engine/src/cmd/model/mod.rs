@@ -16,6 +16,8 @@ pub use extrude::extrude_auto_body;
 use faces::{chamfer, edge_target, fillet, move_edge, move_faces, offset_face, project_edge, replace_face, shell};
 pub use sweep::revolve_auto;
 use sweep::{loft, revolve, sweep};
+use thread::thread;
+pub use thread::{ThreadFace, ThreadSpec, thread_face};
 use transform::{align, mirror, pattern, pattern_circular, rotate, scale, translate};
 use wrap::wrap_emboss;
 
@@ -23,6 +25,7 @@ mod boolean;
 mod extrude;
 mod faces;
 mod sweep;
+mod thread;
 mod transform;
 mod wrap;
 
@@ -251,6 +254,17 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             modifies: true,
             enabled: has_bodies,
             run: |s, p| exact_only(s, p, "Wrap/Emboss", wrap_emboss),
+        },
+        CommandSpec {
+            id: "thread",
+            label: "Thread",
+            menu: "Tools/Thread",
+            shortcut: None,
+            help: "Cut a screw thread into a hole or onto a cylinder (ISO metric, ANSI inch, ACME), with an optional 3D print clearance",
+            params: r#"{"body": id?, "faces": [n]? (default: the selected cylindrical faces), "standard": "iso"|"ansi"|"acme"?, "size": "M10"|"1/2\""? (default: the size nearest the face), "pitch": mm? | "tpi": n? (default: the coarsest), "hand": "right"|"left"?, "extent": "full"|"custom"?, "length": mm? (custom), "flip": bool? (start at the other end), "clearance": mm? (print clearance all round: a bolt shrinks, a nut grows)}"#,
+            modifies: true,
+            enabled: has_bodies,
+            run: |s, p| exact_only(s, p, "Thread", thread),
         },
         CommandSpec {
             id: "replace_face",

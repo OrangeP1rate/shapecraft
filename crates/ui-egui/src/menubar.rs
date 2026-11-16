@@ -390,6 +390,7 @@ pub fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 item("Replace Face", None, Tool(ToolKind::ReplaceFace), Bodies),
                 item("Project as Edge", None, Tool(ToolKind::ProjectEdge), Bodies),
                 item("Wrap & Emboss", None, Tool(ToolKind::WrapEmboss), Bodies),
+                item("Thread", None, Tool(ToolKind::Thread), Bodies),
                 sep(),
                 item("Visualize", None, Ui(UiAction::Visualization), InProject),
                 sep(),

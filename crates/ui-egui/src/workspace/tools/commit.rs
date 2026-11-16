@@ -76,6 +76,15 @@ impl Workspace {
         self.tool = Tool::Mirror(t);
     }
 
+    /// Thread with new faces or settings: redone live from the model as it was (one step; it may finish in the
+    /// background on a long thread).
+    pub(in crate::workspace) fn apply_thread(&mut self, t: ThreadTool) {
+        let params = t.params();
+        self.preview = None;
+        self.tool = Tool::Thread(t);
+        self.run_live("thread", params, false);
+    }
+
     /// Return: commits whatever the tool has.
     pub(in crate::workspace) fn commit_tool(&mut self) {
         let kind = self.typed_kind();
@@ -92,6 +101,19 @@ impl Workspace {
                     t.radius = v;
                 }
                 self.apply_fillet(&t);
+            }
+            Tool::Thread(mut t) => {
+                // A typed value: the length once its ↕ was clicked, else the diameter (snapped to a size).
+                if let Some(v) = typed.filter(|v| *v > 0.0) {
+                    if t.typing_length {
+                        t.custom = true;
+                        t.length = v.min(t.face.hi - t.face.lo);
+                    } else {
+                        t.set_diameter(v);
+                    }
+                    t.typing_length = false;
+                    self.apply_thread(t);
+                }
             }
             Tool::Shell(mut t) => {
                 if let Some(v) = typed {

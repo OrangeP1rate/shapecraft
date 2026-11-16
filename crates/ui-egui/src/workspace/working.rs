@@ -17,7 +17,7 @@ use super::{Preview, Workspace};
 use crate::theme::{self, Tokens, radius};
 
 /// The steps that run off the window's thread: the pulled tools whose kernel work can run long on a slow processor.
-pub(crate) const HEAVY: &[&str] = &["offset_face", "shell", "fillet", "chamfer"];
+pub(crate) const HEAVY: &[&str] = &["offset_face", "shell", "fillet", "chamfer", "thread"];
 /// How long the window waits for a step before it shows the card and lets it finish in the background.
 pub(super) const WAIT_INLINE: Duration = Duration::from_millis(150);
 /// The same for a live preview: the drag keeps its feel when previews are quick.

@@ -211,6 +211,8 @@ fn icon_for(step: &HistoryStep) -> Icon {
         "intersect" => Icon::Intersect,
         "offset_face" => Icon::OffsetFace,
         "replace_face" => Icon::ReplaceFace,
+        "thread" => Icon::Thread,
+        "wrap_emboss" => Icon::WrapEmboss,
         "project_edge" => Icon::ProjectEdge,
         "scale" => Icon::Scale,
         "translate" => Icon::Translate,

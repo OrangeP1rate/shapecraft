@@ -21,6 +21,7 @@ mod meshes;
 mod project;
 mod shapr;
 mod sketch;
+mod thread;
 mod transform;
 
 fn session() -> Session {

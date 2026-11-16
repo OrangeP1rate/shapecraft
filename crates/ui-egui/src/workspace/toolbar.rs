@@ -70,6 +70,8 @@ pub enum ToolKind {
     ReplaceFace,
     ProjectEdge,
     WrapEmboss,
+    /// Thread: a screw thread on a cylindrical face.
+    Thread,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -435,6 +437,8 @@ pub const CURVED_FACE: &[ToolDef] = &[
     t(Icon::Fillet, "Chamfer", "", Tool(ToolKind::Chamfer)),
     t(Icon::Axis, "Axis - Cylinder/Cone", "", Command("axis_cylinder")),
     t(Icon::Visualize, "Visualize", "", U(UiAction::Visualization)),
+    // Only for a cylinder's wall or a hole; the column leaves it out for other curved faces.
+    t(Icon::Thread, "Thread", "", Tool(ToolKind::Thread)),
     t(Icon::Pattern, "Pattern - Linear", "", Tool(ToolKind::Pattern)),
     t(Icon::PatternCircular, "Pattern - Circular", "", Tool(ToolKind::CircularPattern)),
     t(Icon::Translate, "Translate", "N", Tool(ToolKind::Translate)),
@@ -659,6 +663,7 @@ const TOOLS: &[ToolDef] = &[
     t(Icon::ReplaceFace, "Replace Face", "", Tool(ToolKind::ReplaceFace)),
     t(Icon::ProjectEdge, "Project as Edge", "", Tool(ToolKind::ProjectEdge)),
     t(Icon::WrapEmboss, "Wrap & Emboss", "", Tool(ToolKind::WrapEmboss)),
+    t(Icon::Thread, "Thread", "", Tool(ToolKind::Thread)),
 ];
 
 pub fn flyout(cat: Category) -> &'static [ToolDef] {

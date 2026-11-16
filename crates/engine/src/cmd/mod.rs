@@ -13,7 +13,7 @@ mod visual;
 
 pub use sketch::{body_edge_entities, face_offset, offset_body_edges, offset_entities};
 
-pub use model::{extrude_auto_body, revolve_auto, set_body_shape};
+pub use model::{ThreadFace, ThreadSpec, extrude_auto_body, revolve_auto, set_body_shape, thread_face};
 
 pub type RunFn = fn(&mut Session, &Params) -> Result<Value>;
 pub type EnabledFn = fn(&Session) -> bool;

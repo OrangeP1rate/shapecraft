@@ -415,8 +415,12 @@ impl Kernel for OcctKernel {
     }
 
     fn revolve_helix(&self, face: &Shape, axis: Axis, angle: f64, height: f64) -> Result<Shape> {
+        self.revolve_helix_with(face, axis, angle, height, 24)
+    }
+
+    fn revolve_helix_with(&self, face: &Shape, axis: Axis, angle: f64, height: f64, per_turn: u32) -> Result<Shape> {
         let mesh = self.tessellate(face, 0.01)?;
-        let path = shapecraft_kernel::helix::path(&mesh, axis, angle, height)?;
+        let path = shapecraft_kernel::helix::path_with(&mesh, axis, angle, height, per_turn)?;
         let (pts, tangents): (Vec<f64>, Vec<f64>) =
             (path.iter().flat_map(|(p, _)| p.to_array()).collect(), path.iter().flat_map(|(_, t)| t.to_array()).collect());
         let f = raw(face)?;

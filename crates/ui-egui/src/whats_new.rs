@@ -19,6 +19,14 @@ pub struct Entry {
 
 pub const ENTRIES: &[Entry] = &[
     Entry {
+        version: "0.10.0",
+        title: "Threads",
+        text: "Pick a hole or a cylinder and press Thread: it becomes a nut or a bolt in ISO metric, ANSI inch or ACME \
+               sizes, right or left hand, along the whole face or part of it. Print Fit gives 3D-printed threads the \
+               room they need to turn, and a bolt and its nut always line up.",
+        art: "new-threads",
+    },
+    Entry {
         version: "0.9.0",
         title: "ShapeCraft on iPhone",
         text: "The whole modeler runs as a native iPhone app, laid out for a phone: fingers move the view, a stylus \

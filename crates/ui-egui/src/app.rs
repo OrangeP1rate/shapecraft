@@ -1476,6 +1476,7 @@ impl ShapeCraftApp {
                     "align" => K::Align,
                     "replace_face" => K::ReplaceFace,
                     "wrap_emboss" => K::WrapEmboss,
+                    "thread" => K::Thread,
                     "project_edge" => K::ProjectEdge,
                     "scale_non_uniform" => K::ScaleNonUniform,
                     "plane_3points" => K::Plane3,

@@ -67,7 +67,15 @@ fn context_tools(ws: &Workspace) -> (Vec<ToolDef>, Option<String>) {
         SelectionKind::Axes | SelectionKind::Images => &[],
     };
     v.push(toolbar::SELECTION_HEAD);
-    v.extend_from_slice(set);
+    // Thread is offered for a cylinder's wall or a hole only, not a cone, sphere or fillet.
+    let threadable = || {
+        ws.session.selection.iter().all(|p| match *p {
+            shapecraft_doc::Pick::Face { body, face } => shapecraft_engine::cmd::thread_face(&ws.session, body, face).is_some(),
+            _ => false,
+        })
+    };
+    let cylinder = set.iter().any(|d| d.action == Action::Tool(ToolKind::Thread)) && threadable();
+    v.extend(set.iter().filter(|d| d.action != Action::Tool(ToolKind::Thread) || cylinder).copied());
     // Booleans take only closed mesh bodies (an open mesh shows none).
     let open_mesh = ws
         .session
@@ -253,6 +261,7 @@ pub(super) fn is_active(ws: &Workspace, def: &ToolDef) -> bool {
         | (Action::Tool(K::Move), Tool::Move(_))
         | (Action::Tool(K::Pattern), Tool::Pattern(_))
         | (Action::Tool(K::OffsetFace), Tool::OffsetFace(_))
+        | (Action::Tool(K::Thread), Tool::Thread(_))
         | (Action::Tool(K::Scale), Tool::Scale(_))
         | (Action::Tool(K::ScaleNonUniform), Tool::Scale(_))
         | (Action::Tool(K::Loft), Tool::Loft(_))
@@ -566,6 +575,7 @@ impl Workspace {
             Tool::Sweep(_) => Some(ToolKind::Sweep),
             Tool::Revolve(_) => Some(ToolKind::Revolve),
             Tool::Loft(_) => Some(ToolKind::Loft),
+            Tool::Thread(_) => Some(ToolKind::Thread),
             Tool::Extrude(_) if self.options_menu.is_some() => Some(ToolKind::Extrude),
             Tool::Fillet(t) if self.options_menu.is_some() && !t.chamfer => Some(ToolKind::Fillet),
             _ => None,
@@ -701,8 +711,8 @@ impl Workspace {
                 .collect();
             if let Some(i) = toolbar::group_full(ui, pos2(x, y), group, &[], &trim_on, &tail_disabled, labels, &format!("tail{k}"), None) {
                 clicked = group.get(i).copied();
-                // The running Replace Face clicked again: its card.
-                if trim_on.get(i).copied().unwrap_or(false) && matches!(self.tool, Tool::Onto(_) | Tool::Mirror(_)) {
+                // The running Replace Face (or Thread) clicked again: its card.
+                if trim_on.get(i).copied().unwrap_or(false) && matches!(self.tool, Tool::Onto(_) | Tool::Mirror(_) | Tool::Thread(_)) {
                     self.options_menu = if self.options_menu.is_some() { None } else { Some(pos2(x, y)) };
                     self.popup_opened_at = self.now;
                     clicked = None;
@@ -721,6 +731,17 @@ impl Workspace {
                 .chain(tail_groups.iter().flatten().copied())
                 .chain(bottom.iter().copied())
                 .find(|d| d.label == label);
+            // Pressed again while it runs, a card tool opens its card, as a click does.
+            if let Some(def) = clicked
+                && matches!(def.action, Action::Tool(_))
+                && is_active(self, &def)
+                && self.card_tool()
+                && self.session.active_sketch.is_none()
+            {
+                self.options_menu = if self.options_menu.is_some() { None } else { Some(self.viewport_rect.left_top()) };
+                self.popup_opened_at = self.now;
+                clicked = None;
+            }
         }
         // In a sketch, a running tool's lit button clicked again (one with no variants or options to show) puts the
         // tool down, back to picking: a sketch starts with Line armed, and this is the way to put it down.

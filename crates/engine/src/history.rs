@@ -83,6 +83,11 @@ pub const FEATURES: &[Feature] = &[
         name: "Wrap & Emboss",
         fields: &[f("depth", "Emboss", Length, 1.0), f("rotation", "Rotation", Angle, 0.0)],
     },
+    Feature {
+        command: "thread",
+        name: "Thread",
+        fields: &[f("length", "Length", Length, 0.0), f("clearance", "Print Clearance", Length, 0.0)],
+    },
     Feature { command: "offset_plane", name: "Plane - Offset", fields: &[f("distance", "Distance", Length, 0.0)] },
     Feature { command: "midplane", name: "Midplane", fields: &[] },
     Feature { command: "plane_3points", name: "Plane", fields: &[] },

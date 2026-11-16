@@ -399,6 +399,55 @@ pub fn pull_down(
     (clicked, shown.response.rect)
 }
 
+/// [`pull_down`] for a long list: `shown` rows at a time from row `scroll`, the wheel moving through it, with a
+/// fade at an edge that has more beyond it. Returns the clicked row (its index in `rows`) and the list's rect.
+pub fn pull_down_scrolled(
+    ui: &mut Ui,
+    id: &str,
+    top_left: Pos2,
+    width: f32,
+    rows: &[(&str, Option<crate::icons::Icon>, bool)],
+    shown: usize,
+    scroll: &mut f32,
+) -> (Option<usize>, Rect) {
+    const ROW: f32 = 24.0;
+    let max = rows.len().saturating_sub(shown) as f32;
+    let mut clicked = None;
+    let first = scroll.clamp(0.0, max).round() as usize;
+    let shown_area = egui::Area::new(ui.scope_id().with(id)).fixed_pos(top_left).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        let (rect, resp) = ui.allocate_exact_size(vec2(width, ROW * shown as f32 + 10.0), Sense::hover());
+        if resp.hovered() {
+            let dy = ui.input(|i| i.smooth_scroll_delta.y);
+            *scroll = (*scroll - dy / ROW).clamp(0.0, max);
+        }
+        let p = ui.painter();
+        p.rect_filled(rect, radius(8), Tokens::banner());
+        p.rect_stroke(rect, radius(8), Stroke::new(1.0, Tokens::chip_border()), StrokeKind::Inside);
+        for (k, (label, _, checked)) in rows.iter().enumerate().skip(first).take(shown) {
+            let row = Rect::from_min_size(rect.min + vec2(5.0, 5.0 + ROW * (k - first) as f32), vec2(width - 10.0, ROW));
+            let r = ui.interact(row, ui.scope_id().with((id, k)), Sense::click());
+            if r.hovered() {
+                p.rect_filled(row, radius(5), theme::c(0x2453c9));
+            }
+            if *checked {
+                p.text(pos2(row.left() + 8.0, row.center().y), Align2::LEFT_CENTER, "✓", theme::body(12.5), Tokens::text_strong());
+            }
+            p.text(pos2(row.left() + 24.0, row.center().y), Align2::LEFT_CENTER, *label, theme::body(12.5), Tokens::text_strong());
+            if r.clicked() {
+                clicked = Some(k);
+            }
+        }
+        // Small arrows where the list goes on (as macOS menus show them).
+        if first > 0 {
+            p.text(pos2(rect.center().x, rect.top() + 6.0), Align2::CENTER_CENTER, "▲", theme::body(8.0), Tokens::text_dim());
+        }
+        if (first as f32) < max {
+            p.text(pos2(rect.center().x, rect.bottom() - 6.0), Align2::CENTER_CENTER, "▼", theme::body(8.0), Tokens::text_dim());
+        }
+    });
+    (clicked, shown_area.response.rect)
+}
+
 /// A macOS-style menu (as the viewport's right-click menu, measured L11): dark see-through, 24 px rows with an
 /// optional icon, 11 px separators (an empty label), a blue highlight. Kept inside `bounds`. Returns the clicked row
 /// and the menu's rect.

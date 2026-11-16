@@ -21,6 +21,7 @@ mod keep;
 pub mod meshops;
 mod params;
 mod refs;
+pub mod thread;
 pub use cmd::{CommandSpec, body_edge_entities, face_offset, offset_body_edges, offset_entities, registry};
 pub use params::Params;
 

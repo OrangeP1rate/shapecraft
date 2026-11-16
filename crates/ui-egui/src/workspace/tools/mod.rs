@@ -71,6 +71,8 @@ pub enum Tool {
     Mirror(MirrorTool),
     Pattern(PatternTool),
     OffsetFace(OffsetFaceTool),
+    /// Thread: live from the moment a cylindrical face is picked.
+    Thread(ThreadTool),
     Scale(ScaleTool),
     Loft(LoftTool),
     Sweep(SweepTool),
@@ -1280,6 +1282,7 @@ impl Tool {
             Tool::BodyEdgeOffset(_) => true,
             Tool::Boolean(_) => false,
             Tool::OffsetFace(_) | Tool::Scale(_) | Tool::OffsetEdge(_) | Tool::OffsetPlane(_) => true,
+            Tool::Thread(_) => true,
             Tool::Mirror(_)
             | Tool::Loft(_)
             | Tool::Sweep(_)
@@ -1356,6 +1359,7 @@ impl Tool {
             Tool::Mirror(t) if t.split => ("Split Body", "Select a body to split, then a face, plane or sketch line to split it with."),
             Tool::Mirror(_) => ("Mirror", "Pick what to mirror, then a line, plane or flat face to mirror it across."),
             Tool::OffsetFace(_) => ("Offset Face", "Pick faces to push them in or pull them out."),
+            Tool::Thread(_) => ("Thread", "Pick a cylindrical face to add a thread to."),
             Tool::Scale(_) => ("Scale (S)", "Pull a handle or type a factor. Drag the center to scale from somewhere else"),
             Tool::Pattern(t) if t.spacing.abs() > 1e-9 => {
                 ("Linear Pattern", "Type the spacing, then Tab (or click Quantity) for how many. Done applies")
@@ -1576,4 +1580,114 @@ pub(super) fn text_lines(text: &str, size: f64, align: u8, anchor: DVec2, angle:
     let mid = if lo.is_finite() && hi.is_finite() { (lo + hi) / 2.0 } else { DVec2::ZERO };
     let rot = DVec2::from_angle(angle);
     lines.iter().zip(placed).map(|(l, (o, ..))| (anchor + rot.rotate(o - mid), l.to_string())).collect()
+}
+
+/// Thread: one body's cylindrical faces and the thread's settings. It applies live; the card and the size
+/// pill change it, Done keeps it.
+#[derive(Clone, Debug)]
+pub struct ThreadTool {
+    pub body: ItemId,
+    /// The faces as numbered before the thread (the live step is always redone from there).
+    pub faces: Vec<u32>,
+    /// The first face as it was: where the size pill and the handles sit.
+    pub face: shapecraft_engine::cmd::ThreadFace,
+    pub standard: shapecraft_engine::thread::Standard,
+    pub size: String,
+    /// mm.
+    pub pitch: f64,
+    pub left: bool,
+    /// Extent ▸ Custom Length (`length` from the start end), else the whole face.
+    pub custom: bool,
+    pub length: f64,
+    pub flip: bool,
+    /// Print clearance all round, mm (ours: FDM prints need room; 0 is the standard's own fit).
+    pub clearance: f64,
+    /// The size list under the size pill is open, and how far it's scrolled (rows; negative: not placed yet).
+    pub size_menu: bool,
+    pub size_scroll: f32,
+    /// The typed value is the length (its ↕ was clicked), not the diameter.
+    pub typing_length: bool,
+}
+
+impl ThreadTool {
+    /// The picked cylindrical faces of one body; `None` unless every picked face is one.
+    pub fn from_selection(s: &Session, standard: shapecraft_engine::thread::Standard, clearance: f64) -> Option<Self> {
+        let body = s.selection.iter().find_map(|p| if let Pick::Face { body, .. } = *p { Some(body) } else { None })?;
+        let mut faces = Vec::new();
+        for p in &s.selection {
+            match *p {
+                Pick::Face { body: b, face } if b == body => faces.push(face),
+                _ => return None,
+            }
+        }
+        if s.doc.body(body)?.is_mesh() {
+            return None;
+        }
+        let first = shapecraft_engine::cmd::thread_face(s, body, faces[0])?;
+        if faces.iter().any(|&f| shapecraft_engine::cmd::thread_face(s, body, f).is_none()) {
+            return None;
+        }
+        let size = standard.nearest(first.radius * 2.0);
+        Some(ThreadTool {
+            body,
+            faces,
+            face: first,
+            standard,
+            pitch: size.default_pitch(),
+            size: size.name,
+            left: false,
+            custom: false,
+            length: first.hi - first.lo,
+            flip: false,
+            clearance,
+            size_menu: false,
+            size_scroll: -1.0,
+            typing_length: false,
+        })
+    }
+
+    pub fn params(&self) -> serde_json::Value {
+        let mut p = json!({
+            "body": self.body.0,
+            "faces": self.faces,
+            "standard": self.standard.key(),
+            "size": self.size,
+            "pitch": self.pitch,
+            "hand": if self.left { "left" } else { "right" },
+            "extent": if self.custom { "custom" } else { "full" },
+            "clearance": self.clearance,
+        });
+        if self.custom {
+            p["length"] = json!(self.length);
+            p["flip"] = json!(self.flip);
+        }
+        p
+    }
+
+    /// A new standard starts at its size nearest the face.
+    pub fn set_standard(&mut self, standard: shapecraft_engine::thread::Standard) {
+        self.standard = standard;
+        let size = standard.nearest(self.face.radius * 2.0);
+        self.pitch = size.default_pitch();
+        self.size = size.name;
+    }
+
+    /// A new size starts at its coarsest pitch.
+    pub fn set_size(&mut self, name: &str) {
+        if let Some(size) = self.standard.size(name) {
+            self.pitch = size.default_pitch();
+            self.size = size.name;
+        }
+    }
+
+    /// The size whose major diameter is nearest `diameter` (the ↔ handle's typed value).
+    pub fn set_diameter(&mut self, diameter: f64) {
+        let size = self.standard.nearest(diameter);
+        self.set_size(&size.name);
+    }
+
+    /// Where the thread's start end is along the face's axis, and which way it runs from there.
+    pub fn start(&self) -> (f64, f64) {
+        if self.custom && self.flip { (self.face.hi, -1.0) } else { (self.face.lo, 1.0) }
+    }
 }

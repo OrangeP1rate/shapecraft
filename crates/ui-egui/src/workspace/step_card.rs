@@ -9,10 +9,11 @@ use shapecraft_doc::format_length;
 use shapecraft_engine::history::{self, FieldKind};
 
 use super::Workspace;
-use super::tools::{ExtrudeTool, FilletTool, Tool};
+use super::tools::{ExtrudeTool, FilletTool, ThreadTool, Tool};
 use crate::i18n::tr;
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens, radius};
+use shapecraft_engine::thread::Standard;
 
 /// Which pop-up is open and which number is being typed.
 #[derive(Default)]
@@ -23,6 +24,8 @@ pub struct CardUi {
     scrub: Option<(&'static str, f64, f32)>,
     /// The ⋯ menu is open.
     more: bool,
+    /// How far a long pop-up list (a thread's sizes) is scrolled, in rows.
+    list_scroll: f32,
     /// The card's title is being dragged: where the card's corner was and how far the pointer has gone.
     drag: Option<(egui::Pos2, egui::Vec2)>,
     /// The tool the card last saw, so Show on Tool Start opens it once per tool.
@@ -59,6 +62,9 @@ fn link_blue() -> Color32 {
 enum Source {
     Tool(Box<ExtrudeTool>),
     Fillet(Box<FilletTool>),
+    /// Thread (Faces to Thread, Extent, Length, Flip Start Side, Standard, Size, Pitch, Direction; then
+    /// ours: Print Fit and its Clearance).
+    Thread(Box<ThreadTool>),
     /// Split Body (s29-027): what's split, what it's split with, Keep Originals.
     Split {
         items: usize,
@@ -79,6 +85,105 @@ enum Row {
     /// Label, key, current value, (shown name, value, enabled).
     Choice(&'static str, &'static str, &'static str, &'static [(&'static str, &'static str, bool)]),
     Number(&'static str, &'static str, FieldKind, f64, Option<String>),
+    /// A choice whose options are worked out (a thread standard's sizes): label, key, shown value, (shown, value).
+    List(&'static str, &'static str, String, Vec<(String, String)>),
+}
+
+const STANDARDS: &[(&str, &str, bool)] = &[("ISO", "iso", true), ("ANSI", "ansi", true), ("ACME", "acme", true)];
+const HANDS: &[(&str, &str, bool)] = &[("Right Hand", "right", true), ("Left Hand", "left", true)];
+const EXTENT_KINDS: &[&str] = &["full", "custom"];
+/// Print Fit presets: radial clearance (mm) a printed thread gets on each part.
+pub(super) const FITS: &[(&str, f64)] = &[("Off", 0.0), ("Snug", 0.1), ("Normal", 0.2), ("Loose", 0.3)];
+
+/// A thread's settings, whichever way they're held.
+struct Thread {
+    faces: usize,
+    custom: bool,
+    length: f64,
+    flip: bool,
+    standard: Standard,
+    size: String,
+    pitch: f64,
+    left: bool,
+    clearance: f64,
+}
+
+fn fit_name(clearance: f64) -> &'static str {
+    FITS.iter().find(|f| (f.1 - clearance).abs() < 1e-6).map_or("Custom", |f| f.0)
+}
+
+fn thread_rows(t: &Thread) -> Vec<Row> {
+    let mut rows = vec![
+        Row::Picks("Faces to Thread", "face", t.faces),
+        Row::Segments(
+            "Extent",
+            if t.custom { "Custom Length" } else { "Full Length" },
+            &[Icon::ThreadFull, Icon::ThreadCustom],
+            usize::from(t.custom),
+            "extent",
+            EXTENT_KINDS,
+        ),
+    ];
+    if t.custom {
+        rows.push(Row::Number("Length", "length", FieldKind::Length, t.length, None));
+        rows.push(Row::Switch("Flip Start Side", "flip", t.flip));
+    }
+    rows.push(Row::Choice("Standard", "standard", t.standard.label(), STANDARDS));
+    let sizes = t.standard.sizes();
+    let pitches = sizes.iter().find(|s| s.name == t.size).map(|s| s.pitches.clone()).unwrap_or_else(|| vec![t.pitch]);
+    rows.push(Row::List("Size", "size", t.size.clone(), sizes.into_iter().map(|s| (s.name.clone(), s.name)).collect()));
+    rows.push(Row::List(
+        if t.standard.per_inch() { "Threads per Inch" } else { "Pitch" },
+        "pitch",
+        t.standard.pitch_label(t.pitch),
+        pitches.iter().map(|&p| (t.standard.pitch_label(p), format!("{p}"))).collect(),
+    ));
+    rows.push(Row::Choice("Direction", "hand", if t.left { "Left Hand" } else { "Right Hand" }, HANDS));
+    // Ours: room for a 3D-printed thread to turn (both parts get it).
+    rows.push(Row::List(
+        "Print Fit",
+        "fit",
+        fit_name(t.clearance).to_string(),
+        FITS.iter().map(|(n, c)| (if *c > 0.0 { format!("{n} ({c} mm)") } else { (*n).to_string() }, format!("{c}"))).collect(),
+    ));
+    if t.clearance > 0.0 {
+        rows.push(Row::Number("Clearance", "clearance", FieldKind::Length, t.clearance, None));
+    }
+    rows
+}
+
+fn tool_thread(t: &ThreadTool) -> Thread {
+    Thread {
+        faces: t.faces.len(),
+        custom: t.custom,
+        length: t.length,
+        flip: t.flip,
+        standard: t.standard,
+        size: t.size.clone(),
+        pitch: t.pitch,
+        left: t.left,
+        clearance: t.clearance,
+    }
+}
+
+fn step_thread(ws: &Workspace, i: usize) -> Option<Thread> {
+    let all = ws.session.all_steps();
+    let e = all.get(i)?.entries.first()?;
+    let p = &e.params;
+    let standard = p.get("standard").and_then(Value::as_str).and_then(Standard::from_key).unwrap_or(Standard::Iso);
+    let size = p.get("size").and_then(Value::as_str).map(str::to_string).unwrap_or_default();
+    let pitch = p.get("pitch").and_then(Value::as_f64).or_else(|| standard.size(&size).map(|s| s.default_pitch())).unwrap_or(1.0);
+    Some(Thread {
+        faces: p.get("faces").and_then(Value::as_array).map_or(1, Vec::len),
+        custom: p.get("extent").and_then(Value::as_str) == Some("custom"),
+        length: p.get("length").and_then(Value::as_f64).unwrap_or(0.0),
+        flip: p.get("flip").and_then(Value::as_bool).unwrap_or(false),
+        standard,
+        size,
+        pitch,
+        left: p.get("hand").and_then(Value::as_str) == Some("left"),
+        clearance: p.get("clearance").and_then(Value::as_f64).unwrap_or(0.0),
+    })
 }
 
 const EXTENTS: &[(&str, &str, bool)] =
@@ -313,6 +418,9 @@ fn step_rows(ws: &Workspace, i: usize) -> Option<(String, Vec<Row>, String)> {
     if step.kind == "fillet" {
         return Some((step.label.clone(), fillet_rows(&step_fillet(ws, i)?), String::new()));
     }
+    if step.kind == "thread" {
+        return Some((step.label.clone(), thread_rows(&step_thread(ws, i)?), String::new()));
+    }
     // An Unlinked Copy has nothing to set (s29-024).
     if step.kind == "unlinked_copy" {
         return None;
@@ -358,6 +466,7 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
     let tool_name = match &ws.tool {
         Tool::Extrude(_) => Some("extrude"),
         Tool::Fillet(t) if !t.chamfer => Some("fillet"),
+        Tool::Thread(_) => Some("thread"),
         _ => None,
     };
     if tool_name != ws.card.seen_tool {
@@ -369,6 +478,7 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
     let source = match &ws.tool {
         Tool::Extrude(t) if ws.options_menu.is_some() => Source::Tool(Box::new(t.clone())),
         Tool::Fillet(t) if ws.options_menu.is_some() && !t.chamfer => Source::Fillet(Box::new(t.clone())),
+        Tool::Thread(t) if ws.options_menu.is_some() => Source::Thread(Box::new(t.clone())),
         Tool::Mirror(t) if ws.options_menu.is_some() && t.split => Source::Split { items: t.items.len(), with: t.with.len(), keep: t.keep },
         Tool::Idle if ws.show_history && ws.drawings.is_none() && !ws.visualizing && ws.settings.card_on_history_edit => {
             match ws.history.open {
@@ -384,6 +494,7 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
             ("Extrude".to_string(), rows, sub)
         }
         Source::Fillet(t) => ("Fillet".to_string(), fillet_rows(&tool_fillet(t)), String::new()),
+        Source::Thread(t) => ("Thread".to_string(), thread_rows(&tool_thread(t)), String::new()),
         Source::Split { items, with, keep } => (
             "Split Body".to_string(),
             vec![
@@ -481,6 +592,10 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                         match (&source, *label) {
                             (Source::Step(i), "Profile") => profile_click = Some(*i),
                             (_, "Subtract From") => pick_hint = Some("The cut goes into the body the profile rests on"),
+                            (Source::Thread(_), _) => pick_hint = Some("Click cylindrical faces in the view to add or remove them"),
+                            (Source::Step(_), "Faces to Thread") => {
+                                pick_hint = Some("Pick the faces again: undo the thread and thread them anew")
+                            }
                             (Source::Step(_), _) => pick_hint = Some("Pick the edges again: open the step's body and fillet them anew"),
                             (Source::Split { .. }, _) => {
                                 pick_hint = Some("Click bodies, faces, planes or sketches in the view to change them")
@@ -526,7 +641,7 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                     let knob = if *on { track.right() - 10.0 } else { track.left() + 10.0 };
                     p.circle_filled(pos2(knob, cy), 8.0, Color32::WHITE);
                     if ui.interact(track, ui.scope_id().with(("card-switch", *key)), Sense::click()).clicked() {
-                        if *key == "keep" {
+                        if *key == "keep" || *key == "flip" {
                             change = Some((key, json!(!*on)));
                         } else {
                             pick_hint = Some(if *key == "tangent_edges" {
@@ -537,7 +652,12 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                         }
                     }
                 }
-                Row::Choice(label, key, value, _) => {
+                Row::Choice(label, key, _, _) | Row::List(label, key, ..) => {
+                    let value: &str = match row {
+                        Row::Choice(_, _, v, _) => v,
+                        Row::List(_, _, v, _) => v.as_str(),
+                        _ => "",
+                    };
                     p.text(pos2(lx, cy), Align2::LEFT_CENTER, tr(label), theme::body(13.0), Tokens::text());
                     let pill = Rect::from_min_max(pos2(rx - 108.0, cy - 10.0), pos2(rx, cy + 10.0));
                     p.rect_filled(pill, radius(5), pill_grey());
@@ -558,6 +678,7 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                     );
                     if ui.interact(pill, ui.scope_id().with(("card-choice", *key)), Sense::click()).clicked() {
                         open_popup = Some((key, pos2(pill.left(), pill.top() - 2.0)));
+                        ws.card.list_scroll = -1.0;
                     }
                 }
                 Row::Number(label, key, kind, value, expr) => {
@@ -668,16 +789,33 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
         ws.card_popup_at = at;
     }
     if let Some(key) = ws.card.popup {
-        let (current, options) = rows
+        let (current, options): (String, Vec<(String, String, bool)>) = rows
             .iter()
             .find_map(|r| match r {
-                Row::Choice(_, k, v, o) if *k == key => Some((*v, *o)),
+                Row::Choice(_, k, v, o) if *k == key => {
+                    Some(((*v).to_string(), o.iter().map(|(n, v, on)| ((*n).to_string(), (*v).to_string(), *on)).collect()))
+                }
+                Row::List(_, k, v, o) if *k == key => Some((v.clone(), o.iter().map(|(n, v)| (n.clone(), v.clone(), true)).collect())),
                 _ => None,
             })
-            .unwrap_or(("", &[]));
-        let rows: Vec<(&str, Option<Icon>, bool)> = options.iter().map(|(name, _, _)| (*name, None, *name == current)).collect();
-        let top = ws.card_popup_at - vec2(0.0, 24.0 * options.len() as f32 / 2.0);
-        let (hit, rect) = super::popover::pull_down(ui, "step-card-popup", top, 120.0, &rows);
+            .unwrap_or_default();
+        let rows: Vec<(&str, Option<Icon>, bool)> = options
+            .iter()
+            .map(|(name, _, _)| (name.as_str(), None, name == &current || name.split(" (").next() == Some(current.as_str())))
+            .collect();
+        // A long list (a standard's sizes) shows 14 rows around the current one and scrolls.
+        const SHOWN: usize = 14;
+        let (hit, rect) = if rows.len() > SHOWN {
+            if ws.card.list_scroll < 0.0 {
+                let at = rows.iter().position(|r| r.2).unwrap_or(0);
+                ws.card.list_scroll = at.saturating_sub(SHOWN / 2).min(rows.len() - SHOWN) as f32;
+            }
+            let top = ws.card_popup_at - vec2(0.0, 24.0 * SHOWN as f32 / 2.0);
+            super::popover::pull_down_scrolled(ui, "step-card-popup", top, 120.0, &rows, SHOWN, &mut ws.card.list_scroll)
+        } else {
+            let top = ws.card_popup_at - vec2(0.0, 24.0 * options.len() as f32 / 2.0);
+            super::popover::pull_down(ui, "step-card-popup", top, 120.0, &rows)
+        };
         if let Some(k) = hit {
             ws.card.popup = None;
             if let Some((_, value, true)) = options.get(k) {
@@ -729,6 +867,30 @@ fn apply(ws: &mut Workspace, source: Source, key: &'static str, value: Value) {
                 ws.apply_fillet(&t);
             }
         }
+        Source::Thread(t) => {
+            let mut t = *t;
+            match key {
+                "extent" => t.custom = value.as_str() == Some("custom"),
+                "length" => t.length = value.as_f64().unwrap_or(t.length).clamp(0.01, (t.face.hi - t.face.lo).max(0.01)),
+                "flip" => t.flip = value.as_bool().unwrap_or(!t.flip),
+                "standard" => {
+                    if let Some(st) = value.as_str().and_then(Standard::from_key) {
+                        t.set_standard(st);
+                        ws.variants.insert("Thread Standard".into(), Standard::ALL.iter().position(|s| *s == st).unwrap_or(0));
+                    }
+                }
+                "size" => t.set_size(value.as_str().unwrap_or_default()),
+                "pitch" => t.pitch = value.as_str().and_then(|v| v.parse().ok()).unwrap_or(t.pitch),
+                "hand" => t.left = value.as_str() == Some("left"),
+                "fit" | "clearance" => {
+                    let c = value.as_f64().or_else(|| value.as_str().and_then(|v| v.parse().ok())).unwrap_or(t.clearance);
+                    t.clearance = (c.max(0.0) * 1000.0).round() / 1000.0;
+                    ws.variants.insert("Thread Clearance".into(), (t.clearance * 1000.0).round() as usize);
+                }
+                _ => return,
+            }
+            ws.apply_thread(t);
+        }
         Source::Tool(t) => {
             let mut t = *t;
             match key {
@@ -762,6 +924,41 @@ fn apply(ws: &mut Workspace, source: Source, key: &'static str, value: Value) {
         }
         Source::Step(_) if matches!(value.as_str(), Some("to_object" | "plane")) => {
             ws.toast("Pick the face or plane while extruding: open the step's sketch and extrude again");
+        }
+        Source::Step(i) if ws.session.all_steps().get(i).is_some_and(|s| s.kind == "thread") => {
+            let Some(t) = step_thread(ws, i) else { return };
+            let mut params = serde_json::Map::new();
+            match key {
+                "standard" => {
+                    if let Some(st) = value.as_str().and_then(Standard::from_key) {
+                        let major = t.standard.size(&t.size).map_or(10.0, |s| s.major);
+                        let size = st.nearest(major);
+                        params.insert("standard".into(), json!(st.key()));
+                        params.insert("pitch".into(), json!(size.default_pitch()));
+                        params.insert("size".into(), json!(size.name));
+                    }
+                }
+                "size" => {
+                    if let Some(size) = value.as_str().and_then(|n| t.standard.size(n)) {
+                        params.insert("pitch".into(), json!(size.default_pitch()));
+                        params.insert("size".into(), json!(size.name));
+                    }
+                }
+                "pitch" => {
+                    params.insert("pitch".into(), json!(value.as_str().and_then(|v| v.parse::<f64>().ok()).unwrap_or(t.pitch)));
+                }
+                "fit" | "clearance" => {
+                    let c = value.as_f64().or_else(|| value.as_str().and_then(|v| v.parse().ok())).unwrap_or(t.clearance);
+                    params.insert("clearance".into(), json!((c.max(0.0) * 1000.0).round() / 1000.0));
+                }
+                "extent" if value.as_str() == Some("custom") && t.length <= 0.0 => {
+                    params.insert("extent".into(), value);
+                }
+                _ => {
+                    params.insert(key.into(), value);
+                }
+            }
+            let _ = ws.run("edit_step", json!({ "step": i, "params": params }));
         }
         Source::Step(i) => {
             let mut params = serde_json::Map::new();

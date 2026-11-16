@@ -1353,6 +1353,7 @@ const ART: &[(&str, &[u8])] = &[
     ("new-languages", include_bytes!("../../../assets/home/new-languages.png")),
     ("new-shapr", include_bytes!("../../../assets/home/new-shapr.png")),
     ("new-meshes", include_bytes!("../../../assets/home/new-meshes.png")),
+    ("new-threads", include_bytes!("../../../assets/home/new-threads.png")),
     ("new-iphone", include_bytes!("../../../assets/home/new-iphone.png")),
 ];
 

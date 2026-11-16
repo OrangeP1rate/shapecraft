@@ -11,7 +11,7 @@ use super::tools::{self, Tool};
 impl Workspace {
     /// A tool started with nothing (or the wrong thing) selected waits for a selection, as observed (its banner
     /// says what to pick); it starts as soon as what's picked fits.
-    fn await_selection(&mut self, kind: ToolKind, hint: &'static str) {
+    pub(in crate::workspace) fn await_selection(&mut self, kind: ToolKind, hint: &'static str) {
         // What's picked that the tool can't take lets go (an edge for Extrude, a region for Fillet: s24 matrix); Sweep
         // keeps picked curves or edges for its path.
         let bodies = self.session.selection_kind() == shapecraft_engine::SelectionKind::Bodies;
@@ -38,6 +38,7 @@ impl Workspace {
             ToolKind::Sweep => "Sweep (W)",
             ToolKind::Revolve => "Revolve (V)",
             ToolKind::WrapEmboss => "Wrap & Emboss",
+            ToolKind::Thread => "Thread",
             _ => "Select",
         };
         self.tool = Tool::Await { kind, title, hint };
@@ -531,6 +532,22 @@ impl Workspace {
                 let radius = if shortest.is_finite() { (shortest * 0.1 * 10.0).round().max(1.0) / 10.0 } else { 1.0 };
                 self.remember("sketch_fillet");
                 self.tool = Tool::SketchFillet { all, corners, radius };
+            }
+            ToolKind::Thread => {
+                // Live at once on the picked cylindrical faces (no extra click); the standard and the print
+                // fit last used stay.
+                let standard = shapecraft_engine::thread::Standard::ALL
+                    .get(self.variants.get("Thread Standard").copied().unwrap_or(0))
+                    .copied()
+                    .unwrap_or(shapecraft_engine::thread::Standard::Iso);
+                let clearance = self.variants.get("Thread Clearance").map_or(0.0, |&c| c as f64 / 1000.0);
+                match tools::ThreadTool::from_selection(&self.session, standard, clearance) {
+                    Some(t) => {
+                        self.remember("thread");
+                        self.apply_thread(t);
+                    }
+                    None => self.await_selection(ToolKind::Thread, "Pick a cylindrical face to add a thread to."),
+                }
             }
             ToolKind::WrapEmboss => {
                 // The manual's order: the sketch profiles, then one cylindrical or conical face; the step's card then

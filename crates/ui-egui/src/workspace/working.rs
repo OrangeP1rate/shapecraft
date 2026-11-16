@@ -18,6 +18,10 @@ use crate::theme::{self, Tokens, radius};
 
 /// The steps that run off the window's thread: the pulled tools whose kernel work can run long on a slow processor.
 pub(crate) const HEAVY: &[&str] = &["offset_face", "shell", "fillet", "chamfer", "thread"];
+/// The History edits that rebuild the model from their step on: a late edit of a long history, or of an import's
+/// steps, runs many steps again. They work off the window's thread the same way (but are no live step: the next
+/// tool starts its own).
+pub(crate) const HISTORY_EDITS: &[&str] = &["edit_step", "suppress_step", "delete_step", "set_breakpoint", "set_variable"];
 /// How long the window waits for a step before it shows the card and lets it finish in the background.
 pub(super) const WAIT_INLINE: Duration = Duration::from_millis(150);
 /// The same for a live preview: the drag keeps its feel when previews are quick.
@@ -30,6 +34,8 @@ type Done = (Session, Result<Outcome, EngineError>);
 /// A heavy step running in the background.
 pub struct Working {
     id: &'static str,
+    /// A pulled tool's step (the next pull amends it), as against a History edit.
+    live: bool,
     label: String,
     started: Instant,
     rx: Receiver<Done>,
@@ -71,9 +77,13 @@ impl Workspace {
                 Some(out)
             }
             Err(RecvTimeoutError::Timeout) => {
-                let label = shapecraft_engine::cmd::find(id).map_or(id, |c| c.label).to_string();
+                let label = if HISTORY_EDITS.contains(&id) {
+                    "Rebuilding the History".to_string()
+                } else {
+                    shapecraft_engine::cmd::find(id).map_or(id, |c| c.label).to_string()
+                };
                 log::info!("{label}: working on it in the background");
-                self.working = Some(Working { id, label, started: Instant::now(), rx });
+                self.working = Some(Working { id, live: HEAVY.contains(&id), label, started: Instant::now(), rx });
                 None
             }
             Err(RecvTimeoutError::Disconnected) => Some(Err(EngineError::Panicked(id.to_string()))),
@@ -99,7 +109,11 @@ impl Workspace {
                     Ok(_) => {
                         self.session = fork;
                         self.remember(w.id);
-                        self.live_step = Some(self.session.revision);
+                        if w.live {
+                            self.live_step = Some(self.session.revision);
+                        } else {
+                            self.live_step = None;
+                        }
                         self.preview = None;
                     }
                     Err(EngineError::NotAvailable(m) | EngineError::BadParams(m)) => self.toast(m),
@@ -289,5 +303,29 @@ mod tests {
             let v = volume(&ws);
             assert!(v < solid - 0.5 && v > solid * 0.95, "{id}: {v}");
         }
+    }
+
+    /// A History edit that takes a while goes on in the background like a heavy step, lands once it's back, is one
+    /// undo, and leaves no live step for the next tool to amend.
+    #[test]
+    fn a_history_edit_finishes_in_the_background() {
+        let (mut ws, _, _) = block();
+        let undo = ws.session.undo_depth();
+        ws.heavy_wait = Duration::ZERO;
+        assert!(ws.run("edit_step", json!({"step": 1, "params": {"distance": 10}})).is_some() || ws.working.is_some());
+        if ws.working.is_some() {
+            assert!(ws.run("select_all", json!({})).is_none(), "nothing else edits the project meanwhile");
+        }
+        let ctx = egui::Context::default();
+        let until = Instant::now() + Duration::from_secs(30);
+        while ws.poll_working(&ctx) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(ws.working.is_none());
+        assert!((volume(&ws) - 20.0 * 20.0 * 10.0).abs() < 1e-3, "{}", volume(&ws));
+        assert_eq!(ws.live_step, None);
+        assert_eq!(ws.session.undo_depth(), undo + 1);
+        ws.session.execute("undo", &json!({})).unwrap();
+        assert!((volume(&ws) - 20.0 * 20.0 * 20.0).abs() < 1e-3);
     }
 }

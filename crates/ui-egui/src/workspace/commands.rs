@@ -78,6 +78,24 @@ impl Workspace {
         if self.importing.is_some() || self.working.is_some() {
             return None;
         }
+        // A History edit rebuilds from its step on: off the window's thread when it takes a while.
+        if super::working::HISTORY_EDITS.contains(&id) {
+            return match self.run_heavy(id, params, false) {
+                Some(Ok(out)) => {
+                    self.remember(id);
+                    self.live_step = None;
+                    Some(out.value)
+                }
+                Some(Err(e)) => {
+                    self.toast(match e {
+                        EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
+                        other => other.to_string(),
+                    });
+                    None
+                }
+                None => None,
+            };
+        }
         // A view-only phone changes nothing (Undo and Redo included: they'd step through what came with the file).
         if crate::tablet::view_only() && (matches!(id, "undo" | "redo") || shapecraft_engine::cmd::find(id).is_some_and(|c| c.modifies)) {
             self.toast(crate::tablet::VIEW_ONLY_NOTE);

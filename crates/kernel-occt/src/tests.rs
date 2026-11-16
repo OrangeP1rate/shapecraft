@@ -1359,3 +1359,73 @@ fn offset_stops_at_its_time_limit() {
     assert!(late.as_deref().is_some_and(|e| e.contains("time limit")), "{late:?}");
     assert!(fine);
 }
+
+/// A band on a surface that closes up but is stored unclamped (end knots below degree + 1, not flagged periodic), as
+/// Parasolid writes some: its two rims are seamless closed edges. Read as open, the repair cut it into slivers.
+#[test]
+fn unclamped_closed_band_keeps_its_area() {
+    use shapecraft_kernel::brep::{BodyKind, Brep, Curve, Edge, Face, Fin, Nurbs, NurbsSurface, Surface};
+    let (r, h, n) = (30.0_f64, 7.0_f64, 8usize);
+    // A uniform cubic loop: n poles on a circle, the first three repeated at the end, plain knots.
+    let ring: Vec<DVec3> = (0..n + 3)
+        .map(|i| {
+            let a = std::f64::consts::TAU * (i % n) as f64 / n as f64;
+            DVec3::new(r * a.cos(), r * a.sin(), 0.0)
+        })
+        .collect();
+    let knots: Vec<f64> = (0..n + 7).map(|k| k as f64).collect();
+    let mults = vec![1u32; n + 7];
+    let at = |z: f64| ring.iter().map(|p| *p + DVec3::Z * z).collect::<Vec<_>>();
+    let row = |z: f64| {
+        Curve::BSpline(Nurbs { degree: 3, poles: at(z), weights: None, knots: knots.clone(), mults: mults.clone(), periodic: false })
+    };
+    // The rim's length, segment by segment (uniform cubic B-spline basis).
+    let mut length = 0.0;
+    let mut last = None;
+    for i in 0..n {
+        for s in 0..=200 {
+            let t = s as f64 / 200.0;
+            let b = [(1.0 - t).powi(3), 3.0 * t.powi(3) - 6.0 * t * t + 4.0, -3.0 * t.powi(3) + 3.0 * t * t + 3.0 * t + 1.0, t.powi(3)];
+            let p = (0..4).fold(DVec3::ZERO, |acc, k| acc + ring[i + k] * b[k]) / 6.0;
+            if let Some(q) = last {
+                length += p.distance(q);
+            }
+            last = Some(p);
+        }
+    }
+    let surface = NurbsSurface {
+        u_degree: 1,
+        v_degree: 3,
+        nu: 2,
+        nv: n + 3,
+        poles: [at(0.0), at(h)].concat(),
+        weights: None,
+        u_knots: vec![0.0, 1.0],
+        u_mults: vec![2, 2],
+        v_knots: knots.clone(),
+        v_mults: mults.clone(),
+        u_periodic: false,
+        v_periodic: false,
+    };
+    let b = Brep {
+        kind: BodyKind::Sheet,
+        surfaces: vec![Surface::BSpline(surface)],
+        curves: vec![row(0.0), row(h)],
+        edges: vec![
+            Edge { curve: Some(0), reversed: false, start: None, end: None, tolerance: None },
+            Edge { curve: Some(1), reversed: false, start: None, end: None, tolerance: None },
+        ],
+        faces: vec![Face {
+            surface: 0,
+            flip: false,
+            loops: vec![vec![Fin { edge: 0, forward: true, pcurve: None }], vec![Fin { edge: 1, forward: false, pcurve: None }]],
+            color: None,
+        }],
+        shells: vec![vec![0]],
+        ..Brep::default()
+    };
+    let (s, index) = k().from_brep_faces(&b).unwrap();
+    let face = index[0].expect("the band is one face");
+    let (area, _) = k().measure(&s, SubShape::Face(face)).unwrap();
+    assert!((area - length * h).abs() < 0.01 * length * h, "band area {area}, want {}", length * h);
+}

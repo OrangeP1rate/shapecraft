@@ -2,6 +2,21 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.10.2-alpha
+**.shapr projects from every year open and save: 25 public projects from 2018 to 2026 now come in and go back out
+whole.**
+### Fixed
+- **Older .shapr projects open.** Projects from before 2020, 2018 sketches, shape groups, 2024 projects saved
+  without their cached history, and projects with deleted pieces left inside all import now, with their bodies,
+  sketches and folders. Saving an older project writes a new project in today's layout instead of failing.
+- **Saving keeps every body as one body.** Sheets, wires and bodies made of several solids are written as one body
+  each, and a mesh body keeps triangles that sit outside its shell.
+- **Round walls on freeform surfaces come in whole.** A wall that runs all the way round a pocket or hole on a
+  freeform surface was cut into slivers on import and went missing. It now comes in as one face, and a save and
+  reopen gives the same part.
+- **Empty sketches survive a save.** A named sketch plane with nothing drawn on it yet stays in the project when you
+  save it as .shapr.
+
 ## 0.10.1-alpha
 **The iPhone app is back in the release, and on an ordinary iPhone it's a viewer: the whole modeler stays on the
 iPhone Duo.**

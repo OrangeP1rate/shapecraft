@@ -1022,7 +1022,10 @@ pub(super) fn export_shapr(s: &mut Session, p: &Params) -> Result<Value> {
     // Sketches: Shapr3D's own get their circles moved or resized when they changed here; new ones are added (lines,
     // arcs, circles; splines and text not yet).
     let (mut sketches_added, mut sketches_updated) = (0, 0);
-    let sketches: Vec<Sketch> = s.doc.sketches.iter().filter(|k| !k.entities.is_empty()).cloned().collect();
+    // An empty sketch read from a file is kept (a named plane); only the one open for drawing with nothing in it yet
+    // is left out, as leaving it would remove it.
+    let open_empty = |k: &Sketch| k.entities.is_empty() && s.active_sketch == Some(k.id);
+    let sketches: Vec<Sketch> = s.doc.sketches.iter().filter(|k| !open_empty(k)).cloned().collect();
     for sk in &sketches {
         match link.iter().flat_map(|l| &l.sketches).find(|l| l.sketch == sk.id) {
             Some(l) => {
@@ -1033,7 +1036,8 @@ pub(super) fn export_shapr(s: &mut Session, p: &Params) -> Result<Value> {
             }
             None => {
                 let out = shapr_sketch(sk);
-                if !out.curves.is_empty() {
+                // Nothing written when every curve is of a kind not learned yet (an empty sketch still is).
+                if !out.curves.is_empty() || sk.entities.is_empty() {
                     w.add_sketch(&out).map_err(bad)?;
                     sketches_added += 1;
                 }

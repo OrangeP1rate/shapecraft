@@ -127,3 +127,68 @@ fn a_wire_body_is_written_with_its_edges() {
         assert_eq!((back.edges.len(), back.vertices.len()), (3, 5), "{format:?}");
     }
 }
+
+/// A band on a surface that closes up but is stored unclamped (end knots below degree + 1, not periodic), as
+/// Parasolid writes the walls of some holes: two seamless rims. Written by us and read back, it keeps its area.
+#[test]
+fn an_unclamped_closed_band_goes_out_and_comes_back() {
+    use shapecraft_kernel::SubShape;
+    use shapecraft_kernel::brep::{BodyKind, Brep, Curve, Edge, Face, Fin, Nurbs, NurbsSurface, Surface};
+    let k = OcctKernel::new();
+    let (r, h, n) = (0.3_f64, 0.25_f64, 8usize);
+    let ring: Vec<DVec3> = (0..n + 3)
+        .map(|i| {
+            let a = std::f64::consts::TAU * (i % n) as f64 / n as f64;
+            DVec3::new(r * a.cos(), r * a.sin(), 0.0)
+        })
+        .collect();
+    let knots: Vec<f64> = (0..n + 7).map(|k| k as f64 * 0.01).collect();
+    let mults = vec![1u32; n + 7];
+    let at = |z: f64| ring.iter().map(|p| *p + DVec3::Z * z).collect::<Vec<_>>();
+    let row = |z: f64| {
+        Curve::BSpline(Nurbs { degree: 3, poles: at(z), weights: None, knots: knots.clone(), mults: mults.clone(), periodic: false })
+    };
+    let b = Brep {
+        kind: BodyKind::Sheet,
+        surfaces: vec![Surface::BSpline(NurbsSurface {
+            u_degree: 1,
+            v_degree: 3,
+            nu: 2,
+            nv: n + 3,
+            poles: [at(0.0), at(h)].concat(),
+            weights: None,
+            u_knots: vec![0.0, 1.0],
+            u_mults: vec![2, 2],
+            v_knots: knots.clone(),
+            v_mults: mults.clone(),
+            u_periodic: false,
+            v_periodic: false,
+        })],
+        curves: vec![row(0.0), row(h)],
+        edges: vec![
+            Edge { curve: Some(0), reversed: false, start: None, end: None, tolerance: None },
+            Edge { curve: Some(1), reversed: false, start: None, end: None, tolerance: None },
+        ],
+        faces: vec![Face {
+            surface: 0,
+            flip: false,
+            loops: vec![vec![Fin { edge: 0, forward: true, pcurve: None }], vec![Fin { edge: 1, forward: false, pcurve: None }]],
+            color: None,
+        }],
+        shells: vec![vec![0]],
+        ..Brep::default()
+    };
+    let area =
+        |s: &shapecraft_kernel::Shape| (0..k.face_count(s).unwrap()).map(|f| k.measure(s, SubShape::Face(f)).unwrap().0).sum::<f64>();
+    let first = k.from_brep(&b).unwrap();
+    let a0 = area(&first);
+    assert!(a0 > 0.9 * std::f64::consts::TAU * r * h, "read: {a0}");
+    let out = k.to_brep(&first).unwrap().remove(0);
+    for format in [Format::Binary, Format::Text] {
+        let bytes = shapecraft_xt::write_body(&out, format).unwrap();
+        let bodies = shapecraft_xt::bodies(&shapecraft_xt::parse(&bytes).unwrap()).unwrap();
+        let back = k.from_brep(&bodies[0].brep).unwrap();
+        let a1 = area(&back);
+        assert!((a0 - a1).abs() < 1e-3 * a0, "{format:?}: area {a0} -> {a1}");
+    }
+}

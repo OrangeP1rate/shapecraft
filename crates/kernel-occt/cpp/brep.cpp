@@ -23,6 +23,8 @@
 #include <Geom_Surface.hxx>
 #include <GProp_GProps.hxx>
 #include <Geom2d_BSplineCurve.hxx>
+#include <Bnd_Box.hxx>
+#include <BRepBndLib.hxx>
 #include <GeomAPI_Interpolate.hxx>
 #include <GeomAdaptor_Surface.hxx>
 #include <GeomConvert.hxx>
@@ -826,10 +828,27 @@ TopoDS_Shape build(Rd& r, std::vector<TopoDS_Shape>* made = nullptr) {
         }
         if (up && clamped_fit(ud, size_t(poles.ColLength()), um)) up = false;
         if (vp && clamped_fit(vd, size_t(poles.RowLength()), vm)) vp = false;
+        Handle(Geom_BSplineSurface) bs;
         if (rational)
-          surfaces[i] = new Geom_BSplineSurface(poles, w, UK, VK, UM, VM, ud, vd, up, vp);
+          bs = new Geom_BSplineSurface(poles, w, UK, VK, UM, VM, ud, vd, up, vp);
         else
-          surfaces[i] = new Geom_BSplineSurface(poles, UK, VK, UM, VM, ud, vd, up, vp);
+          bs = new Geom_BSplineSurface(poles, UK, VK, UM, VM, ud, vd, up, vp);
+        // Parasolid stores some closed surfaces unclamped (end knots below degree + 1, not flagged periodic): the
+        // surface closes up but its end pole rows differ, so OCCT takes it for open and a face going all the way round
+        // gets no seam (the repair cuts it into slivers). Clamped to its own range it is the same surface, closed.
+        bool uopen = !up && (um.front() <= ud || um.back() <= ud), vopen = !vp && (vm.front() <= vd || vm.back() <= vd);
+        if (uopen || vopen) {
+          double u0, u1, v0, v1;
+          bs->Bounds(u0, u1, v0, v1);
+          bs->Segment(u0, u1, v0, v1);
+          // Periodic where it closes, so a face all the way round gets its seam (OCCT's repair wraps loops only there).
+          try {
+            if (uopen && bs->IsUClosed()) bs->SetUPeriodic();
+            if (vopen && bs->IsVClosed()) bs->SetVPeriodic();
+          } catch (Standard_Failure&) {
+          }
+        }
+        surfaces[i] = bs;
         break;
       }
       case 6: {
@@ -929,12 +948,22 @@ TopoDS_Shape build(Rd& r, std::vector<TopoDS_Shape>* made = nullptr) {
           // and widen their tolerance to cover the gap, as Parasolid's tolerant modelling does.
           double p[2];
           const TopoDS_Vertex* vv[2] = {&verts[size_t(v0)], &verts[size_t(v1)]};
+          gp_Pnt c0 = g->Value(g->FirstParameter()), c1 = g->Value(g->LastParameter());
+          if (v0 == v1 && !Precision::IsInfinite(g->FirstParameter()) && !Precision::IsInfinite(g->LastParameter()) &&
+              c0.Distance(c1) < 1e-4) {
+            // A closed curve round from one vertex: both ends project to the same one, so take the curve whole.
+            p[0] = g->FirstParameter();
+            p[1] = g->LastParameter();
+            gp_Pnt at = BRep_Tool::Pnt(*vv[0]);
+            double gap = std::max(at.Distance(c0), at.Distance(c1));
+            if (gap > BRep_Tool::Tolerance(*vv[0])) bb.UpdateVertex(*vv[0], gap * 1.01 + 1e-7);
+          } else
           for (int k = 0; k < 2; ++k) {
             gp_Pnt at = BRep_Tool::Pnt(*vv[k]);
             double gap = 0;
             if (!nearest_on_curve(g, at, p[k], gap))
               throw Bad{"could not build an edge on its curve (edge " + std::to_string(i) + ": a vertex doesn't project)"};
-          if (gap > BRep_Tool::Tolerance(*vv[k])) bb.UpdateVertex(*vv[k], gap * 1.01 + 1e-7);
+            if (gap > BRep_Tool::Tolerance(*vv[k])) bb.UpdateVertex(*vv[k], gap * 1.01 + 1e-7);
           }
           BRepBuilderAPI_MakeEdge me2(g, *vv[0], *vv[1], p[0], p[1]);
           if (!me2.IsDone())
@@ -1094,6 +1123,23 @@ TopoDS_Shape build(Rd& r, std::vector<TopoDS_Shape>* made = nullptr) {
   fix.Perform();
   result = fix.Shape();
   BRepLib::SameParameter(result, 1e-6);
+  if (std::getenv("SK_DEBUG_BUILD")) {
+    BRepCheck_Analyzer an(result);
+    for (TopAbs_ShapeEnum ty : {TopAbs_VERTEX, TopAbs_EDGE, TopAbs_WIRE, TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID}) {
+      TopTools_IndexedMapOfShape fm;
+      TopExp::MapShapes(result, ty, fm);
+      for (int i = 1; i <= fm.Extent(); ++i) {
+        const Handle(BRepCheck_Result)& res = an.Result(fm(i));
+        if (res.IsNull()) continue;
+        for (auto it = res->Status().begin(); it != res->Status().end(); ++it)
+          if (*it != BRepCheck_NoError) fprintf(stderr, "after fix: type %d #%d: own status %d\n", int(ty), i - 1, int(*it));
+        for (res->InitContextIterator(); res->MoreShapeInContext(); res->NextShapeInContext())
+          for (auto it = res->StatusOnShape().begin(); it != res->StatusOnShape().end(); ++it)
+            if (*it != BRepCheck_NoError) fprintf(stderr, "after fix: type %d #%d: status %d\n", int(ty), i - 1, int(*it));
+      }
+    }
+    fprintf(stderr, "valid after fix: %d\n", int(an.IsValid()));
+  }
   if (kind == 0) {
     GProp_GProps g;
     BRepGProp::VolumeProperties(result, g);
@@ -1501,28 +1547,43 @@ int sk_from_brep_faces(const double* data, size_t n, SkShape** out, uint32_t* fa
         claimed[size_t(k - 1)] = true;
       }
     }
-    // A face the repair rebuilt (new edges) without recording it keeps its surface: the one unclaimed face on the
-    // same surface is it.
-    std::map<const Geom_Surface*, std::vector<int>> on_surface;
-    for (int k = 1; k <= map.Extent(); ++k) {
-      if (claimed[size_t(k - 1)]) continue;
+    // A face the repair rebuilt (a seam added, new edges, its surface made over) without recording it: the unclaimed
+    // face nearest it (centres of their boxes) on the same surface, else the same kind of surface, else any. Nearest first, so two faces sharing one
+    // surface (the halves of a cylinder) each find their own.
+    auto centre = [](const TopoDS_Shape& f) {
+      Bnd_Box b;
+      BRepBndLib::Add(f, b, false);
+      return b.IsVoid() ? gp_Pnt() : gp_Pnt((b.CornerMin().XYZ() + b.CornerMax().XYZ()) / 2);
+    };
+    auto surface_of = [](const TopoDS_Shape& f) {
       TopLoc_Location loc;
-      Handle(Geom_Surface) g = BRep_Tool::Surface(TopoDS::Face(map(k)), loc);
-      if (!g.IsNull()) on_surface[g.get()].push_back(k);
-    }
-    std::map<const Geom_Surface*, int> wanted;
+      return BRep_Tool::Surface(TopoDS::Face(f), loc);
+    };
+    struct Pair {
+      int rank;
+      double d;
+      size_t i;
+      int k;
+    };
+    std::vector<Pair> pairs;
     for (size_t i = 0; i < nfaces && i < made.size(); ++i) {
       if (face_index[i] != UINT32_MAX || made[i].IsNull() || made[i].ShapeType() != TopAbs_FACE) continue;
-      TopLoc_Location loc;
-      Handle(Geom_Surface) g = BRep_Tool::Surface(TopoDS::Face(made[i]), loc);
-      if (!g.IsNull()) wanted[g.get()] += 1;
+      Handle(Geom_Surface) g = surface_of(made[i]);
+      if (g.IsNull()) continue;
+      gp_Pnt c = centre(made[i]);
+      for (int k = 1; k <= map.Extent(); ++k) {
+        if (claimed[size_t(k - 1)]) continue;
+        Handle(Geom_Surface) h = surface_of(map(k));
+        if (h.IsNull()) continue;
+        int rank = h == g ? 0 : h->DynamicType() == g->DynamicType() ? 1 : 2;
+        pairs.push_back({rank, c.Distance(centre(map(k))), i, k});
+      }
     }
-    for (size_t i = 0; i < nfaces && i < made.size(); ++i) {
-      if (face_index[i] != UINT32_MAX || made[i].IsNull() || made[i].ShapeType() != TopAbs_FACE) continue;
-      TopLoc_Location loc;
-      Handle(Geom_Surface) g = BRep_Tool::Surface(TopoDS::Face(made[i]), loc);
-      auto it = g.IsNull() ? on_surface.end() : on_surface.find(g.get());
-      if (it != on_surface.end() && it->second.size() == 1 && wanted[g.get()] == 1) face_index[i] = uint32_t(it->second[0] - 1);
+    std::sort(pairs.begin(), pairs.end(), [](const Pair& a, const Pair& b) { return a.rank != b.rank ? a.rank < b.rank : a.d < b.d; });
+    for (const Pair& p : pairs) {
+      if (face_index[p.i] != UINT32_MAX || claimed[size_t(p.k - 1)]) continue;
+      face_index[p.i] = uint32_t(p.k - 1);
+      claimed[size_t(p.k - 1)] = true;
     }
     *out = new SkShape{s};
     return 0;

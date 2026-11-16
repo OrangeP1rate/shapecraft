@@ -155,6 +155,42 @@ fn shapr_sketches_go_out_and_come_back() {
 }
 
 #[test]
+fn empty_sketch_from_a_file_goes_out_but_one_open_for_drawing_does_not() {
+    let dir = std::env::temp_dir().join(format!("shapecraft-shapr-empty-sketch-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // A file with a named plane nobody drew on yet, and a sketch with a circle.
+    let plane = |name: &str, curves| shapecraft_shapr::Sketch {
+        id: 0,
+        key: String::new(),
+        name: name.into(),
+        hidden: false,
+        origin: [0.0; 3],
+        normal: [0.0, -1.0, 0.0],
+        u: [1.0, 0.0, 0.0],
+        curves,
+    };
+    let mut w = shapecraft_shapr::Writer::fresh().unwrap();
+    w.add_sketch(&plane("Center Sketch plane", vec![])).unwrap();
+    let circle = shapecraft_shapr::SketchCurve::Circle { id: 0, center: [1.0, 2.0], radius: 3.0, construction: false };
+    w.add_sketch(&plane("Profile", vec![circle])).unwrap();
+    std::fs::write(dir.join("in.shapr"), w.finish().unwrap()).unwrap();
+
+    let mut s = session();
+    s.execute("import_file", &json!({"path": dir.join("in.shapr")})).unwrap();
+    assert!(s.doc.sketches.iter().any(|k| k.name == "Center Sketch plane" && k.entities.is_empty()));
+    // A sketch open for drawing with nothing in it yet stays out (leaving it would remove it).
+    s.execute("sketch", &json!({"plane": "yz"})).unwrap();
+    // Force a fresh export: the linked file would keep its own sketches anyway.
+    s.doc.shapr = None;
+    let out = s.execute("export_shapr", &json!({"path": dir.join("out.shapr")})).unwrap().value;
+    assert_eq!(out["sketches_added"], 2);
+    let p = shapecraft_shapr::Project::read(&shapecraft_shapr::ShaprFile::read(&dir.join("out.shapr")).unwrap()).unwrap();
+    let names: Vec<(&str, usize)> = p.sketches.iter().map(|k| (k.name.as_str(), k.curves.len())).collect();
+    assert_eq!(names, [("Center Sketch plane", 0), ("Profile", 1)]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn shapr_sketch_lines_and_arcs_go_out_and_come_back() {
     use shapecraft_doc::SketchEntity as E;
     let path = std::env::temp_dir().join(format!("shapecraft-shapr-lines-{}.shapr", std::process::id()));

@@ -28,7 +28,9 @@ pub(super) fn import_shapr(s: &mut Session, path: &std::path::Path) -> Result<Va
     // A body Shapr3D extruded from one of its sketches can come back as an Extrude step of ours (after this
     // import), so its distance and draft stay editable and go back into Shapr3D's step. Only for the project the
     // exports go back into, and only bodies outside folders (for now).
-    let linking = s.doc.shapr.is_none();
+    // A project saved in an older .shapr layout has nothing to take edits back into: it comes in as it
+    // is, and saving it as .shapr writes a new project.
+    let linking = s.doc.shapr.is_none() && project.patchable;
     let made_by = |node: i64| project.bodies.iter().filter(|b| b.step == Some(node)).count();
     let mut deferred = Vec::new();
     // The kernel's work on each body (rebuilding, triangulating, measuring) is most of an import's time and each
@@ -64,7 +66,13 @@ pub(super) fn import_shapr(s: &mut Session, path: &std::path::Path) -> Result<Va
                 match extrude {
                     Some(e) => deferred.push((index, body, e)),
                     None => match add_shapr_body(s, body, ready.get_mut(index).and_then(Option::take), &mut links, &mut prints) {
-                        Ok(made) => ids.extend(made),
+                        Ok(made) => {
+                            // An older project's folders list its solids directly (they have no steps to link).
+                            if let (true, Some(name_id), Some(&id)) = (project.legacy, body.item_name_id, made.first()) {
+                                by_name.entry(name_id).or_insert(id);
+                            }
+                            ids.extend(made)
+                        }
                         Err(e) => failed.push(format!("{}: {e}", body.name.as_deref().unwrap_or("a body"))),
                     },
                 }
@@ -85,10 +93,19 @@ pub(super) fn import_shapr(s: &mut Session, path: &std::path::Path) -> Result<Va
                         sketch.entities.push(entity);
                     }
                 }
+                if let Some(&name_id) = project.sketch_items.get(&sk.id) {
+                    by_name.insert(name_id, id);
+                }
                 sketch_links.push(shapecraft_doc::ShaprSketch { sketch: id, id: sk.id, circles: circles_of(&sketch) });
                 s.doc.sketches.push(sketch);
                 sketch_ids.push(id.0);
             }
+        }
+    }
+    for c in project.construction.iter().take(10_000) {
+        if let Some((id, name_id)) = legacy_construction(s, c) {
+            construction_ids.push(id.0);
+            by_name.insert(name_id, id);
         }
     }
     s.refresh_regions();
@@ -440,6 +457,41 @@ fn import_construction(s: &mut Session, body: &shapecraft_shapr::Body, op: Optio
     }
 }
 
+/// A construction plane or axis an older project keeps as its own row.
+fn legacy_construction(s: &mut Session, c: &shapecraft_shapr::Construction) -> Option<(shapecraft_doc::ItemId, i64)> {
+    use shapecraft_shapr::Construction;
+    let v = |a: [f64; 3]| Some(glam::DVec3::from_array(a)).filter(|v| v.is_finite() && v.length() < 1e9);
+    match c {
+        Construction::Plane { name, hidden, origin, normal, x, size, item_name_id } => {
+            let n = v(*normal)?.try_normalize()?;
+            let x = v(*x).and_then(|x| (x - n * x.dot(n)).try_normalize()).unwrap_or_else(|| n.any_orthonormal_vector());
+            let id = s.doc.alloc_id();
+            s.doc.planes.push(shapecraft_doc::ConstructionPlane {
+                id,
+                name: name.chars().take(200).collect(),
+                plane: SketchPlane { origin: v(*origin)?, x, y: n.cross(x) },
+                size: size.clamp(1.0, 1e6),
+                visible: !hidden,
+            });
+            Some((id, *item_name_id))
+        }
+        Construction::Axis { name, hidden, start, vector, item_name_id } => {
+            let (a, d) = (v(*start)?, v(*vector)?);
+            let dir = d.try_normalize()?;
+            let id = s.doc.alloc_id();
+            s.doc.axes.push(shapecraft_doc::ConstructionAxis {
+                id,
+                name: name.chars().take(200).collect(),
+                origin: a + d / 2.0,
+                dir,
+                length: d.length().clamp(1.0, 1e6),
+                visible: !hidden,
+            });
+            Some((id, *item_name_id))
+        }
+    }
+}
+
 pub(super) fn import_folder_tree(s: &mut Session, folders: Vec<(Vec<String>, Vec<shapecraft_doc::ItemId>)>) -> Vec<u64> {
     let mut paths = std::collections::BTreeMap::<Vec<String>, shapecraft_doc::ItemId>::new();
     let mut made = Vec::new();
@@ -785,6 +837,7 @@ fn shapr_sketch(sk: &Sketch) -> shapecraft_shapr::Sketch {
     }
     shapecraft_shapr::Sketch {
         id: 0,
+        key: String::new(),
         name: sk.name.clone(),
         hidden: !sk.visible,
         origin: sk.plane.origin.to_array(),
@@ -856,14 +909,13 @@ fn folder_path(s: &Session, body: shapecraft_doc::ItemId) -> Vec<String> {
 
 /// A body's solids as Parasolid parts (neutral binary).
 pub(super) fn parasolid_parts(s: &Session, shape: &shapecraft_kernel::Shape) -> Result<Vec<Vec<u8>>> {
-    s.kernel
-        .to_brep(shape)?
-        .iter()
-        .map(|b| {
-            shapecraft_xt::write_body(b, shapecraft_xt::Format::Binary)
-                .map_err(|e| EngineError::BadParams(format!("can't write this body as Parasolid: {e}")))
-        })
-        .collect()
+    let bad = |e: shapecraft_xt::Error| EngineError::BadParams(format!("can't write this body as Parasolid: {e}"));
+    let parts = s.kernel.to_brep(shape)?;
+    // A body of several separate solids stays one body (one part, a solid region per piece), as it came in.
+    if parts.len() > 1 && parts.iter().all(|b| b.kind == shapecraft_kernel::brep::BodyKind::Solid) {
+        return Ok(vec![shapecraft_xt::write_solids(&parts, shapecraft_xt::Format::Binary).map_err(bad)?]);
+    }
+    parts.iter().map(|b| shapecraft_xt::write_body(b, shapecraft_xt::Format::Binary).map_err(bad)).collect()
 }
 
 /// A Shapr3D project. A project that came from one goes back into that file's own history: bodies changed

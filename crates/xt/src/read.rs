@@ -359,9 +359,13 @@ fn body(s: &mut dyn Src, format: Format, header: String, modeller: String, schem
     let embedded = schema_name.split('_').count() >= 4;
     let max_types = if embedded { Some(s.short()? as u32) } else { None };
     let userfield = if format == Format::Binary { s.int()? } else { s.short()? };
-    if userfield != 0 {
-        return Err(Error::Bad(format!("user fields ({userfield}) are not supported")));
+    // A file may carry a user field (0–16 integers) after each node. The format document says "after every node visible
+    // at the PK interface", but files written in 2022–23 (Parasolid 35, a size of 16) have it after every
+    // node, data nodes too (knots, B-spline vertices, chart, values, list blocks). Nothing here reads them.
+    if !(0..=16).contains(&userfield) {
+        return Err(Error::Bad(format!("user field size {userfield}")));
     }
+    let userfield = userfield as usize;
     let base = schema::base();
     let mut defs: HashMap<u16, NodeDef> = HashMap::new();
     let mut declared = Vec::new();
@@ -402,6 +406,11 @@ fn body(s: &mut dyn Src, format: Format, header: String, modeller: String, schem
         for f in &def.fields {
             let n = if f.n == 1 { var } else { f.n as usize };
             fields.push(value(s, f, n).map_err(|e| Error::Bad(format!("{} #{index} .{}: {e}", def.name, f.name)))?);
+        }
+        if userfield > 0 {
+            for _ in 0..userfield {
+                s.int().map_err(|e| Error::Bad(format!("{} #{index} user field: {e}", def.name)))?;
+            }
         }
         by_index.insert(index, nodes.len());
         nodes.push(Node { ty, index, fields });

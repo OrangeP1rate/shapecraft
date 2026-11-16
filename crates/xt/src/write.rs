@@ -333,19 +333,23 @@ fn seamless(b: &Brep) -> Brep {
             .all(|f| kept_ends.contains(&ends(f).0) && kept_ends.contains(&ends(f).1));
         for l in &face.loops {
             let kept: Vec<Fin> = l.iter().copied().filter(|f| uses.get(&f.edge) != Some(&2)).collect();
-            // Split into closed runs.
-            let mut run: Vec<Fin> = Vec::new();
+            // Split into closed runs. Runs can nest: a loop that went down a seam, round a circle and back up the
+            // seam has the circle in the middle of the other run, so a run closes as soon as a fin comes back to
+            // where any fin still open started (the latest such: the smallest loop).
+            let mut open: Vec<Fin> = Vec::new();
             for fin in kept {
                 if b.edges.get(fin.edge).is_none_or(|e| e.curve.is_none() || e.start.is_none()) {
                     clean = false;
                 }
-                run.push(fin);
-                let first = ends(&run[0]).0;
-                if first.is_some() && ends(&fin).1 == first {
-                    loops.push(std::mem::take(&mut run));
+                open.push(fin);
+                let end = ends(&fin).1;
+                if end.is_some()
+                    && let Some(at) = open.iter().rposition(|f| ends(f).0 == end)
+                {
+                    loops.push(open.split_off(at));
                 }
             }
-            if !run.is_empty() {
+            if !open.is_empty() {
                 clean = false;
             }
         }
@@ -402,15 +406,68 @@ fn seamless(b: &Brep) -> Brep {
     out
 }
 
+/// Several solids as one body's pieces: their B-reps side by side, and for each shell which piece it bounds.
+fn merge(parts: &[Brep]) -> (Brep, Vec<usize>) {
+    let mut out = Brep { kind: BodyKind::Solid, ..Brep::default() };
+    let mut piece = Vec::new();
+    for (k, p) in parts.iter().enumerate() {
+        let (s0, c0, v0, e0, f0) = (out.surfaces.len(), out.curves.len(), out.vertices.len(), out.edges.len(), out.faces.len());
+        out.surfaces.extend(p.surfaces.iter().cloned().map(|mut s| {
+            match &mut s {
+                Surface::Offset { basis, .. } => *basis += s0,
+                Surface::Revolution { curve, .. } | Surface::Extrusion { curve, .. } => *curve += c0,
+                _ => {}
+            }
+            s
+        }));
+        out.curves.extend(p.curves.iter().cloned().map(|mut c| {
+            if let Curve::OnSurface { surface, .. } = &mut c {
+                *surface += s0;
+            }
+            c
+        }));
+        out.vertices.extend(p.vertices.iter().copied());
+        out.edges.extend(p.edges.iter().map(|e| {
+            let mut e = e.clone();
+            e.curve = e.curve.map(|c| c + c0);
+            e.start = e.start.map(|v| v + v0);
+            e.end = e.end.map(|v| v + v0);
+            e
+        }));
+        out.faces.extend(p.faces.iter().cloned().map(|mut f| {
+            f.surface += s0;
+            for fin in f.loops.iter_mut().flatten() {
+                fin.edge += e0;
+            }
+            f
+        }));
+        let shells: Vec<Vec<usize>> = if p.shells.is_empty() { vec![(0..p.faces.len()).collect()] } else { p.shells.clone() };
+        for sh in shells {
+            out.shells.push(sh.into_iter().map(|f| f + f0).collect());
+            piece.push(k);
+        }
+    }
+    (out, piece)
+}
+
 /// One solid body as a part file's node graph (root = BODY).
 fn body_graph(b: &Brep) -> Result<Graph> {
-    let seamless = seamless(b);
+    body_graph_pieces(b, None)
+}
+
+/// `pieces` (one entry per shell of `b`) says which solid piece each shell bounds, for a body of several solids:
+/// each piece gets a solid region of its own, its outermost shell facing the outside, the others its cavities.
+fn body_graph_pieces(b: &Brep, pieces: Option<&[usize]>) -> Result<Graph> {
+    let wire = b.kind == BodyKind::Wire;
+    // Seams are joined through the faces' fins, which a wire doesn't have.
+    let seamless = if wire { b.clone() } else { seamless(b) };
     let b = &seamless;
-    if b.kind != BodyKind::Solid {
-        return Err(Error::Bad("only solid bodies are written yet".into()));
+    let sheet = b.kind == BodyKind::Sheet;
+    if wire && b.edges.is_empty() {
+        return Err(Error::Bad("a wire body needs edges".into()));
     }
-    if b.faces.is_empty() {
-        return Err(Error::Bad("a solid needs faces".into()));
+    if !wire && b.faces.is_empty() {
+        return Err(Error::Bad("a body needs faces".into()));
     }
     let mut g = Graph::new();
     let body = g.add(
@@ -419,7 +476,16 @@ fn body_graph(b: &Brep) -> Result<Graph> {
             ("res_size", Val::Real(1e3)),
             ("res_linear", Val::Real(1e-8)),
             ("state", Val::Int(1)),
-            ("body_type", Val::Int(1)),
+            (
+                "body_type",
+                Val::Int(if wire {
+                    2
+                } else if sheet {
+                    3
+                } else {
+                    1
+                }),
+            ),
             ("nom_geom_state", Val::Int(1)),
         ],
     )?;
@@ -445,6 +511,64 @@ fn body_graph(b: &Brep) -> Result<Graph> {
         g.set(cn, "owner", ptr(en))?;
         curves.push(cn);
         edges.push(en);
+    }
+    if wire {
+        // A wire body (spec): one void region; a shell per connected piece holding its wireframe edges (owned by
+        // the shell); each edge has only dummy fins, a positive one at its end and a negative one at its start.
+        let mut parent: Vec<usize> = (0..b.edges.len()).collect();
+        fn root(p: &mut [usize], mut x: usize) -> usize {
+            while p[x] != x {
+                p[x] = p[p[x]];
+                x = p[x];
+            }
+            x
+        }
+        let mut at_vertex: Vec<Option<usize>> = vec![None; b.vertices.len()];
+        for (ei, e) in b.edges.iter().enumerate() {
+            for v in [e.start, e.end].into_iter().flatten() {
+                match at_vertex.get(v).copied().flatten() {
+                    Some(other) => {
+                        let (a, c) = (root(&mut parent, ei), root(&mut parent, other));
+                        parent[a] = c;
+                    }
+                    None => {
+                        if let Some(slot) = at_vertex.get_mut(v) {
+                            *slot = Some(ei);
+                        }
+                    }
+                }
+            }
+        }
+        let outside = g.add(REGION, &[("body", ptr(body)), ("type", Val::Char(b'V'))])?;
+        let mut pieces: Vec<(usize, Vec<u32>)> = Vec::new();
+        for (ei, e) in b.edges.iter().enumerate() {
+            let vnode = |v: Option<usize>| v.and_then(|i| vertices.get(i).copied()).unwrap_or(0);
+            let pos = g.add(FIN, &[("edge", ptr(edges[ei])), ("vertex", ptr(vnode(e.end))), ("sense", sense(false))])?;
+            let neg = g.add(FIN, &[("edge", ptr(edges[ei])), ("vertex", ptr(vnode(e.start))), ("sense", sense(true))])?;
+            g.set(pos, "other", ptr(neg))?;
+            g.set(neg, "other", ptr(pos))?;
+            g.set(edges[ei], "fin", ptr(pos))?;
+            let r = root(&mut parent, ei);
+            match pieces.iter_mut().find(|p| p.0 == r) {
+                Some(p) => p.1.push(edges[ei]),
+                None => pieces.push((r, vec![edges[ei]])),
+            }
+        }
+        let mut shells = Vec::new();
+        for (_, es) in &pieces {
+            let sh = g.add(SHELL, &[("body", ptr(body)), ("region", ptr(outside))])?;
+            for &e in es {
+                g.set(e, "owner", ptr(sh))?;
+            }
+            let head = g.chain(es, "next", Some("previous"))?;
+            g.set(sh, "edge", ptr(head))?;
+            shells.push(sh);
+        }
+        let head = g.chain(&shells, "next", None)?;
+        g.set(outside, "shell", ptr(head))?;
+        g.set(body, "region", ptr(outside))?;
+        g.set(body, "shell", ptr(shells.first().copied().unwrap_or(0)))?;
+        return finish(g, body, &[], &vertices, &[], &curves, &points);
     }
     // Faces, loops and fins.
     let mut faces = Vec::new();
@@ -496,6 +620,16 @@ fn body_graph(b: &Brep) -> Result<Graph> {
         if fins.is_empty() {
             return Err(Error::Bad("edge used by no face".into()));
         }
+        // An edge used by one face (a sheet's boundary) gets a dummy fin of the other sense, with no loop, so its
+        // two ends can still be found from its fins (spec, "Dummy Fins").
+        if fins.len() == 1 {
+            let forward = !fins[0].1;
+            let e = &b.edges[ei];
+            let vx = if forward { e.end } else { e.start };
+            let vnode = vx.and_then(|i| vertices.get(i).copied()).unwrap_or(0);
+            let dummy = g.add(FIN, &[("edge", ptr(edges[ei])), ("vertex", ptr(vnode)), ("sense", sense(!forward))])?;
+            fins.push((dummy, forward));
+        }
         fins.sort_by_key(|f| !f.1);
         for k in 0..fins.len() {
             let other = fins[(k + 1) % fins.len()].0;
@@ -507,12 +641,47 @@ fn body_graph(b: &Brep) -> Result<Graph> {
         let head = g.chain(fins, "next_at_vx", None)?;
         g.set(vertices[vi], "fin", ptr(head))?;
     }
+    if sheet {
+        // A sheet has only void regions (the spec's sheet-body rules): one, holding a shell per connected piece,
+        // each face lying in its shell on both sides (back face and front face of the same shell).
+        let outside = g.add(REGION, &[("body", ptr(body)), ("type", Val::Char(b'V'))])?;
+        let comps: Vec<Vec<usize>> = if b.shells.is_empty() { vec![(0..b.faces.len()).collect()] } else { b.shells.clone() };
+        let mut shells = Vec::new();
+        for comp in &comps {
+            let sh = g.add(SHELL, &[("body", ptr(body)), ("region", ptr(outside))])?;
+            let fs: Vec<u32> = comp.iter().filter_map(|&f| faces.get(f).copied()).collect();
+            for &f in &fs {
+                g.set(f, "shell", ptr(sh))?;
+                g.set(f, "front_shell", ptr(sh))?;
+            }
+            let head = g.chain(&fs, "next", Some("previous"))?;
+            g.set(sh, "face", ptr(head))?;
+            let head = g.chain(&fs, "next_front", Some("previous_front"))?;
+            g.set(sh, "front_face", ptr(head))?;
+            shells.push(sh);
+        }
+        let head = g.chain(&shells, "next", None)?;
+        g.set(outside, "shell", ptr(head))?;
+        g.set(body, "region", ptr(outside))?;
+        g.set(body, "shell", ptr(shells.first().copied().unwrap_or(0)))?;
+        return finish(g, body, &edges, &vertices, &surfaces, &curves, &points);
+    }
     // Regions: the infinite void first, then the solid; every shell component bounds the solid on its faces'
     // back side and a void on their front (the outer one bounds the infinite region, others are cavities).
     let outside = g.add(REGION, &[("body", ptr(body)), ("type", Val::Char(b'V'))])?;
-    let solid = g.add(REGION, &[("body", ptr(body)), ("type", Val::Char(b'S'))])?;
-    let mut regions = vec![outside, solid];
+    let mut regions = vec![outside];
     let comps: Vec<Vec<usize>> = if b.shells.is_empty() { vec![(0..b.faces.len()).collect()] } else { b.shells.clone() };
+    let piece_of: Vec<usize> = match pieces {
+        Some(p) if p.len() == comps.len() => p.to_vec(),
+        _ => vec![0; comps.len()],
+    };
+    let npieces = piece_of.iter().copied().max().map_or(1, |m| m + 1);
+    let mut solids = Vec::new();
+    for _ in 0..npieces {
+        let r = g.add(REGION, &[("body", ptr(body)), ("type", Val::Char(b'S'))])?;
+        regions.push(r);
+        solids.push(r);
+    }
     // The outer component reaches farthest out.
     let reach = |c: &Vec<usize>| -> f64 {
         c.iter()
@@ -521,12 +690,17 @@ fn body_graph(b: &Brep) -> Result<Graph> {
             .map(|p| p.length())
             .fold(0.0, f64::max)
     };
-    let outer = (0..comps.len()).max_by(|&a, &c| reach(&comps[a]).total_cmp(&reach(&comps[c]))).unwrap_or(0);
-    let mut solid_shells = Vec::new();
+    // Each piece's outer shell reaches farthest out among its own shells.
+    let outer_of: Vec<usize> = (0..npieces)
+        .map(|k| (0..comps.len()).filter(|&c| piece_of[c] == k).max_by(|&a, &c| reach(&comps[a]).total_cmp(&reach(&comps[c]))).unwrap_or(0))
+        .collect();
+    let mut solid_shells: Vec<Vec<u32>> = vec![Vec::new(); npieces];
     let mut outside_shells = Vec::new();
     for (ci, comp) in comps.iter().enumerate() {
+        let k = piece_of[ci];
+        let solid = solids[k];
         let back = g.add(SHELL, &[("body", ptr(body)), ("region", ptr(solid))])?;
-        let void_region = if ci == outer {
+        let void_region = if ci == outer_of[k] {
             outside
         } else {
             let r = g.add(REGION, &[("body", ptr(body)), ("type", Val::Char(b'V'))])?;
@@ -544,33 +718,51 @@ fn body_graph(b: &Brep) -> Result<Graph> {
         g.set(back, "face", ptr(head))?;
         let head = g.chain(&fs, "next_front", Some("previous_front"))?;
         g.set(front, "front_face", ptr(head))?;
-        solid_shells.push(back);
+        solid_shells[k].push(back);
         if void_region == outside {
             outside_shells.push(front);
         } else {
             g.set(void_region, "shell", ptr(front))?;
         }
     }
-    let head = g.chain(&solid_shells, "next", None)?;
-    g.set(solid, "shell", ptr(head))?;
+    for (k, shells) in solid_shells.iter().enumerate() {
+        let head = g.chain(shells, "next", None)?;
+        g.set(solids[k], "shell", ptr(head))?;
+    }
     let head = g.chain(&outside_shells, "next", None)?;
     g.set(outside, "shell", ptr(head))?;
     let head = g.chain(&regions, "next", Some("previous"))?;
     g.set(body, "region", ptr(head))?;
-    g.set(body, "shell", ptr(solid_shells.first().copied().unwrap_or(0)))?;
-    let head = g.chain(&edges, "next", Some("previous"))?;
+    g.set(body, "shell", ptr(solid_shells.first().and_then(|s| s.first()).copied().unwrap_or(0)))?;
+    finish(g, body, &edges, &vertices, &surfaces, &curves, &points)
+}
+
+/// The body's chains of edges, vertices and geometry, and its highest node id.
+fn finish(mut g: Graph, body: u32, edges: &[u32], vertices: &[u32], surfaces: &[u32], curves: &[u32], points: &[u32]) -> Result<Graph> {
+    let head = g.chain(edges, "next", Some("previous"))?;
     g.set(body, "edge", ptr(head))?;
-    let head = g.chain(&vertices, "next", Some("previous"))?;
+    let head = g.chain(vertices, "next", Some("previous"))?;
     g.set(body, "vertex", ptr(head))?;
-    let head = g.chain(&surfaces, "next", Some("previous"))?;
+    let head = g.chain(surfaces, "next", Some("previous"))?;
     g.set(body, "boundary_surface", ptr(head))?;
-    let head = g.chain(&curves, "next", Some("previous"))?;
+    let head = g.chain(curves, "next", Some("previous"))?;
     g.set(body, "boundary_curve", ptr(head))?;
-    let head = g.chain(&points, "next", Some("previous"))?;
+    let head = g.chain(points, "next", Some("previous"))?;
     g.set(body, "boundary_point", ptr(head))?;
     let highest = g.next_id - 1;
     g.set(body, "highest_node_id", Val::Int(highest))?;
     Ok(g)
+}
+
+/// A part file holding one body made of several solids (one solid when `parts` has one).
+pub fn write_solids(parts: &[Brep], format: Format) -> Result<Vec<u8>> {
+    if parts.iter().any(|p| p.kind != BodyKind::Solid) || parts.is_empty() {
+        return Err(Error::Bad("only solids are joined into one body".into()));
+    }
+    let (b, pieces) = merge(parts);
+    let g = body_graph_pieces(&b, Some(&pieces))?;
+    let nodes: Vec<(u16, u32, &[Val])> = g.nodes.iter().enumerate().map(|(i, (ty, f))| (*ty, i as u32 + 1, f.as_slice())).collect();
+    Ok(encode(format, MODELLER, SCHEMA, Some(MAX_TYPES), &g.defs, &nodes))
 }
 
 /// A part file holding one solid.

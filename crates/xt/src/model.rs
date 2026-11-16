@@ -26,6 +26,8 @@ pub struct Body {
     pub face_ids: Vec<i64>,
     /// The triangles of faces that lie on a MESH surface (a facet body: an imported STL Shapr3D kept as a mesh).
     pub mesh: Option<Mesh>,
+    /// Face node id → the material instance set on it (`SHAPR/MATERIAL_INSTANCE_ID`), where one is.
+    pub face_materials: std::collections::BTreeMap<i64, i64>,
 }
 
 /// Triangles in millimeters; corners index `points`.
@@ -767,6 +769,7 @@ fn body(f: &XtFile, n: &Node) -> Result<Body> {
     }
     let mut mesh: Option<Mesh> = None;
     let mut face_ids = Vec::new();
+    let mut face_materials = std::collections::BTreeMap::new();
     for face in face_nodes {
         if let Some(surf) = cx.node(cx.ptr(face, "surface"))
             && f.type_name(surf.ty) == "MESH"
@@ -777,10 +780,18 @@ fn body(f: &XtFile, n: &Node) -> Result<Body> {
         let fi = cx.b.faces.len();
         let built = cx.face(face)?;
         cx.b.faces.push(built);
-        face_ids.push(match f.field(face, "node_id") {
+        let id = match f.field(face, "node_id") {
             Some(Val::Int(id)) => *id,
             _ => -1,
-        });
+        };
+        face_ids.push(id);
+        // Two integers, the id's high and low halves.
+        if let Some(AttrValue::Ints(v)) =
+            cx.attributes(face).into_iter().find(|a| a.definition == "SHAPR/MATERIAL_INSTANCE_ID").and_then(|a| a.values.into_iter().next())
+            && let [hi, lo] = v[..]
+        {
+            face_materials.insert(id, (hi << 32) | (lo & 0xFFFF_FFFF));
+        }
         let shell = cx.ptr(face, "shell");
         match shells.iter_mut().find(|(s, _)| *s == shell) {
             Some((_, v)) => v.push(fi),
@@ -803,7 +814,7 @@ fn body(f: &XtFile, n: &Node) -> Result<Body> {
     join_split_walls(&mut cx.b, &mut face_ids);
     // Adds edges, never faces: `face_ids` stays parallel to the faces.
     split_wall_rings(&mut cx.b);
-    Ok(Body { node: n.index, brep: cx.b, name, color, attributes, face_ids, mesh })
+    Ok(Body { node: n.index, brep: cx.b, name, color, attributes, face_ids, mesh, face_materials })
 }
 
 /// A clamped, well-formed B-spline curve's full knot vector, or `None` (counts that don't add up, a periodic curve,

@@ -7,6 +7,7 @@
 //! (`HistoryImportedPrototypes`). Shapr3D rebuilds the model from the history when the cached partition,
 //! deltas and calls are missing, which is how edits are written back.
 
+mod legacy;
 pub mod write;
 pub mod zip;
 
@@ -44,6 +45,13 @@ pub struct ShaprFile {
 
 impl ShaprFile {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
+        // Projects from the first releases (to about 2020) are the workspace database itself, not zipped.
+        if bytes.starts_with(b"SQLite format 3\0") {
+            return Ok(Self { metadata: serde_json::Value::Null, workspace: bytes.to_vec() });
+        }
+        if bytes.starts_with(b"<") {
+            return Err(Error::Format("this is a web page, not a project (the download may have needed a sign-in)".into()));
+        }
         let entries = zip::read(bytes)?;
         let mut metadata = serde_json::Value::Null;
         let mut workspace = None;
@@ -174,6 +182,38 @@ pub struct Project {
     pub unreadable: Vec<String>,
     /// Our own parametric history, kept in files we write ("ShapeCraftHistory"; Shapr3D ignores the table), as JSON.
     pub own_history: Option<String>,
+    /// An older .shapr project with no history (no steps; solids, sketches and construction as they are). It
+    /// can't take edits back into its own file: exports of it are new projects.
+    pub legacy: bool,
+    /// Whether edits can be written back into this file itself (the revision tables .shapr files have kept since about
+    /// mid-2026). Older files are saved as a new project instead.
+    pub patchable: bool,
+    /// Sketch id → the name id folders list it by (older projects only).
+    pub sketch_items: BTreeMap<i64, i64>,
+    /// Construction planes and axes kept as their own rows (older projects only; later ones keep them as bodies).
+    pub construction: Vec<Construction>,
+}
+
+/// A construction plane or axis of an older project, in millimeters.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Construction {
+    Plane {
+        name: String,
+        hidden: bool,
+        origin: [f64; 3],
+        normal: [f64; 3],
+        x: [f64; 3],
+        size: f64,
+        item_name_id: i64,
+    },
+    /// From `start` along `vector` (its length is the axis's).
+    Axis {
+        name: String,
+        hidden: bool,
+        start: [f64; 3],
+        vector: [f64; 3],
+        item_name_id: i64,
+    },
 }
 
 /// A Shapr3D Extrude of one sketch profile, with only the settings learned so far (distance, draft, sides; the
@@ -226,6 +266,8 @@ pub enum Finish {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sketch {
     pub id: i64,
+    /// The file's own id for it, as text: older projects (to about 2023) use text ids, which folders list.
+    pub key: String,
     pub name: String,
     pub hidden: bool,
     pub origin: [f64; 3],
@@ -341,6 +383,11 @@ impl Project {
                 p.settings.insert(row.0, row.1);
             }
         }
+        p.patchable = has_table(c, "BodyRevisionBlocks") && has_table(c, "PersistedCalls") && has_table(c, "HistoryTreeNodes");
+        if legacy::is_legacy(c) {
+            legacy::read(c, &mut p)?;
+            return Ok(p);
+        }
         p.steps = history_steps(c)?;
         {
             let mut q = c.prepare("SELECT FolderID, FolderName, Hidden, NamedChildren FROM HistoryFolders")?;
@@ -406,7 +453,7 @@ impl Project {
     }
 }
 
-const MM: f64 = 1000.0;
+pub(crate) const MM: f64 = 1000.0;
 
 /// Our own table in files we write: copies of Shapr3D-made bodies, for reading the file again before Shapr3D has
 /// rebuilt its solids.
@@ -645,37 +692,65 @@ fn extrudes(c: &rusqlite::Connection, steps: &[Step], items: &[Item]) -> Result<
 }
 
 /// Sketches in Items order, with their curves. Construction curves are listed by id per sketch.
-fn sketches(c: &rusqlite::Connection) -> Result<Vec<Sketch>> {
+pub(crate) fn sketches(c: &rusqlite::Connection) -> Result<Vec<Sketch>> {
     let mut out = Vec::new();
     let mut q = c.prepare(
-        "SELECT SketchID, Name, IsHidden, PlaneCenterX, PlaneCenterY, PlaneCenterZ, PlaneNormX, PlaneNormY, PlaneNormZ, PlaneUDirX, PlaneUDirY, PlaneUDirZ \
+        "SELECT SketchID, Name, IsHidden, PlaneCenterX, PlaneCenterY, PlaneCenterZ, PlaneNormX, PlaneNormY, PlaneNormZ, PlaneUDirX, PlaneUDirY, PlaneUDirZ, rowid \
          FROM SketchControllers ORDER BY OrderInList, SketchID",
     )?;
+    let mut keys: Vec<rusqlite::types::Value> = Vec::new();
     let rows = q.query_map([], |r| {
         let f = |i: usize| r.get::<_, Option<f64>>(i).map(|v| v.unwrap_or(0.0));
-        Ok(Sketch {
-            id: r.get(0)?,
-            name: text(r.get(1)?),
-            hidden: r.get::<_, Option<bool>>(2)?.unwrap_or(false),
-            origin: [f(3)? * MM, f(4)? * MM, f(5)? * MM],
-            normal: [f(6)?, f(7)?, f(8)?],
-            u: [f(9)?, f(10)?, f(11)?],
-            curves: Vec::new(),
-        })
+        let raw: rusqlite::types::Value = r.get(0)?;
+        // Text ids (older projects) are numbered by their row, far above the numeric ids later files use.
+        let id = match &raw {
+            rusqlite::types::Value::Integer(n) => *n,
+            _ => (1 << 40) + r.get::<_, i64>(12)?,
+        };
+        let key = match &raw {
+            rusqlite::types::Value::Integer(n) => n.to_string(),
+            rusqlite::types::Value::Text(t) => t.clone(),
+            rusqlite::types::Value::Blob(b) => String::from_utf8_lossy(b).into_owned(),
+            _ => String::new(),
+        };
+        Ok((
+            raw,
+            Sketch {
+                id,
+                key,
+                name: text(r.get(1)?),
+                hidden: r.get::<_, Option<bool>>(2)?.unwrap_or(false),
+                origin: [f(3)? * MM, f(4)? * MM, f(5)? * MM],
+                normal: [f(6)?, f(7)?, f(8)?],
+                u: [f(9)?, f(10)?, f(11)?],
+                curves: Vec::new(),
+            },
+        ))
     })?;
-    for sk in rows.flatten() {
+    for (raw, sk) in rows.flatten().take(100_000) {
+        keys.push(raw);
         out.push(sk);
     }
     let finite = |v: &serde_json::Value| v.as_f64().filter(|x| x.is_finite() && x.abs() < 1e6);
-    for sk in &mut out {
+    for (sk, raw) in out.iter_mut().zip(&keys) {
         let construction: Vec<i64> = c
             .query_row("SELECT ConstructionCurves FROM ConstructionSketches WHERE SketchID = ?1", [sk.id], |r| Ok(text(r.get(0)?)))
             .ok()
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
             .and_then(|j| j["elements"].as_array().map(|a| a.iter().filter_map(|e| e.as_i64().or_else(|| e["id"].as_i64())).collect()))
             .unwrap_or_default();
-        let mut q = c.prepare("SELECT CurveID, Data FROM SketchCurves WHERE SketchID = ?1 ORDER BY CurveID")?;
-        let rows = q.query_map([sk.id], |r| Ok((r.get::<_, i64>(0)?, text(r.get(1)?))))?;
+        if !has_column(c, "SketchCurves", "Data") {
+            sk.curves = typed_curves(c, raw)?;
+            continue;
+        }
+        let mut q = c.prepare("SELECT CurveID, Data, rowid FROM SketchCurves WHERE SketchID = ?1 ORDER BY CurveID")?;
+        let rows = q.query_map([raw], |r| {
+            let id = match r.get::<_, rusqlite::types::Value>(0)? {
+                rusqlite::types::Value::Integer(n) => n,
+                _ => (1 << 40) + r.get::<_, i64>(2)?,
+            };
+            Ok((id, text(r.get(1)?)))
+        })?;
         for (id, data) in rows.flatten().take(100_000) {
             let j: serde_json::Value = serde_json::from_str(&data).unwrap_or_default();
             let construction = construction.contains(&id);
@@ -703,6 +778,91 @@ fn sketches(c: &rusqlite::Connection) -> Result<Vec<Sketch>> {
             };
             let curve = curve.unwrap_or(SketchCurve::Other { id, data: j });
             sk.curves.push(curve);
+        }
+    }
+    Ok(out)
+}
+
+/// Whether a table has a column: the schema grew column by column.
+pub(crate) fn has_column(c: &rusqlite::Connection, table: &str, name: &str) -> bool {
+    c.prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+        .and_then(|mut q| q.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().any(|n| n == name)))
+        .unwrap_or(false)
+}
+
+/// A sketch's curves in the first releases' layout (2017-2018): one table per kind (`SketchLines`, `SketchArcs`,
+/// `SketchCircles`, `SketchSplines`), each naming its points in `ConstraintPoints` (plane coordinates in meters).
+fn typed_curves(c: &rusqlite::Connection, sketch: &rusqlite::types::Value) -> Result<Vec<SketchCurve>> {
+    let mut out = Vec::new();
+    if !has_table(c, "ConstraintPoints") {
+        return Ok(out);
+    }
+    let mut points: BTreeMap<Vec<u8>, [f64; 2]> = BTreeMap::new();
+    {
+        let mut q = c.prepare("SELECT PointID, XPosition, YPosition FROM ConstraintPoints WHERE SketchID = ?1")?;
+        let rows = q.query_map([sketch], |r| Ok((blob(r.get(0)?), r.get::<_, Option<f64>>(1)?, r.get::<_, Option<f64>>(2)?)))?;
+        for (id, x, y) in rows.flatten().take(1_000_000) {
+            if let (Some(x), Some(y)) = (x, y)
+                && x.is_finite()
+                && y.is_finite()
+                && x.abs() < 1e3
+                && y.abs() < 1e3
+            {
+                points.insert(id, [x * MM, y * MM]);
+            }
+        }
+    }
+    let at = |id: &Vec<u8>| points.get(id).copied();
+    // Each kind's rows for this sketch: curve row id and its point ids.
+    let rows = |table: &str, id: &str, cols: &[&str]| -> Result<Vec<(i64, Vec<Vec<u8>>)>> {
+        if !has_table(c, table) {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT s.rowid, {} FROM {table} t JOIN SketchCurves s ON s.CurveID = t.{id} WHERE s.SketchID = ?1 ORDER BY s.rowid",
+            cols.iter().map(|k| format!("t.{k}")).collect::<Vec<_>>().join(", ")
+        );
+        let mut q = c.prepare(&sql)?;
+        let n = cols.len();
+        let found = q.query_map([sketch], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                (1..=n).map(|i| r.get::<_, rusqlite::types::Value>(i).map(blob)).collect::<rusqlite::Result<Vec<_>>>()?,
+            ))
+        })?;
+        Ok(found.flatten().take(100_000).collect())
+    };
+    let id = |row: i64| (1_i64 << 40) + row;
+    for (row, p) in rows("SketchLines", "LineID", &["StartPointID", "EndPointID"])? {
+        if let (Some(a), Some(b)) = (at(&p[0]), at(&p[1])) {
+            out.push(SketchCurve::Line { id: id(row), a, b, construction: false });
+        }
+    }
+    for (row, p) in rows("SketchArcs", "ArcID", &["StartPointID", "MidPointID", "EndPointID", "CenterPointID"])? {
+        let (Some(start), Some(mid), Some(end), Some(center)) = (at(&p[0]), at(&p[1]), at(&p[2]), at(&p[3])) else { continue };
+        // Stored counter-clockwise from start to end when the middle point lies on that side.
+        let angle = |q: [f64; 2]| (q[1] - center[1]).atan2(q[0] - center[0]);
+        let ccw = |from: f64, to: f64| (to - from).rem_euclid(std::f64::consts::TAU);
+        let (a0, am, a1) = (angle(start), angle(mid), angle(end));
+        let (start, end) = if ccw(a0, am) <= ccw(a0, a1) { (start, end) } else { (end, start) };
+        out.push(SketchCurve::Arc { id: id(row), center, start, end, construction: false });
+    }
+    for (row, p) in rows("SketchCircles", "CircleID", &["CenterPointID", "StartPointID"])? {
+        if let (Some(center), Some(on)) = (at(&p[0]), at(&p[1])) {
+            let radius = (on[0] - center[0]).hypot(on[1] - center[1]);
+            if radius > 1e-9 {
+                out.push(SketchCurve::Circle { id: id(row), center, radius, construction: false });
+            }
+        }
+    }
+    if has_table(c, "SketchSplinePoints") {
+        for (row, p) in rows("SketchSplines", "SplineID", &["SplineID"])? {
+            let mut q = c.prepare("SELECT PointID FROM SketchSplinePoints WHERE SplineID = ?1 ORDER BY PointIndexInSpline")?;
+            let ids = q.query_map([&p[0]], |r| r.get::<_, rusqlite::types::Value>(0).map(blob))?;
+            let pts: Vec<[f64; 2]> = ids.flatten().take(10_000).filter_map(|i| at(&i)).collect();
+            if pts.len() >= 2 {
+                out.push(SketchCurve::Spline { id: id(row), points: pts, poles: Vec::new(), construction: false });
+            }
         }
     }
     Ok(out)
@@ -795,6 +955,10 @@ fn items(c: &rusqlite::Connection, folders: &[Folder], item_by_meta: &mut std::c
 /// `[tag, …]`; `modified` lists `[partition, [true, [[true, pmark before], after, …]]]` where `after` is `[false]` when
 /// the step used the body up (the inputs of a Subtract or Union).
 fn drop_removed(c: &rusqlite::Connection, steps: &[Step], bodies: &mut Vec<Body>) -> Result<std::collections::HashSet<i64>> {
+    // Files from before about 2025 keep no cached calls.
+    if !has_table(c, "PersistedCalls") {
+        return Ok(std::collections::HashSet::new());
+    }
     // A step may have several calls (`[node, [0]]`, `[node, [1]]`, …), kept in that order.
     let mut calls: BTreeMap<i64, BTreeMap<i64, Value>> = BTreeMap::new();
     {
@@ -898,6 +1062,10 @@ fn name_bodies(
 
 /// Step node → the cached partitions its call made or changed.
 fn call_partitions(c: &rusqlite::Connection, bodies: &[Body]) -> Result<BTreeMap<i64, Vec<i64>>> {
+    // Files from before about 2025 keep no cached calls.
+    if !has_table(c, "PersistedCalls") {
+        return Ok(BTreeMap::new());
+    }
     let known: Vec<i64> = bodies.iter().filter_map(|b| b.partition).collect();
     let mut calls: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
     {
@@ -945,6 +1113,10 @@ fn call_partitions(c: &rusqlite::Connection, bodies: &[Body]) -> Result<BTreeMap
 /// partition's delta); a later step that changes the body bakes it in. So each move with no later change to its
 /// bodies is applied here, from the matrix its cached call keeps.
 fn apply_moves(c: &rusqlite::Connection, steps: &[Step], bodies: &mut [Body]) -> Result<()> {
+    // Files from before about 2025 keep no cached calls.
+    if !has_table(c, "PersistedCalls") {
+        return Ok(());
+    }
     let calls = call_partitions(c, bodies)?;
     let names: BTreeMap<i64, serde_json::Value> = {
         let mut q = c.prepare("SELECT NameID, Data FROM HistoryNames WHERE Type IN (1, 19)")?;
@@ -1555,7 +1727,7 @@ fn resolve_transformed_items(
 }
 
 /// Whether the workspace has a table: the schema changes between Shapr3D releases.
-fn has_table(c: &rusqlite::Connection, name: &str) -> bool {
+pub(crate) fn has_table(c: &rusqlite::Connection, name: &str) -> bool {
     c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [name], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0
 }
 
@@ -1572,10 +1744,16 @@ fn current_bodies(c: &rusqlite::Connection, paint: &FacePaint) -> Result<(Vec<Bo
             parts.entry(pid).or_default().push((chunk, b));
         }
     } else if has_table(c, "BodyRevisionPartitions") {
-        // Files saved by Shapr3D releases up to early 2025 keep each partition whole, in one row.
-        let mut q = c.prepare("SELECT PartitionID, Block FROM BodyRevisionPartitions")?;
+        // Files saved up to early 2026 keep each partition whole, in one row; later ones of them
+        // keep rows of deleted partitions (IsDeleted, no block) and several phases of a row (the most settled wins).
+        let sql = if has_column(c, "BodyRevisionPartitions", "IsDeleted") {
+            "SELECT PartitionID, Block FROM BodyRevisionPartitions WHERE IsDeleted = 0 AND Block IS NOT NULL ORDER BY PartitionID, Phase DESC"
+        } else {
+            "SELECT PartitionID, Block FROM BodyRevisionPartitions WHERE Block IS NOT NULL"
+        };
+        let mut q = c.prepare(sql)?;
         for (pid, b) in q.query_map([], |r| Ok((r.get::<_, i64>(0)?, blob(r.get(1)?))))?.flatten() {
-            parts.entry(pid).or_default().push((0, b));
+            parts.entry(pid).or_insert_with(|| vec![(0, b)]);
         }
     }
     let mut blobs: Vec<(Option<i64>, Vec<u8>)> = parts
@@ -1976,6 +2154,7 @@ mod identity_tests {
             color: None,
             attributes: vec![],
             face_ids,
+            face_materials: Default::default(),
             mesh: None,
         };
         let mut ours = body(vec![42, 43, 44]);
@@ -2255,6 +2434,100 @@ mod identity_tests {
             &mut boolean_bodies,
         )?;
         assert_eq!((boolean_bodies[0].name.as_deref(), boolean_bodies[0].hidden), (Some("Renamed"), false));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod older_layout_tests {
+    use super::*;
+
+    /// A workspace database built from SQL, as file bytes.
+    fn workspace(sql: &str) -> Vec<u8> {
+        let dir = std::env::temp_dir().join(format!("shapr-older-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
+        let c = rusqlite::Connection::open(&dir).unwrap();
+        c.execute_batch(sql).unwrap();
+        drop(c);
+        let bytes = std::fs::read(&dir).unwrap();
+        let _ = std::fs::remove_file(&dir);
+        bytes
+    }
+
+    #[test]
+    fn a_bare_database_and_a_web_page_are_told_apart() {
+        let db = workspace("CREATE TABLE Settings (SettingName BLOB, SettingValue BLOB);");
+        assert!(ShaprFile::parse(&db).is_ok_and(|f| f.workspace == db));
+        let page = ShaprFile::parse(b"<!DOCTYPE html><html>sign in</html>").unwrap_err().to_string();
+        assert!(page.contains("web page"), "{page}");
+    }
+
+    /// The first releases' layout: text ids, typed curve tables with points in meters, shape groups, no Hidden.
+    #[test]
+    fn the_first_releases_layout_reads() -> Result<()> {
+        let db = workspace(
+            "CREATE TABLE Settings (SettingName BLOB, SettingValue BLOB);
+             CREATE TABLE Shapes (ShapeID BLOB NOT NULL PRIMARY KEY, ShapeData BLOB, ShapeGroupID BLOB);
+             CREATE TABLE ShapeGroups (ShapeGroupID BLOB NOT NULL PRIMARY KEY, ShapeGroupName BLOB, Hidden INT, OrderInList INT);
+             CREATE TABLE ConstructionGeometryPlanes (GeometryID BLOB NOT NULL PRIMARY KEY, Name BLOB, IsHidden BOOL, CenterXPosition DOUBLE,
+               CenterYPosition DOUBLE, CenterZPosition DOUBLE, NormalXValue DOUBLE, NormalYValue DOUBLE, NormalZValue DOUBLE, Size DOUBLE, OrderInList INT);
+             CREATE TABLE SketchControllers (SketchID BLOB NOT NULL PRIMARY KEY, Name BLOB, IsHidden BOOL, OrderInList INT, PlaneCenterX DOUBLE,
+               PlaneCenterY DOUBLE, PlaneCenterZ DOUBLE, PlaneNormX DOUBLE, PlaneNormY DOUBLE, PlaneNormZ DOUBLE, PlaneUDirX DOUBLE, PlaneUDirY DOUBLE, PlaneUDirZ DOUBLE);
+             CREATE TABLE SketchCurves (CurveID BLOB NOT NULL PRIMARY KEY, SketchID BLOB NOT NULL, CurveType INT);
+             CREATE TABLE ConstraintPoints (PointID BLOB NOT NULL PRIMARY KEY, SketchID BLOB, XPosition DOUBLE, YPosition DOUBLE, Type INTEGER);
+             CREATE TABLE SketchLines (LineID BLOB NOT NULL PRIMARY KEY, StartPointID BLOB NOT NULL, EndPointID BLOB NOT NULL);
+             CREATE TABLE SketchCircles (CircleID BLOB NOT NULL PRIMARY KEY, CenterPointID BLOB NOT NULL, StartPointID BLOB NOT NULL);
+             CREATE TABLE SketchArcs (ArcID BLOB NOT NULL PRIMARY KEY, StartPointID BLOB, MidPointID BLOB, EndPointID BLOB, CenterPointID BLOB,
+               RadiusID BLOB, StartAngleID BLOB, EndAngleID BLOB);
+             INSERT INTO ShapeGroups VALUES (x'6731', 'Group of shapes', 0, 0);
+             INSERT INTO ConstructionGeometryPlanes VALUES (x'7031', 'Plane', 0, 0, 0, 0.01, 0, 0, 1, 0.05, 0);
+             INSERT INTO SketchControllers VALUES (x'6b31', 'Sketch', 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0);
+             INSERT INTO SketchCurves VALUES (x'6c31', x'6b31', 0), (x'6331', x'6b31', 2), (x'6131', x'6b31', 1);
+             INSERT INTO ConstraintPoints VALUES (x'01', x'6b31', 0, 0, 0), (x'02', x'6b31', 0.01, 0, 0), (x'03', x'6b31', 0.002, 0.003, 0),
+               (x'04', x'6b31', 0.005, 0.003, 0), (x'05', x'6b31', 0.01, 0.01, 0), (x'06', x'6b31', 0, 0.01, 0), (x'07', x'6b31', -0.00707106781, -0.00707106781, 0);
+             INSERT INTO SketchLines VALUES (x'6c31', x'01', x'02');
+             INSERT INTO SketchCircles VALUES (x'6331', x'03', x'04');
+             INSERT INTO SketchArcs VALUES (x'6131', x'02', x'07', x'06', x'01', x'00', x'00', x'00');",
+        );
+        let p = Project::read(&ShaprFile::parse(&db)?)?;
+        assert!(p.legacy && !p.patchable);
+        assert_eq!(p.sketches.len(), 1);
+        let curves = &p.sketches[0].curves;
+        assert!(
+            curves.contains(&SketchCurve::Line { id: (1 << 40) + 1, a: [0.0, 0.0], b: [10.0, 0.0], construction: false }),
+            "{curves:?}"
+        );
+        let circle = curves.iter().find_map(|c| match c {
+            SketchCurve::Circle { center, radius, .. } => Some((*center, *radius)),
+            _ => None,
+        });
+        assert!(
+            circle.is_some_and(|(c, r)| (c[0] - 2.0).abs() < 1e-9 && (c[1] - 3.0).abs() < 1e-9 && (r - 3.0).abs() < 1e-9),
+            "{circle:?}"
+        );
+        // The arc from (10, 0) through (-7.07, -7.07) to (0, 10) goes the long way, clockwise: kept counter-clockwise
+        // from (0, 10) to (10, 0).
+        let arc = curves.iter().find_map(|c| match c {
+            SketchCurve::Arc { start, end, .. } => Some((*start, *end)),
+            _ => None,
+        });
+        assert_eq!(arc, Some(([0.0, 10.0], [10.0, 0.0])));
+        assert!(matches!(p.construction.as_slice(), [Construction::Plane { origin, .. }] if (origin[2] - 10.0).abs() < 1e-9));
+        assert!(p.folders.iter().any(|f| f.name == "Group of shapes"));
+        Ok(())
+    }
+
+    /// Mid-2024 to early-2026 files: no cached calls, deleted partition rows and empty blocks are skipped.
+    #[test]
+    fn deleted_partition_rows_are_not_bodies() -> Result<()> {
+        let c = rusqlite::Connection::open_in_memory()?;
+        c.execute_batch(
+            "CREATE TABLE BodyRevisionPartitions (PartitionID INTEGER NOT NULL, Block BLOB, Deltas BLOB, Phase INTEGER NOT NULL DEFAULT 0,
+               IsDeleted BOOL NOT NULL DEFAULT 0);
+             INSERT INTO BodyRevisionPartitions VALUES (1, NULL, NULL, 0, 1), (2, NULL, NULL, 0, 1);",
+        )?;
+        let (bodies, unreadable) = current_bodies(&c, &FacePaint::default())?;
+        assert!(bodies.is_empty() && unreadable.is_empty(), "{unreadable:?}");
+        assert!(drop_removed(&c, &[], &mut Vec::new())?.is_empty());
         Ok(())
     }
 }

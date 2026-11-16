@@ -1,8 +1,13 @@
+#include <BRepCheck_Analyzer.hxx>
+#include <BRepCheck_Result.hxx>
+#include <cstdlib>
+#include <cstdio>
 // Exact boundary representations to and from OCCT shapes. The stream layout is documented in
 // crates/kernel/src/brep.rs (`flat::encode`). Every entry point is wrapped like the rest of the shim.
 
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -1060,6 +1065,29 @@ TopoDS_Shape build(Rd& r, std::vector<TopoDS_Shape>* made = nullptr) {
     result = co;
   }
   pcurves_by_marching(bb, result);
+  if (std::getenv("SK_DEBUG_BUILD")) {
+    TopTools_IndexedMapOfShape fm;
+    TopExp::MapShapes(result, TopAbs_FACE, fm);
+    BRepCheck_Analyzer an(result);
+    for (int i = 1; i <= fm.Extent(); ++i) {
+      const Handle(BRepCheck_Result)& res = an.Result(fm(i));
+      if (res.IsNull()) continue;
+      for (res->InitContextIterator(); res->MoreShapeInContext(); res->NextShapeInContext())
+        for (auto it = res->StatusOnShape().begin(); it != res->StatusOnShape().end(); ++it)
+          if (*it != BRepCheck_NoError) fprintf(stderr, "face %d: status %d\n", i - 1, int(*it));
+      for (auto it = res->Status().begin(); it != res->Status().end(); ++it)
+        if (*it != BRepCheck_NoError) fprintf(stderr, "face %d: own status %d\n", i - 1, int(*it));
+    }
+    TopTools_IndexedMapOfShape em;
+    TopExp::MapShapes(result, TopAbs_EDGE, em);
+    for (int i = 1; i <= em.Extent(); ++i) {
+      const Handle(BRepCheck_Result)& res = an.Result(em(i));
+      if (res.IsNull()) continue;
+      for (auto it = res->Status().begin(); it != res->Status().end(); ++it)
+        if (*it != BRepCheck_NoError) fprintf(stderr, "edge %d: status %d\n", i - 1, int(*it));
+    }
+    fprintf(stderr, "valid before fix: %d\n", int(an.IsValid()));
+  }
   ShapeFix_Shape fix(result);
   fix.SetPrecision(1e-7);
   fix.SetMaxTolerance(1e-2);
@@ -1335,9 +1363,49 @@ std::vector<double> describe(const TopoDS_Shape& shape) {
   std::vector<std::vector<size_t>> shells;
   TopTools_IndexedMapOfShape seen;
   std::vector<std::vector<double>> face_streams(size_t(faces.Extent()) + 1);
-  for (TopExp_Explorer sx(shape, TopAbs_SHELL); sx.More(); sx.Next()) {
+  // Faces outside any shell (a mesh's triangles, loose faces of a compound) are grouped into shells of their
+  // own by shared edges, so none is left out.
+  std::vector<TopoDS_Shape> groups;
+  for (TopExp_Explorer sx(shape, TopAbs_SHELL); sx.More(); sx.Next()) groups.push_back(sx.Current());
+  {
+    TopTools_IndexedMapOfShape in_shells;
+    for (auto& g : groups) TopExp::MapShapes(g, TopAbs_FACE, in_shells);
+    std::vector<int> loose;
+    for (TopExp_Explorer fx(shape, TopAbs_FACE, TopAbs_SHELL); fx.More(); fx.Next())
+      if (!in_shells.Contains(fx.Current())) loose.push_back(faces.FindIndex(fx.Current()));
+    if (!loose.empty()) {
+      std::vector<int> parent(size_t(faces.Extent()) + 1);
+      for (size_t i = 0; i < parent.size(); ++i) parent[i] = int(i);
+      std::function<int(int)> root = [&](int x) { return parent[size_t(x)] == x ? x : parent[size_t(x)] = root(parent[size_t(x)]); };
+      std::map<int, int> first_on_edge;
+      for (int fi : loose) {
+        if (fi <= 0) continue;
+        for (TopExp_Explorer ex(faces(fi), TopAbs_EDGE); ex.More(); ex.Next()) {
+          int ei = edges.FindIndex(ex.Current());
+          auto it = first_on_edge.find(ei);
+          if (it == first_on_edge.end()) first_on_edge[ei] = fi;
+          else parent[size_t(root(fi))] = root(it->second);
+        }
+      }
+      std::map<int, TopoDS_Compound> by_root;
+      BRep_Builder bb;
+      for (TopExp_Explorer fx(shape, TopAbs_FACE, TopAbs_SHELL); fx.More(); fx.Next()) {
+        int fi = faces.FindIndex(fx.Current());
+        if (fi <= 0 || in_shells.Contains(fx.Current())) continue;
+        auto it = by_root.find(root(fi));
+        if (it == by_root.end()) {
+          TopoDS_Compound c;
+          bb.MakeCompound(c);
+          it = by_root.emplace(root(fi), c).first;
+        }
+        bb.Add(it->second, fx.Current());
+      }
+      for (auto& kv : by_root) groups.push_back(kv.second);
+    }
+  }
+  for (auto& group : groups) {
     std::vector<size_t> sh;
-    for (TopExp_Explorer fx(sx.Current(), TopAbs_FACE); fx.More(); fx.Next()) {
+    for (TopExp_Explorer fx(group, TopAbs_FACE); fx.More(); fx.Next()) {
       TopoDS_Face face = TopoDS::Face(fx.Current());
       int fi = faces.FindIndex(face);
       if (fi <= 0 || seen.Contains(face)) continue;

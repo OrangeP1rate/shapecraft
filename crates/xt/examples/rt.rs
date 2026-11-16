@@ -13,6 +13,7 @@ fn main() {
         Err(e) => return println!("bodies: {e}"),
     };
     for b in bodies {
+        println!("read: {} faces, shells {:?}", b.brep.faces.len(), b.brep.shells.iter().map(Vec::len).collect::<Vec<_>>());
         let s = match k.from_brep(&b.brep) {
             Ok(s) => s,
             Err(e) => {
@@ -34,6 +35,25 @@ fn main() {
                     match k.from_brep(&b2) {
                         Ok(s2) => println!("volume {v0:.4} -> {:.4}", k.mass_props(&s2).map(|m| m.volume).unwrap_or(f64::NAN)),
                         Err(e) => println!("rebuild: {e}"),
+                    }
+                    // Through our writer and reader too (what a .shapr export and its reimport do).
+                    let back = shapecraft_xt::write_body(&b2, shapecraft_xt::Format::Binary)
+                        .and_then(|x| shapecraft_xt::parse(&x))
+                        .and_then(|f| shapecraft_xt::bodies(&f));
+                    match back {
+                        Ok(bs) => {
+                            for b3 in bs {
+                                match k.from_brep(&b3.brep) {
+                                    Ok(s3) => println!(
+                                        "  via xt: {} faces, volume {:.4}",
+                                        b3.brep.faces.len(),
+                                        k.mass_props(&s3).map(|m| m.volume).unwrap_or(f64::NAN)
+                                    ),
+                                    Err(e) => println!("  via xt rebuild: {e}"),
+                                }
+                            }
+                        }
+                        Err(e) => println!("  via xt: {e}"),
                     }
                 }
             }

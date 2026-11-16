@@ -9,7 +9,7 @@ pub mod write;
 
 pub use model::{Body, Mesh, bodies};
 pub use read::{Format, Node, Val, XtFile, parse};
-pub use write::{write_body, write_file};
+pub use write::{write_body, write_file, write_solids};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

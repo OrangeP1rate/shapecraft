@@ -63,3 +63,67 @@ fn periodic_faces_are_written_without_seams() {
         }
     }
 }
+
+/// Two boxes apart, as one shape (a compound of two solids).
+fn two_lumps(k: &OcctKernel) -> shapecraft_kernel::Shape {
+    let sq =
+        |x: f64| vec![DVec3::new(x, 0.0, 0.0), DVec3::new(x + 10.0, 0.0, 0.0), DVec3::new(x + 10.0, 10.0, 0.0), DVec3::new(x, 10.0, 0.0)];
+    let a = k.extrude_polygon(&sq(0.0), DVec3::new(0.0, 0.0, 5.0)).unwrap();
+    let b = k.extrude_polygon(&sq(30.0), DVec3::new(0.0, 0.0, 7.0)).unwrap();
+    k.boolean(BoolOp::Union, &a, &b).unwrap()
+}
+
+#[test]
+fn a_body_of_separate_solids_stays_one_body() {
+    let k = OcctKernel::new();
+    let s = two_lumps(&k);
+    let parts = k.to_brep(&s).unwrap();
+    assert_eq!(parts.len(), 2);
+    let bytes = shapecraft_xt::write_solids(&parts, Format::Binary).unwrap();
+    let bodies = shapecraft_xt::bodies(&shapecraft_xt::parse(&bytes).unwrap()).unwrap();
+    assert_eq!(bodies.len(), 1, "one body with two solid regions");
+    let back = k.from_brep(&bodies[0].brep).unwrap();
+    let (v0, v1) = (k.mass_props(&s).unwrap().volume, k.mass_props(&back).unwrap().volume);
+    assert!((v0 - 1200.0).abs() < 1e-6 && (v1 - v0).abs() < 1e-6, "volume {v0} -> {v1}");
+    assert_eq!(k.to_brep(&back).unwrap().len(), 2);
+}
+
+#[test]
+fn an_open_mesh_is_written_as_a_sheet() {
+    let k = OcctKernel::new();
+    // Two triangles of an open mesh (no shell around them until the kernel groups them).
+    let pts = [DVec3::new(0.0, 0.0, 0.0), DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 10.0, 0.0), DVec3::new(0.0, 10.0, 1.0)];
+    let s = k.shape_from_mesh(&pts, &[0, 1, 2, 0, 2, 3]).unwrap();
+    let brep = k.to_brep(&s).unwrap().remove(0);
+    assert_eq!(brep.kind, shapecraft_kernel::brep::BodyKind::Sheet);
+    assert_eq!(brep.faces.len(), 2, "both triangles kept");
+    for format in [Format::Binary, Format::Text] {
+        let bytes = shapecraft_xt::write_body(&brep, format).unwrap();
+        let back = &shapecraft_xt::bodies(&shapecraft_xt::parse(&bytes).unwrap()).unwrap()[0].brep;
+        assert_eq!(back.kind, shapecraft_kernel::brep::BodyKind::Sheet);
+        assert_eq!((back.faces.len(), back.edges.len()), (2, 5), "{format:?}");
+        let area: f64 = (0..2).map(|i| k.measure(&k.from_brep(back).unwrap(), shapecraft_kernel::SubShape::Face(i)).unwrap().0).sum();
+        let want = 50.0 + 0.5 * (DVec3::new(10.0, 10.0, 0.0).cross(DVec3::new(0.0, 10.0, 1.0))).length();
+        assert!((area - want).abs() < 1e-6, "{format:?}: area {area} vs {want}");
+    }
+}
+
+#[test]
+fn a_wire_body_is_written_with_its_edges() {
+    use shapecraft_kernel::brep::{BodyKind, Brep, Curve, Edge};
+    let mut b = Brep { kind: BodyKind::Wire, ..Brep::default() };
+    // An L of two lines and a separate line: two pieces.
+    b.vertices =
+        vec![DVec3::ZERO, DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 5.0, 0.0), DVec3::new(0.0, 20.0, 0.0), DVec3::new(5.0, 20.0, 0.0)];
+    for (s, e) in [(0, 1), (1, 2), (3, 4)] {
+        let (p, q) = (b.vertices[s], b.vertices[e]);
+        b.curves.push(Curve::Line { origin: p, dir: (q - p).normalize() });
+        b.edges.push(Edge { curve: Some(b.curves.len() - 1), reversed: false, start: Some(s), end: Some(e), tolerance: None });
+    }
+    for format in [Format::Binary, Format::Text] {
+        let bytes = shapecraft_xt::write_body(&b, format).unwrap();
+        let back = &shapecraft_xt::bodies(&shapecraft_xt::parse(&bytes).unwrap()).unwrap()[0].brep;
+        assert_eq!(back.kind, BodyKind::Wire, "{format:?}");
+        assert_eq!((back.edges.len(), back.vertices.len()), (3, 5), "{format:?}");
+    }
+}

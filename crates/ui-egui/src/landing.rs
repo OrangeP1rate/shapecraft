@@ -1712,6 +1712,11 @@ impl Landing {
             return Some(LandingAction::Import);
         }
         if hit[0] {
+            // A view-only phone opens projects and files to look at; a new one starts on a computer or the Duo.
+            if crate::tablet::view_only() {
+                self.toast = Some((crate::tablet::VIEW_ONLY_NOTE.into(), now + 4.0));
+                return None;
+            }
             return Some(LandingAction::New(self.target_dir()));
         }
         None

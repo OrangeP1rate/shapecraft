@@ -1881,6 +1881,15 @@ impl ShapeCraftApp {
                 if crate::tablet::waits_to_unfold() && self.unfold_to.is_some() && unfold_prompt(ui, self.unfold_to.as_ref(), name) {
                     self.unfold_to = None;
                 }
+                // A view-only phone opens projects and files to look at: new projects, tutorials and the shortcut
+                // sheet's practice project are for a screen that models.
+                let picked = match picked {
+                    Some(LandingAction::New(_) | LandingAction::Tutorial(_) | LandingAction::Shortcuts) if crate::tablet::view_only() => {
+                        self.landing.toast = Some((crate::tablet::VIEW_ONLY_NOTE.into(), ctx.input(|i| i.time) + 4.0));
+                        None
+                    }
+                    other => other,
+                };
                 match picked {
                     Some(LandingAction::Open(dir)) => self.open_checked(dir),
                     Some(LandingAction::New(dir)) => self.new_project_in(dir),
@@ -1940,6 +1949,15 @@ impl ShapeCraftApp {
         // Android asks the touch question too (a stylus, or a mouse and keyboard, #10), then carries on as
         // the desktop does; only a mouse goes on to how the view moves.
         // An upright phone (an iPhone, the iPhone Duo folded) is too narrow for its two tiles: it asks once sideways.
+        // A view-only phone (an ordinary iPhone) has nothing to pick with: fingers only move the view there. It takes
+        // the stylus answer (no mouse navigation to choose) without asking, and goes on to setup.
+        } else if crate::tablet::view_only() && self.settings_file.is_some() && self.settings.device.is_empty() {
+            self.settings.tablet_device = crate::onboarding::ANDROID_DEVICES[0].1.to_string();
+            self.settings.device = crate::onboarding::ANDROID_DEVICES[0].1.to_string();
+            self.settings.menu_labels = "Never".into();
+            self.settings.nav_asked = true;
+            self.ask_device = false;
+            self.sync_settings();
         } else if crate::tablet::touch_ui() && ((self.settings_file.is_some() && self.settings.device.is_empty()) || self.ask_device) {
             if ui.ctx().content_rect().width() >= 600.0
                 && let Some(i) = crate::onboarding::tablet(ui, &mut self.tablet_choice)
@@ -2094,6 +2112,7 @@ impl ShapeCraftApp {
     /// File/app actions from a menu, or from the workspace (the ⋯ menu on a touch screen).
     fn app_action(&mut self, a: AppAction, ctx: &egui::Context) {
         match a {
+            AppAction::NewProject if crate::tablet::view_only() => self.toast(crate::tablet::VIEW_ONLY_NOTE.into()),
             AppAction::NewProject => self.new_project(),
             AppAction::CloseProject | AppAction::GoHome => self.close_project(),
             AppAction::Save => {

@@ -29,9 +29,10 @@ pub const ENTRIES: &[Entry] = &[
     Entry {
         version: "0.9.0",
         title: "ShapeCraft on iPhone",
-        text: "The whole modeler runs as a native iPhone app, laid out for a phone: fingers move the view, a stylus \
-               draws and picks. On iPhone Duo the front screen holds your projects and opening it up takes you into \
-               the model. Build it from the source and sideload it onto your own phone (docs/ios.md).",
+        text: "A native iPhone app. On iPhone Duo it's the whole modeler: the front screen holds your projects and \
+               opening it up takes you into the model, where fingers move the view and a stylus draws and picks. On \
+               other iPhones projects open to view: turn them, change the display, take a screenshot or export. \
+               Sideload it onto your own phone (docs/ios.md).",
         art: "new-iphone",
     },
     Entry {

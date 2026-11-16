@@ -1,7 +1,8 @@
 # ShapeCraft on iPhone (in testing)
 
-ShapeCraft runs as a native app on iPhone, including the iPhone Duo, with the full modeler: the same
-OpenCASCADE kernel and the same interface as on a computer, laid out for a phone.
+ShapeCraft runs as a native app on iPhone. On the **iPhone Duo** it's the full modeler: the same OpenCASCADE kernel
+and the same interface as on a computer, laid out for the phone opened up. **Other iPhones** are a viewer: projects
+and files open to turn, look at in any display mode, screenshot and export; modeling waits for a computer or a Duo.
 
 There's no App Store or TestFlight build. Put it on your own phone one of two ways:
 
@@ -16,21 +17,24 @@ There's no App Store or TestFlight build. Put it on your own phone one of two wa
 A free Apple account's signature lasts 7 days: refresh it in your sideloading tool (AltStore can do it on its own).
 Installing a newer .ipa over it keeps your projects.
 
-## Build it yourself
-
 ## What's different on a phone
 
-- **Fingers move the view, the stylus works the model.** One finger turns the view, two pan and pinch to zoom, a
+- **Other iPhones view.** Projects show upright, and a project turns the phone sideways to look at it: one finger
+  turns, two pan and pinch, a double tap looks straight at a face. Display Modes, the standard views and Screenshot
+  are on the right; Export is under the project's name. Open a STEP, .shapr or other file from Files to view it.
+  Nothing changes the model there: new projects, tools, tutorials and Undo wait for a computer or an iPhone Duo.
+- **On the Duo, fingers move the view and the stylus works the model.** One finger turns the view, two pan and pinch to zoom, a
   double tap zooms to a face, and a three-finger swipe undoes or redoes. A stylus taps, draws, drags handles, and a
   drag on empty space draws a selection box. The stylus never moves the camera.
 - **iPhone Duo.** Folded, the front screen holds your projects (upright). Open it up to model on the inside screen
   (sideways). A project started on the front screen waits with an "Open up to model" card and picks up when you
   unfold. The projects screen fills iOS's vertical bar with its own buttons; in a project, the tools keep clear of the
   status corner.
-- **Other iPhones.** Projects show upright, and a project turns the phone sideways.
 - **Files.** Import and Export go through the Files app. Projects live in the app's Documents folder, which the
   Files app shows under On My iPhone ▸ ShapeCraft.
 - Menus open as iOS sheets, and the interface uses the system font.
+
+## Build it yourself
 
 You need a Mac with Xcode 27.1 or newer, Rust (`rustup target add aarch64-apple-ios aarch64-apple-ios-sim`), CMake
 and Ninja, an OpenCASCADE 7.9 source tree, and an Apple ID signed in to Xcode (a free account works).

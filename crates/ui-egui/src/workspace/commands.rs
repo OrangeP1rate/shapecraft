@@ -78,6 +78,11 @@ impl Workspace {
         if self.importing.is_some() || self.working.is_some() {
             return None;
         }
+        // A view-only phone changes nothing (Undo and Redo included: they'd step through what came with the file).
+        if crate::tablet::view_only() && (matches!(id, "undo" | "redo") || shapecraft_engine::cmd::find(id).is_some_and(|c| c.modifies)) {
+            self.toast(crate::tablet::VIEW_ONLY_NOTE);
+            return None;
+        }
         match self.session.execute(id, &params) {
             Ok(out) => {
                 self.remember(id);

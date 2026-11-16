@@ -95,6 +95,23 @@ pub fn set_turns_to_model(on: bool) {
     TURNS_TO_MODEL.store(on, Ordering::Relaxed);
 }
 
+/// A phone too small to model on (an ordinary iPhone): projects open to look at, turn and share, and editing waits
+/// for a computer or a phone that opens up (the iPhone Duo).
+static VIEW_ONLY: AtomicBool = AtomicBool::new(false);
+
+/// Set by an app on a phone that only views projects.
+pub fn set_view_only(on: bool) {
+    VIEW_ONLY.store(on, Ordering::Relaxed);
+}
+
+/// Projects open read-only here: no tools, nothing that changes the model.
+pub fn view_only() -> bool {
+    touch_ui() && VIEW_ONLY.load(Ordering::Relaxed)
+}
+
+/// What a view-only phone says when something would change the model.
+pub const VIEW_ONLY_NOTE: &str = "View only on this iPhone. Model on your computer or an iPhone Duo.";
+
 /// Folded shut on a phone that opens up: a project waits until it's opened.
 pub fn waits_to_unfold() -> bool {
     folded() && !TURNS_TO_MODEL.load(Ordering::Relaxed)

@@ -1008,6 +1008,7 @@ impl Workspace {
     pub(crate) fn pen_bubble(&self) -> bool {
         let recent = |t: Option<f64>| t.is_some_and(|t| self.now - t < PEN_BUBBLE_SECS);
         self.pill_bottom > 0.0
+            && !crate::tablet::view_only()
             && !crate::tablet::pen_seen()
             && !matches!(self.settings.tablet_device.as_str(), "keyboard" | "mouse")
             && (recent(self.touch_opened) || recent(self.pen_nudged) || self.pen_help)
@@ -1071,6 +1072,11 @@ impl Workspace {
         let teaching = self.tutorial.is_some();
         if teaching {
             self.tutorial_tick();
+        }
+        // A view-only phone has neither sidebar: nothing in them is for looking.
+        if crate::tablet::view_only() {
+            self.show_items = false;
+            self.show_history = false;
         }
         let items_rect = (self.show_items && self.drawings.is_none() && !teaching).then(|| {
             Rect::from_min_max(
@@ -1204,6 +1210,9 @@ impl Workspace {
         }
         if self.help_open {
             prefs::help(self, ui, full);
+        }
+        if crate::tablet::view_only() && !self.settings.view_only_seen {
+            panels::viewer_welcome(self, ui, full);
         }
         self.keyboard(ui);
         if std::mem::take(&mut self.copy_shot) {

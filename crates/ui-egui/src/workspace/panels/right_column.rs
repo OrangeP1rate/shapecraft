@@ -18,6 +18,47 @@ fn cube_gap() -> f32 {
 }
 
 impl Workspace {
+    /// A view-only phone's right column: the view button (standard views, grid, axes) with the cube beside it,
+    /// then Display Modes and Screenshot. Nothing in it changes the model.
+    fn viewer_column(&mut self, ui: &mut Ui, x: f32) {
+        let top = self.right_top;
+        let view_on = self.right_pop.is_some_and(|(p, ..)| p == RightPop::View);
+        let view = ToolDef { icon: Icon::Origin, label: "View", sub: None, keys: "", action: Action::Soon, flyout: false };
+        if toolbar::group(ui, pos2(x, top), &[view], &[view_on], false, "viewer-view").is_some() {
+            self.right_pop = if view_on { None } else { Some((RightPop::View, pos2(x, top), self.now)) };
+            self.popup_opened_at = self.now;
+        }
+        let cube = Rect::from_center_size(pos2(x - cube_gap(), top + 30.0), vec2(72.0, 72.0));
+        self.view_cube(ui, cube);
+        let defs = [
+            ToolDef {
+                icon: match self.display {
+                    shapecraft_render::DisplayMode::Zebra { .. } => Icon::DisplayZebra,
+                    shapecraft_render::DisplayMode::Curvature { .. } => Icon::DisplayCurvature,
+                    _ => Icon::DisplayModes,
+                },
+                label: "Display Modes",
+                sub: Some(self.display.label()),
+                keys: "",
+                action: Action::Ui(UiAction::DisplayModes),
+                flyout: false,
+            },
+            ToolDef {
+                icon: Icon::Screenshot,
+                label: "Screenshot",
+                sub: None,
+                keys: "",
+                action: Action::Ui(UiAction::Screenshot),
+                flyout: false,
+            },
+        ];
+        let y = top + toolbar::group_height(1) + toolbar::GROUP_GAP;
+        if let Some(i) = toolbar::group(ui, pos2(x, y), &defs, &[false, self.screenshotting], false, "viewer-display") {
+            self.act(defs[i].action, defs[i].label);
+        }
+        self.display_menu_at = pos2(x, y);
+    }
+
     /// Fillet | Chamfer segmented switch under the banner while the tool runs.
     /// Visualization's right column, as observed: sidebar toggle and view (a strip), then Capture and Generative
     /// Render.
@@ -82,6 +123,10 @@ impl Workspace {
         }
         if self.drawings.is_some() {
             crate::workspace::drawings::right_column(self, ui);
+            return;
+        }
+        if crate::tablet::view_only() {
+            self.viewer_column(ui, x);
             return;
         }
         // The snap / grid / origin strip shows beside the History sidebar; with it closed the cube takes

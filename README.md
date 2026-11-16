@@ -56,7 +56,7 @@ Then move it, copy it, pattern it, and send it to your printer.
 - 🎓 **Learn it over coffee.** Three built-in tutorials, about seven minutes each, in eleven languages.
 - 🛟 **Hard to lose work.** Autosave, safe saves, and a project that reopens even after a crash.
 - 🔄 **Keeps itself fresh.** New versions download in the background and install when you close the app.
-- 📱 **In your pocket too.** A native iPhone app with the whole modeler, laid out for a phone, iPhone Duo included.
+- 📱 **In your pocket too.** The whole modeler on an iPhone Duo and on Android, and a viewer on other iPhones.
 
 ## Get it in a minute
 
@@ -69,7 +69,11 @@ Then move it, copy it, pattern it, and send it to your printer.
 3. Make something. 🎉
 
 **On iPhone:** download the `-ios-arm64.ipa` from the same page and sideload it with AltStore, Sideloadly or a similar
-tool, signed with your own Apple account (a free one works). Details and building it yourself: [docs/ios.md](docs/ios.md).
+tool, signed with your own Apple account (a free one works). An iPhone Duo gets the whole modeler; other iPhones open
+projects and files to view, screenshot and export. Details and building it yourself: [docs/ios.md](docs/ios.md).
+
+**On Android:** download the `-android-arm64.apk` and open it (Android 8.0 or newer, phones and tablets). Later
+versions install over it.
 
 <p align="center"><img src="website/media/iphone.gif" width="720" alt="A phone stand modeled on an iPhone: a side profile is sketched, pulled into a solid, given a cable hole and a teal finish, then turned around"></p>
 

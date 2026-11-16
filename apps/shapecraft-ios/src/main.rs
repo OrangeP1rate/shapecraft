@@ -231,6 +231,8 @@ mod ios {
                 // keeps the same two places: upright for the projects, on its side for a project, which opens at once.
                 let slab = !winit::platform::ios::foldable() && short < 600.0 && long / short > 1.8;
                 shapecraft_ui::tablet::set_turns_to_model(slab);
+                // ...and only looks at projects: modeling is for the Duo opened up, a computer or a tablet.
+                shapecraft_ui::tablet::set_view_only(slab);
                 if slab {
                     let want = Some(self.inner.workspace().is_some());
                     if winit::platform::ios::orientation_lock() != want {

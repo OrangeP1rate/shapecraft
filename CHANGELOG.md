@@ -2,6 +2,18 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.10.1-alpha
+**The iPhone app is back in the release, and on an ordinary iPhone it's a viewer: the whole modeler stays on the
+iPhone Duo.**
+### Changed
+- **Other iPhones view projects.** On an iPhone that doesn't fold, a project opens sideways to look at: one finger
+  turns, two pan and pinch, a double tap looks straight at a face, with the standard views, Display Modes and
+  Screenshot on the right and Export under the project's name. Files from the Files app open to view too. Tools,
+  new projects, tutorials, Rename and Undo stay on a computer or an iPhone Duo, which keeps the full modeler. A
+  card on the first project says so.
+### Fixed
+- **The iPhone .ipa is on the release again.** 0.10.0 went out without it.
+
 ## 0.10.0-alpha
 **Threads: pick a hole or a cylinder and it becomes a nut or a bolt, ready to print.**
 ### New

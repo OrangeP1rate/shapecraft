@@ -66,6 +66,8 @@ pub struct Settings {
     pub tablet_device: String,
     /// The first run's second question (navigation style) has been answered or skipped.
     pub nav_asked: bool,
+    /// A view-only phone's first project showed what it can do ("View and share here").
+    pub view_only_seen: bool,
     pub last_export_dir: Option<String>,
     /// Screenshot mode's last switches: the grid, a see-through background, body edges (its size is the
     /// "Resolution" tool variant).
@@ -162,6 +164,7 @@ impl Default for Settings {
             device: String::new(),
             tablet_device: String::new(),
             nav_asked: false,
+            view_only_seen: false,
             last_export_dir: None,
             slicer: String::new(),
             svg_join: true,

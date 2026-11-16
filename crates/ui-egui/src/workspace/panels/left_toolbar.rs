@@ -321,14 +321,17 @@ impl Workspace {
         let top_active: Vec<bool> = vec![self.switcher];
         // With Menu Labels off a phone shows these two as icons too.
         let top_chips = !(crate::tablet::small_screen() && self.settings.menu_labels == "Never");
-        if let Some(i) = toolbar::group_with(ui, pos2(x, self.left_top), &top, &subs, &top_active, top_chips, "top") {
+        // A view-only phone has no workspaces or Items to switch to: its left side is the view's.
+        let viewer = crate::tablet::view_only();
+        if viewer {
+        } else if let Some(i) = toolbar::group_with(ui, pos2(x, self.left_top), &top, &subs, &top_active, top_chips, "top") {
             clicked = toolbar::TOP.get(i).copied();
         }
         // Measured (L05): groups 9 px under the title bar, 6 px apart; a 2 px line 9 px under Items, Search 9 px
         // under that.
         let items_y = self.left_top + toolbar::group_height(toolbar::TOP.len()) + gap;
         let sep_y = items_y + toolbar::group_height(1) + 10.0;
-        if open_drawing.is_none() {
+        if open_drawing.is_none() && !viewer {
             if toolbar::group(ui, pos2(x, items_y), &[toolbar::ITEMS], &[self.show_items], top_chips, "items").is_some() {
                 clicked = Some(toolbar::ITEMS);
             }
@@ -387,6 +390,14 @@ impl Workspace {
             {
                 self.shot_res_menu = None;
             }
+        }
+        // A view-only phone: only a mode's own buttons (Screenshot's) on the left, and the viewer's right column.
+        if viewer {
+            self.right_column(ui);
+            if let Some(def) = clicked {
+                self.act(def.action, def.label);
+            }
+            return;
         }
         // Bottom group (3D only).
         let mut bottom: Vec<ToolDef> = Vec::new();

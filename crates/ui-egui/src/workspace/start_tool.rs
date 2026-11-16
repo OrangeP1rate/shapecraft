@@ -60,6 +60,10 @@ impl Workspace {
     }
 
     pub fn start_tool(&mut self, kind: ToolKind) {
+        if crate::tablet::view_only() {
+            self.toast(crate::tablet::VIEW_ONLY_NOTE);
+            return;
+        }
         // The key of the tool a pick already started leaves it as it is (s24 matrix).
         let same = match &self.tool {
             Tool::OffsetFace(_) => kind == ToolKind::OffsetFace,

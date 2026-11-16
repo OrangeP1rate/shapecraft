@@ -283,6 +283,50 @@ pub(in crate::workspace) fn touch_title(ws: &mut Workspace, ui: &mut Ui, bar: Re
 
 /// The pen bubble's card: what a stylus needs (connected, and seen by the device as a pen, since fingers only move
 /// the view), and the mouse instead.
+/// A view-only phone's first project: what it does here and where modeling happens, until "Got it".
+pub(in crate::workspace) fn viewer_welcome(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
+    let title = "View and share here.";
+    let body = "Turn the model with one finger, move it with two, and double-tap a face to look straight at it. \
+                Display Modes and Screenshot are on the right.";
+    let alt = "To model, open this project in ShapeCraft on your computer or on an iPhone Duo opened up.";
+    let width = (full.width() - 40.0).min(440.0);
+    let wrap = |t: &str, font| ui.painter().layout(t.to_string(), font, Tokens::text_dim(), width - 40.0);
+    let (g_body, g_alt) = (wrap(body, theme::body(14.0)), wrap(alt, theme::body(14.0)));
+    let height = 20.0 + 28.0 + 10.0 + g_body.size().y + 10.0 + g_alt.size().y + 16.0 + 40.0 + 18.0;
+    let card = Rect::from_center_size(full.center(), vec2(width, height));
+    let mut done = false;
+    // The dim runs under the status row and the home strip too, as the 3D view does.
+    let screen = ui.ctx().viewport_rect();
+    egui::Area::new(ui.scope_id().with("viewer-welcome")).fixed_pos(screen.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        // The card takes every touch until it's put away.
+        ui.set_clip_rect(screen);
+        let _ = ui.allocate_rect(screen, Sense::click());
+        let p = ui.painter();
+        p.rect_filled(screen, 0.0, Color32::from_black_alpha(110));
+        p.rect_filled(card.translate(vec2(0.0, 6.0)), radius(16), Color32::from_black_alpha(80));
+        p.rect_filled(card, radius(15), theme::c(0x2c2c2e));
+        let x = card.left() + 20.0;
+        let mut y = card.top() + 20.0;
+        p.text(pos2(x, y + 14.0), Align2::LEFT_CENTER, title, theme::strong(22.0), Tokens::text_strong());
+        y += 38.0;
+        let h = g_body.size().y;
+        p.galley(pos2(x, y), g_body, Tokens::text_dim());
+        y += h + 10.0;
+        let h = g_alt.size().y;
+        p.galley(pos2(x, y), g_alt, Tokens::text_dim());
+        y += h + 16.0;
+        let ok = Rect::from_min_size(pos2(card.right() - 20.0 - 110.0, y), vec2(110.0, 40.0));
+        let resp = ui.interact(ok, ui.scope_id().with("viewer-welcome-ok"), Sense::click());
+        let p = ui.painter();
+        p.rect_filled(ok, radius(10), if resp.hovered() { theme::c(0x2f7cf6) } else { Tokens::accent() });
+        p.text(ok.center(), Align2::CENTER_CENTER, "Got it", theme::strong(15.0), Color32::WHITE);
+        done = resp.clicked();
+    });
+    if done {
+        ws.settings.view_only_seen = true;
+    }
+}
+
 fn pen_help_card(ws: &mut Workspace, ui: &mut Ui, top: Pos2) {
     let ipad = crate::tablet::on_tablet();
     let (title, body, alt) = if ipad {
@@ -372,8 +416,12 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, more: Rect, more_c: Pos2, be
     use crate::workspace::export::Format;
     const ROW: f32 = 44.0;
     const W: f32 = 252.0;
-    let rename: &[(&str, Option<Icon>, Pick)] = if ws.compact { &[("Rename", Some(Icon::Pencil), Pick::Rename)] } else { &[] };
+    // A view-only phone leaves out what changes the project (Rename, Import): Export, Help and Settings stay.
+    let viewer = crate::tablet::view_only();
+    let rename: &[(&str, Option<Icon>, Pick)] = if ws.compact && !viewer { &[("Rename", Some(Icon::Pencil), Pick::Rename)] } else { &[] };
     let first = rename.len();
+    // Import and Export to before the line (Export to alone without Import).
+    let subs_n = if viewer { 1 } else { 2 };
     let main: Vec<(&str, Option<Icon>, Pick)> = rename
         .iter()
         .copied()
@@ -383,6 +431,7 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, more: Rect, more_c: Pos2, be
             ("Help", Some(Icon::Help), Pick::Ui(UiAction::Help)),
             ("Settings", Some(Icon::Gear), Pick::Ui(UiAction::Preferences)),
         ])
+        .filter(|(label, ..)| !(viewer && *label == "Import"))
         .collect();
     let subs: [&[(&str, Option<Icon>, Pick)]; 2] = [
         &[
@@ -399,7 +448,7 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, more: Rect, more_c: Pos2, be
         ],
     ];
     let menu = Rect::from_min_size(pos2(more_c.x - 236.0 + 23.0, below), vec2(W, 16.0 + main.len() as f32 * ROW + 9.0));
-    let row_top = |i: usize| menu.top() + 8.0 + i as f32 * ROW + if i >= first + 2 { 9.0 } else { 0.0 };
+    let row_top = |i: usize| menu.top() + 8.0 + i as f32 * ROW + if i >= first + subs_n { 9.0 } else { 0.0 };
     let mut picked: Option<Pick> = None;
     let mut rects = vec![menu];
     let paint_rows =
@@ -446,7 +495,7 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, more: Rect, more_c: Pos2, be
         };
     let open = ws.title_sub;
     egui::Area::new(ui.scope_id().with("title-menu")).fixed_pos(menu.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-        if let Some(p) = paint_rows(ui, menu, &main, Some(first + 2), "title-row", open) {
+        if let Some(p) = paint_rows(ui, menu, &main, Some(first + subs_n), "title-row", open) {
             picked = Some(p);
         }
     });
@@ -454,7 +503,10 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, more: Rect, more_c: Pos2, be
         && let Some(rows) = subs.get(n)
     {
         // Measured on iPad: the submenu opens to the right, overlapping the menu by 10 pt, top aligned with its row.
-        let frame = Rect::from_min_size(pos2(menu.right() - 10.0, row_top(n + first) - 8.0), vec2(236.0, 16.0 + rows.len() as f32 * ROW));
+        let frame = Rect::from_min_size(
+            pos2(menu.right() - 10.0, row_top(n + first + subs_n - 2) - 8.0),
+            vec2(236.0, 16.0 + rows.len() as f32 * ROW),
+        );
         rects.push(frame);
         egui::Area::new(ui.scope_id().with("title-sub")).fixed_pos(frame.min).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
             if let Some(p) = paint_rows(ui, frame, rows, None, "title-sub-row", None) {

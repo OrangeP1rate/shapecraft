@@ -1159,8 +1159,9 @@ fn imported_items<'a>(c: &rusqlite::Connection, items: &'a [Item]) -> Result<BTr
         let Some((0, anchor)) = a["nameToAnchor"].as_i64().and_then(&mut name) else { continue };
         let [source] = anchor["sourceTopologyNames"].as_array().map(Vec::as_slice).unwrap_or_default() else { continue };
         let Some((11, body)) = source.as_i64().and_then(&mut name) else { continue };
-        // A face's name carries its identifier too; an item names a whole body.
-        if body.get("identifier").is_some() {
+        // A face's name carries its identifier too; an item names a whole body. Files since 2026 keep an
+        // `identifier` key on body names as well, null there — only a real value marks a face.
+        if body.get("identifier").is_some_and(|v| !v.is_null()) {
             continue;
         }
         let Some(id) = body["bodyID"].as_i64() else { continue };
@@ -1227,6 +1228,21 @@ fn name_by_topology(
                 .and_then(Value::as_array)
                 .map(|a| a.iter().filter_map(Value::as_i64).take(100_000).collect())
                 .unwrap_or_default();
+            // Files since 2026 stamp the names in other slots: an import keeps them under tag 0 (`[0, name, …]`)
+            // and a transform keeps `[name, [name], …]` triples, where the tag's own marker carries a 0.
+            for el in detail.iter().filter_map(Value::as_array) {
+                if el.first() == Some(&Value::Integer(0.into())) {
+                    for n in el.iter().skip(1).filter_map(Value::as_i64) {
+                        names.insert(n);
+                    }
+                } else {
+                    for n in el.iter().filter_map(|t| t.as_array().and_then(|t| t.first()).and_then(Value::as_i64)) {
+                        if n > 0 {
+                            names.insert(n);
+                        }
+                    }
+                }
+            }
             // Tag 0 is the body itself: `[0, [own], [[index of a body in this call, [0]], …]]`.
             let whole = detail
                 .get(6)
@@ -1792,6 +1808,22 @@ fn import_slots(c: &rusqlite::Connection, steps: &[Step]) -> Result<Vec<(i64, Op
             if !indexed.is_empty() {
                 indexed.sort_unstable_by_key(|&(idx, _)| idx);
                 step_parts.entry(node).or_default().extend(indexed.into_iter().map(|(_, pid)| pid));
+            } else if let Some(changed) = a
+                .get(2)
+                .and_then(Value::as_array)
+                .filter(|x| x.first().and_then(Value::as_bool) == Some(true))
+                .and_then(|x| x.get(1))
+                .and_then(Value::as_array)
+                .and_then(|gs| gs.get(1))
+                .and_then(Value::as_array)
+            {
+                // Files since 2026 list an import's bodies as modified instead: slot 5 is `[false]`, and the
+                // call's second modified group lists the partitions it brought in, in output order — the same
+                // order the step lists its imported bodies in.
+                step_parts
+                    .entry(node)
+                    .or_default()
+                    .extend(changed.iter().filter_map(|e| e.as_array().and_then(|e| e.first()).and_then(Value::as_i64)));
             }
         }
     }

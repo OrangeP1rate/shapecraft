@@ -328,4 +328,32 @@ mod tests {
         ws.session.execute("undo", &json!({})).unwrap();
         assert!((volume(&ws) - 20.0 * 20.0 * 20.0).abs() < 1e-3);
     }
+
+    /// #59, last step: a Union that takes a while goes on in the background behind the card, lands once it's
+    /// back, puts the tool down at once, and is one undo.
+    #[test]
+    fn a_boolean_finishes_in_the_background() {
+        let (mut ws, first, _) = block();
+        ws.session.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        ws.session.execute("rectangle", &json!({"corner": [10, 10], "opposite": [30, 30]})).unwrap();
+        let k = ws.session.active_sketch.unwrap().0;
+        let v = ws.session.execute("extrude", &json!({"sketch": k, "region": 0, "distance": 20, "result": "new"})).unwrap().value;
+        let second = v["body"].as_u64().unwrap();
+        let undo = ws.session.undo_depth();
+        ws.heavy_wait = Duration::ZERO;
+        let ids = [shapecraft_doc::ItemId(first), shapecraft_doc::ItemId(second)];
+        use crate::workspace::tools::{BooleanTool, Tool};
+        ws.tool = Tool::Boolean(BooleanTool { op: "union", targets: ids.to_vec(), tools: Vec::new(), keep: 0 });
+        ws.commit_tool();
+        assert!(matches!(ws.tool, Tool::Idle), "the tool is put down while the union works");
+        let ctx = egui::Context::default();
+        let until = Instant::now() + Duration::from_secs(30);
+        while ws.poll_working(&ctx) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(ws.working.is_none());
+        assert_eq!(ws.session.doc.bodies.len(), 1, "joined");
+        assert!((volume(&ws) - (8000.0 + 8000.0 - 2000.0)).abs() < 1e-3, "{}", volume(&ws));
+        assert_eq!(ws.session.undo_depth(), undo + 1);
+    }
 }

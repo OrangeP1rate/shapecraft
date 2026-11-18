@@ -217,10 +217,13 @@ impl Workspace {
             }
             Tool::Boolean(t) => {
                 if t.ready() {
-                    let mut ok = true;
-                    for (id, params) in t.requests() {
-                        ok &= self.run(id, params).is_some();
-                    }
+                    let requests = t.requests();
+                    // One command (Union, Intersect, a Subtract from one body) works off the window's thread when it
+                    // takes a while (#59); a Subtract from several bodies runs its commands one after another.
+                    let ok = match requests.as_slice() {
+                        [(id, params)] => self.run_off_thread(id, params.clone()).is_some() || self.working.is_some(),
+                        _ => requests.into_iter().fold(true, |ok, (id, params)| self.run(id, params).is_some() && ok),
+                    };
                     if ok {
                         self.tool = Tool::Idle;
                         self.session.selection.clear();

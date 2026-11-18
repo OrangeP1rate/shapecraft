@@ -80,21 +80,7 @@ impl Workspace {
         }
         // A History edit rebuilds from its step on: off the window's thread when it takes a while.
         if super::working::HISTORY_EDITS.contains(&id) {
-            return match self.run_heavy(id, params, false) {
-                Some(Ok(out)) => {
-                    self.remember(id);
-                    self.live_step = None;
-                    Some(out.value)
-                }
-                Some(Err(e)) => {
-                    self.toast(match e {
-                        EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
-                        other => other.to_string(),
-                    });
-                    None
-                }
-                None => None,
-            };
+            return self.run_off_thread(id, params);
         }
         // A view-only phone changes nothing (Undo and Redo included: they'd step through what came with the file).
         if crate::tablet::view_only() && (matches!(id, "undo" | "redo") || shapecraft_engine::cmd::find(id).is_some_and(|c| c.modifies)) {
@@ -116,6 +102,34 @@ impl Workspace {
                 });
                 None
             }
+        }
+    }
+
+    /// Runs a whole command (a History edit, a boolean) on a fork off the window's thread when it takes a while, as
+    /// the heavy tools do (#59): Some(value) when it landed at once; None when it failed (said in a toast), when
+    /// nothing may change the project now, or while it goes on behind the working card (`self.working`).
+    pub(crate) fn run_off_thread(&mut self, id: &'static str, params: Value) -> Option<Value> {
+        if self.importing.is_some() || self.working.is_some() {
+            return None;
+        }
+        if crate::tablet::view_only() && shapecraft_engine::cmd::find(id).is_some_and(|c| c.modifies) {
+            self.toast(crate::tablet::VIEW_ONLY_NOTE);
+            return None;
+        }
+        match self.run_heavy(id, params, false) {
+            Some(Ok(out)) => {
+                self.remember(id);
+                self.live_step = None;
+                Some(out.value)
+            }
+            Some(Err(e)) => {
+                self.toast(match e {
+                    EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
+                    other => other.to_string(),
+                });
+                None
+            }
+            None => None,
         }
     }
 

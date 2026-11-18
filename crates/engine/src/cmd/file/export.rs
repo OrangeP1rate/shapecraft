@@ -140,7 +140,7 @@ fn chosen_bodies<'a>(s: &'a Session, p: &Params) -> Result<Vec<&'a Body>> {
         let ids = p.ids("items")?;
         s.doc.bodies.iter().filter(|b| ids.contains(&b.id)).collect()
     } else {
-        s.doc.bodies.iter().filter(|b| b.visible || p.bool_or("hidden", false)).collect()
+        s.doc.bodies.iter().filter(|b| s.doc.item_shown(b.id) || p.bool_or("hidden", false)).collect()
     };
     if bodies.is_empty() {
         return Err(EngineError::BadParams("no bodies to export".into()));
@@ -439,7 +439,7 @@ fn export_parasolid(s: &mut Session, p: &Params) -> Result<Value> {
         .doc
         .bodies
         .iter()
-        .filter(|b| b.visible || p.bool_or("hidden", false))
+        .filter(|b| s.doc.item_shown(b.id) || p.bool_or("hidden", false))
         .map(|b| Ok((b.name.clone(), crate::cmd::model::working_shape(s, b.id, false)?)))
         .collect::<Result<Vec<_>>>()?;
     let mut files = Vec::new();

@@ -425,3 +425,30 @@ fn a_missing_bodies_file_says_so_and_the_history_can_rebuild_it() {
     assert_eq!(back.doc.bodies.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A body inside a hidden folder counts as hidden everywhere the view's visibility matters: Select All, exports
+/// and drawings leave it out, and Show Hidden Bodies brings it back (folder included).
+#[test]
+fn a_hidden_folder_hides_its_bodies_from_select_all_and_exports() {
+    let mut s = session();
+    let mut ids = Vec::new();
+    for x in [0, 20] {
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("rectangle", &json!({"corner": [x, 0], "opposite": [x + 10, 10]})).unwrap();
+        let out = s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 10})).unwrap();
+        ids.push(out.value["body"].as_u64().unwrap());
+    }
+    let folder = s.execute("new_folder", &json!({})).unwrap().value["folder"].as_u64().unwrap();
+    s.execute("move_to_folder", &json!({"items": [ids[1]], "folder": folder})).unwrap();
+    s.execute("show_hide", &json!({"items": [folder]})).unwrap();
+    assert_eq!(s.execute("select_all", &json!({})).unwrap().value["selected"], 1);
+    let dir = std::env::temp_dir().join(format!("sc-folder-hidden-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let stl = dir.join("visible.stl");
+    s.execute("export_stl", &json!({"path": stl})).unwrap();
+    let triangles = |p: &std::path::Path| std::fs::read(p).map(|b| u32::from_le_bytes([b[80], b[81], b[82], b[83]])).unwrap();
+    assert_eq!(triangles(&stl), 12, "only the shown box is exported");
+    s.execute("show_all", &json!({})).unwrap();
+    assert!(s.doc.item_shown(shapecraft_doc::ItemId(ids[1])), "Show Hidden Bodies opens the folder too");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

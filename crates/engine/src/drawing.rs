@@ -265,7 +265,7 @@ type ViewDir = ([f64; 3], [f64; 3]);
 /// Lays out a sheet's views.
 pub fn make(s: &Session, spec: &DrawingSheet) -> Result<Drawing> {
     let bodies: Vec<_> =
-        s.doc.bodies.iter().filter(|b| if spec.bodies.is_empty() { b.visible } else { spec.bodies.contains(&b.id) }).collect();
+        s.doc.bodies.iter().filter(|b| if spec.bodies.is_empty() { s.doc.item_shown(b.id) } else { spec.bodies.contains(&b.id) }).collect();
     if bodies.is_empty() {
         return Err(EngineError::NotAvailable("there are no bodies to draw".into()));
     }

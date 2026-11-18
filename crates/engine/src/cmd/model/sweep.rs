@@ -70,7 +70,7 @@ fn auto_result(s: &Session, shape: &Shape, on_body: Option<ItemId>) -> Result<(O
     let own = s.kernel.mass_props(shape)?.volume.abs();
     let bb = s.kernel.bounds(shape)?;
     let candidates: Vec<ItemId> =
-        on_body.into_iter().chain(s.doc.bodies.iter().filter(|b| b.visible && Some(b.id) != on_body).map(|b| b.id)).collect();
+        on_body.into_iter().chain(s.doc.bodies.iter().filter(|b| s.doc.item_shown(b.id) && Some(b.id) != on_body).map(|b| b.id)).collect();
     for id in candidates {
         let Some(b) = s.doc.body(id) else { continue };
         let o = crate::cmd::model::body_box(s, b)?;

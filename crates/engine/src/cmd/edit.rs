@@ -221,7 +221,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             modifies: false,
             enabled: always,
             run: |s, _| {
-                s.selection = s.doc.bodies.iter().filter(|b| b.visible).map(|b| Pick::Body { body: b.id }).collect();
+                s.selection = s.doc.bodies.iter().filter(|b| s.doc.item_shown(b.id)).map(|b| Pick::Body { body: b.id }).collect();
                 Ok(json!({ "selected": s.selection.len() }))
             },
         },
@@ -530,11 +530,16 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             help: "Make every hidden body visible again",
             params: "{}",
             modifies: true,
-            enabled: |s| s.doc.bodies.iter().any(|b| !b.visible),
+            enabled: |s| s.doc.bodies.iter().any(|b| !s.doc.item_shown(b.id)),
             run: |s, _| {
                 let mut n = 0;
                 for b in s.doc.bodies.iter_mut().filter(|b| !b.visible) {
                     b.visible = true;
+                    n += 1;
+                }
+                // A hidden folder hides what is in it: those come back too.
+                for f in s.doc.folders.iter_mut().filter(|f| !f.visible) {
+                    f.visible = true;
                     n += 1;
                 }
                 Ok(json!({ "shown": n }))

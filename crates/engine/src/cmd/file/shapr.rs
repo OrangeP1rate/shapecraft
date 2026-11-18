@@ -183,7 +183,7 @@ pub(super) fn import_shapr(s: &mut Session, path: &std::path::Path) -> Result<Va
         let mut refs = Vec::new();
         for (id, step, item_name_id) in links {
             let Some(b) = s.doc.body(id) else { continue };
-            let (color, hidden) = (b.appearance.as_ref().map(|a| a.color), !b.visible);
+            let (color, hidden) = (b.appearance.as_ref().map(|a| a.color), !s.doc.item_shown(b.id));
             let print = match (prints.remove(&id), &b.facets) {
                 (Some(print), _) => print,
                 (None, Some(f)) => (facets_print(f), true),
@@ -717,7 +717,7 @@ pub(crate) fn run_followups(s: &mut Session, todo: Vec<Followup>) {
         if f.hidden {
             let _ = s.execute("show_hide", &json!({ "items": [body.0], "visible": false }));
         }
-        let Some(b) = s.doc.body(body).map(|b| (b.name.clone(), b.appearance.as_ref().map(|a| a.color), !b.visible)) else {
+        let Some(b) = s.doc.body(body).map(|b| (b.name.clone(), b.appearance.as_ref().map(|a| a.color), !s.doc.item_shown(b.id))) else {
             continue;
         };
         let Ok(shape) = crate::cmd::model::working_shape(s, body, false) else { continue };
@@ -871,9 +871,9 @@ fn shapr_sketch(sk: &Sketch) -> shapecraft_shapr::Sketch {
     }
 }
 
-/// A body's colour and visibility as Shapr3D keeps them.
-fn look(b: &shapecraft_doc::Body) -> shapecraft_shapr::Look {
-    shapecraft_shapr::Look { color: b.appearance.as_ref().map(|a| a.color), hidden: !b.visible }
+/// A body's colour and visibility as the file keeps them (hidden too when a folder above it is hidden).
+fn look(doc: &shapecraft_doc::Document, b: &shapecraft_doc::Body) -> shapecraft_shapr::Look {
+    shapecraft_shapr::Look { color: b.appearance.as_ref().map(|a| a.color), hidden: !doc.item_shown(b.id) }
 }
 
 /// A mesh body's fingerprint, laid out as [`fingerprint`]'s: it has no kernel shape to measure, so its triangles are.
@@ -983,7 +983,7 @@ pub(super) fn export_shapr(s: &mut Session, p: &Params) -> Result<Value> {
             };
             if done { Ok(()) } else { Err(EngineError::BadParams("cannot safely identify the body to replace in this project".into())) }
         };
-        match s.doc.body(r.body).map(|b| (b.name.clone(), b.shape.clone(), look(b), b.facets.clone())) {
+        match s.doc.body(r.body).map(|b| (b.name.clone(), b.shape.clone(), look(&s.doc, b), b.facets.clone())) {
             None => {
                 delete(&mut w)?;
                 deleted += 1;
@@ -1090,7 +1090,7 @@ pub(super) fn export_shapr(s: &mut Session, p: &Params) -> Result<Value> {
         .bodies
         .iter()
         .filter(|b| !kept.contains(&b.id))
-        .map(|b| Ok((b.id, b.name.clone(), crate::cmd::model::working_shape(s, b.id, false)?, look(b))))
+        .map(|b| Ok((b.id, b.name.clone(), crate::cmd::model::working_shape(s, b.id, false)?, look(&s.doc, b))))
         .collect::<Result<Vec<_>>>()?;
     for (id, name, shape, look) in bodies {
         let folder = folder_path(s, id);

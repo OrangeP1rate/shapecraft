@@ -191,7 +191,7 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
     let n_rows = rows.len();
     let mut row_hover = None;
     let waiting = tool_mode(ws).is_some();
-    // Folders on the way to anything picked, filled dark blue as in the reference: the whole containing chain
+    // Folders on the way to anything picked, filled dark blue: the whole containing chain
     // lights up when an item inside is picked, at any depth.
     let mut containing = std::collections::BTreeSet::new();
     let mut parents = std::collections::BTreeMap::new();
@@ -244,7 +244,7 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
         }
         let selected = ws.item_selected(id);
         // A folder with everything in it picked fills like a picked item, and a folder on the way to something
-        // picked fills dark blue, as in the reference.
+        // picked fills dark blue.
         let folder_full = if kind == ItemKind::Folder {
             let deep = ws.session.doc.folder_items_deep(id);
             let picked_n = deep.iter().filter(|i| ws.item_selected(**i)).count();
@@ -258,7 +258,7 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
         let contains_picked = containing.contains(&id);
         // The whole item picked (from the list or the view, a tool running or not) fills its row bright blue;
         // a picked face or edge fills its body's row lighter; and every folder containing a picked item fills
-        // dark blue — as in the reference.
+        // dark blue.
         let on_item = ws.session.selection.iter().any(|p| {
             matches!(*p, Pick::Body { body } if body == id)
                 || matches!(*p, Pick::Sketch { sketch } if sketch == id)
@@ -282,7 +282,7 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
                 ItemKind::Folder => None,
             };
         }
-        // Measured on the reference (video 2026-11-16): a picked row fills #2b53ba, and a folder on the way to a
+        // A picked row fills #2b53ba, and a folder on the way to a
         // picked row fills #2b3b66 — the whole containing chain lights up, at any depth.
         if on_item {
             let fill = if face_on_item && !whole { theme::c(0x1e5aa8) } else { theme::c(0x2b53ba) };
@@ -295,7 +295,7 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
             lp.rect_filled(row, radius(0), theme::c(0x2b53ba));
         }
         // The pointer lays a white veil (alpha 18, fading in and out) over whatever the row already shows: over
-        // nothing it reads as a grey, over a picked row as a lighter blue — as in the reference.
+        // nothing it reads as a grey, over a picked row as a lighter blue.
         let hover_t = if drop_on_this || dragging_this {
             0.0
         } else {
@@ -309,8 +309,8 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
         let takes = kind == ItemKind::Body && matches!(ws.tool, Tool::Mirror(_) | Tool::Boolean(_));
         // Measured (s22-002): names #DFDFDF, hidden ones #818181; icons a grey hairline, #9D9D9F or #5F5F5F hidden.
         let lit = shown && (!waiting || takes) && !dragging_this;
-        // Hidden names keep their grey even when picked (the eye-crossed row reads as hidden at a glance, as in the
-        // reference), and so does a row a tool can't take right now — a visible row under a hidden folder dims too.
+        // Hidden names keep their grey even when picked (the eye-crossed row reads as hidden at a glance), and so
+        // does a row a tool can't take right now — a visible row under a hidden folder dims too.
         let color = if (on_item || drop_on_this) && shown {
             Color32::WHITE
         } else if lit {
@@ -319,7 +319,7 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
             theme::c(0x818181)
         };
         // The icon wears the same colour as the name, in every state — white when visible and picked, grey when
-        // hidden — as in the reference.
+        // hidden.
         let icon_color = color;
         let icon = match kind {
             ItemKind::Body if ws.session.doc.body(id).is_some_and(|b| b.is_mesh()) => Icon::MeshBody,

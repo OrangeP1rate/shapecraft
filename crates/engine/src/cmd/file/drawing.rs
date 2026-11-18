@@ -228,7 +228,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             help: "Export a drawing sheet as PDF, DWG, DXF or SVG",
             params: r#"{"path": "/out.pdf" | "/out.dwg" | "/out.dxf" | "/out.svg", "drawing": id? (default: four views of the visible bodies on A3)}"#,
             modifies: false,
-            enabled: |s| s.doc.bodies.iter().any(|b| b.visible),
+            enabled: |s| s.doc.bodies.iter().any(|b| s.doc.item_shown(b.id)),
             run: |s, p| {
                 let path = path_param(p, "path")?;
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();

@@ -39,6 +39,9 @@ pub enum Install {
     AppImage(PathBuf),
     /// The Linux download (`bin/`, `lib/`), unpacked or installed by its `install.sh`: this folder.
     LinuxFolder(PathBuf),
+    /// Installed from the .deb (`deb` true) or .rpm package into this folder (/opt/shapecraft): an update installs
+    /// the next package through the system's package tools, asking for the password with pkexec (#72).
+    LinuxPackage { root: PathBuf, deb: bool },
     /// A release build that can't update itself where it is, and why (shown to the user).
     Elsewhere(String),
 }
@@ -55,6 +58,8 @@ impl Install {
             Install::WindowsPortable(_) => "portable zip",
             Install::AppImage(_) => "AppImage",
             Install::LinuxFolder(_) => "Linux download",
+            Install::LinuxPackage { deb: true, .. } => "Linux .deb package",
+            Install::LinuxPackage { deb: false, .. } => "Linux .rpm package",
             Install::Elsewhere(_) => "can't update in place",
         }
     }
@@ -69,6 +74,7 @@ impl Install {
                 | Install::WindowsPortable(_)
                 | Install::AppImage(_)
                 | Install::LinuxFolder(_)
+                | Install::LinuxPackage { .. }
         )
     }
 
@@ -92,6 +98,7 @@ impl Install {
             Install::WindowsPortable(_) if arch == "arm64" => Some("-windows-arm64-portable.zip".into()),
             Install::AppImage(_) => Some(format!("-linux-{}.AppImage", std::env::consts::ARCH)),
             Install::LinuxFolder(_) => Some(format!("-linux-{}.tar.gz", std::env::consts::ARCH)),
+            Install::LinuxPackage { deb, .. } => Some(format!("-linux-{}.{}", std::env::consts::ARCH, if *deb { "deb" } else { "rpm" })),
             _ => None,
         }
     }
@@ -140,9 +147,7 @@ pub fn detect(p: &Probe) -> Install {
                 Install::AppImage(PathBuf::from(image))
             } else {
                 match exe.parent().filter(|b| b.file_name().is_some_and(|n| n == "bin")).and_then(Path::parent) {
-                    Some(root) if (p.exists)(&root.join(PACKAGE_MARKER)) => Install::Elsewhere(
-                        "This copy came as a .deb or .rpm package: install the new version's package to update it.".into(),
-                    ),
+                    Some(root) if (p.exists)(&root.join(PACKAGE_MARKER)) => package(p, root),
                     Some(root) if (p.exists)(&root.join("lib")) && !root.starts_with("/usr") => Install::LinuxFolder(root.to_path_buf()),
                     _ => Install::Elsewhere("This copy of ShapeCraft was installed by something that updates it.".into()),
                 }
@@ -153,6 +158,19 @@ pub fn detect(p: &Probe) -> Install {
     match managed_by(p, &exe, &found) {
         Some(name) => Install::Managed(name),
         None => found,
+    }
+}
+
+/// A copy from the .deb or .rpm: which package tool owns it (dpkg keeps a file list per package), provided pkexec
+/// is there to ask for the password the install needs.
+fn package(p: &Probe, root: &Path) -> Install {
+    let any = |paths: &[&str]| paths.iter().any(|f| (p.exists)(Path::new(f)));
+    let deb = any(&["/var/lib/dpkg/info/shapecraft.list"]);
+    let rpm = any(&["/usr/bin/rpm", "/bin/rpm"]);
+    if (deb || rpm) && any(&["/usr/bin/pkexec", "/bin/pkexec"]) {
+        Install::LinuxPackage { root: root.to_path_buf(), deb }
+    } else {
+        Install::Elsewhere("This copy came as a .deb or .rpm package: install the new version's package to update it.".into())
     }
 }
 
@@ -178,6 +196,7 @@ fn managed_by(p: &Probe, exe: &Path, found: &Install) -> Option<String> {
         Install::MacApp(b)
         | Install::AppImage(b)
         | Install::LinuxFolder(b)
+        | Install::LinuxPackage { root: b, .. }
         | Install::WindowsInstalled(b)
         | Install::WindowsPortable(b) => places.push(b.clone()),
         _ => {}
@@ -321,15 +340,20 @@ mod tests {
             ),
             Install::WindowsMsi("C:/Program Files/ShapeCraft".into())
         );
-        // A .deb or .rpm copy has bin/ and lib/ like the download folder, but the package manager owns it.
+        // A .deb or .rpm copy has bin/ and lib/ like the download folder, but the package manager owns it: the
+        // update goes through it (#72), or, without pkexec to ask for the password, is left to the user.
+        let pkg = ["/opt/shapecraft/lib", "/opt/shapecraft/installed-by-package.txt"];
+        let with = |extra: &[&'static str]| [&pkg[..], extra].concat();
+        assert_eq!(
+            probe("linux", "/opt/shapecraft/bin/shapecraft", &[], &with(&["/var/lib/dpkg/info/shapecraft.list", "/usr/bin/pkexec"]), None),
+            Install::LinuxPackage { root: "/opt/shapecraft".into(), deb: true }
+        );
+        assert_eq!(
+            probe("linux", "/opt/shapecraft/bin/shapecraft", &[], &with(&["/usr/bin/rpm", "/usr/bin/pkexec"]), None),
+            Install::LinuxPackage { root: "/opt/shapecraft".into(), deb: false }
+        );
         assert!(matches!(
-            probe(
-                "linux",
-                "/opt/shapecraft/bin/shapecraft",
-                &[],
-                &["/opt/shapecraft/lib", "/opt/shapecraft/installed-by-package.txt"],
-                None
-            ),
+            probe("linux", "/opt/shapecraft/bin/shapecraft", &[], &with(&["/var/lib/dpkg/info/shapecraft.list"]), None),
             Install::Elsewhere(_)
         ));
     }

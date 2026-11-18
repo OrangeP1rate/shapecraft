@@ -11,6 +11,7 @@
 //! | Windows portable zip | copy the new files over the folder |
 //! | AppImage | move the new AppImage over the old file |
 //! | Linux download folder | move the old folder aside, move the new one in, remove the old |
+//! | Linux .deb / .rpm | install the new package with the system's package tool, the password asked by pkexec |
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -55,6 +56,25 @@ fn swap(target: &Path, new: &Path) -> String {
     )
 }
 
+/// Installs a downloaded .deb or .rpm over the installed one. apt-get, dnf or zypper also bring in any library the new
+/// version needs; plain dpkg or rpm otherwise. pkexec shows the desktop's own password prompt (closing it changes
+/// nothing). The package tool runs as root, so it reads the file from the user's update folder itself.
+fn package_steps(staged: &Path, deb: bool) -> String {
+    let s = p(staged);
+    let install = if deb {
+        format!("if [ -x /usr/bin/apt-get ]; then pkexec /usr/bin/apt-get install -y {s}; else pkexec dpkg -i {s}; fi")
+    } else {
+        format!(
+            "if [ -x /usr/bin/dnf ]; then pkexec /usr/bin/dnf install -y {s}; \
+             elif [ -x /usr/bin/zypper ]; then pkexec /usr/bin/zypper --non-interactive install --allow-unsigned-rpm {s}; \
+             else pkexec rpm -U {s}; fi"
+        )
+    };
+    format!(
+        "{install} || fail \"the new package wasn't installed (the password was cancelled or the package tool stopped), so the old version was kept\"\n"
+    )
+}
+
 pub(crate) fn unix_script(
     install: &Install,
     staged: &Path,
@@ -73,6 +93,9 @@ pub(crate) fn unix_script(
         ),
         Install::LinuxFolder(root) => {
             (swap(root, staged), format!("{} {words} >/dev/null 2>&1 &", p(&root.join("bin").join("shapecraft"))))
+        }
+        Install::LinuxPackage { root, deb } => {
+            (package_steps(staged, *deb), format!("{} {words} >/dev/null 2>&1 &", p(&root.join("bin").join("shapecraft"))))
         }
         _ => return Err("updates can't install themselves here".into()),
     };
@@ -262,6 +285,8 @@ mod tests {
             Install::MacApp(PathBuf::from("/Applications/Shape Craft's.app")),
             Install::AppImage(PathBuf::from("/home/a/ShapeCraft.AppImage")),
             Install::LinuxFolder(PathBuf::from("/home/a/.local/lib/shapecraft")),
+            Install::LinuxPackage { root: PathBuf::from("/opt/shapecraft"), deb: true },
+            Install::LinuxPackage { root: PathBuf::from("/opt/shapecraft"), deb: false },
         ] {
             for restart in [true, false] {
                 let s = unix_script(

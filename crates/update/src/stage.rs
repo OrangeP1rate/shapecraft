@@ -23,7 +23,8 @@ pub fn updates_dir(install: &Install) -> Option<PathBuf> {
         | Install::WindowsMsi(p)
         | Install::WindowsPortable(p)
         | Install::AppImage(p)
-        | Install::LinuxFolder(p) => p.to_string_lossy().to_lowercase(),
+        | Install::LinuxFolder(p)
+        | Install::LinuxPackage { root: p, .. } => p.to_string_lossy().to_lowercase(),
         _ => String::new(),
     };
     // FNV-1a: short, stable, and the same in every version.
@@ -87,6 +88,7 @@ pub fn stage(
             file
         }
         Install::LinuxFolder(_) => unpack(&file, &here, "bin/shapecraft")?,
+        Install::LinuxPackage { .. } => file,
         _ => return Err("updates can't install themselves here".into()),
     };
     let marker = serde_json::json!({ "tag": release.tag, "path": ready, "asset": asset.name });

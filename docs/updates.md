@@ -37,6 +37,8 @@ ShapeCraft keeps itself up to date. Nobody has to visit a download page.
 | Windows on Arm (native Arm64 build, MSI or portable) | `…-windows-arm64.msi` / `…-windows-arm64-portable.zip` | as above (an x64 copy running under emulation keeps updating from x64) |
 | Linux AppImage | `…-linux-x86_64.AppImage` | new file moved over the old one |
 | Linux download (`bin/`, `lib/`, unpacked or put in `~/.local/lib/shapecraft` by `install.sh`) | `…-linux-x86_64.tar.gz` | old folder aside, new one in, old removed |
+| Linux .deb (`/opt/shapecraft`, `installed-by-package.txt` there, dpkg lists the package) | `…-linux-x86_64.deb` | `pkexec apt-get install` (or `dpkg -i`) of the new package: the desktop asks for the password |
+| Linux .rpm (the same, without dpkg's list) | `…-linux-x86_64.rpm` | `pkexec dnf install` (or `zypper install`, or `rpm -U`) of the new package |
 
 Since 0.8.7 the Mac download is one universal disk image (Apple silicon and Intel). Copies up to 0.8.5 look for
 `-macos-arm64.dmg` or `-macos-x86_64.dmg`, so every release also carries that same image twice more, as
@@ -45,8 +47,8 @@ release notes point people at the universal one). They update into the universal
 from then on. Drop the two extra files only once nobody can still be on 0.8.5 or older.
 
 A copy that can't update in place says why and offers the download page instead: one running from its disk image
-or from App Translocation (macOS: move it to Applications), or a build installed by a package manager (the .deb and
-.rpm: install the next version's package).
+or from App Translocation (macOS: move it to Applications), or a .deb or .rpm copy on a system without `pkexec` to
+ask for the password (install the next version's package by hand).
 
 Development builds (anything not built by the release workflow, which sets `SHAPECRAFT_RELEASE=1`) never check on
 their own. `SHAPECRAFT_UPDATE_CHECK=1` makes one check, `=0` stops a release build from checking.

@@ -22,6 +22,10 @@ whole.**
 - **More rounded edges read.** A fillet whose stored path runs on past the faces it rounds (common where a fillet
   meets a curved face) failed to come in, so the body was left out. It now comes in, matching the original's volume
   to within a few thousandths of a percent.
+- **Domes, rounded rims and seam-crossing walls measure right.** Some curved faces from .shapr files came in empty or
+  inside out: a dome closing to a point, a face bounded by a closed spline stored without end knots, and a short
+  wall on a round face that crosses the place where the round surface starts over. One wallet project had bodies
+  off by up to the whole body; they now match the original to within a hundredth of a percent or so.
 - **A copied body keeps its own name.** Move/Rotate with Copy makes a new body; it no longer takes the name and
   visibility of the body it was copied from.
 

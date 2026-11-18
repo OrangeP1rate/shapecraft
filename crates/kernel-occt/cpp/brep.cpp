@@ -582,12 +582,45 @@ void pcurves_by_marching(BRep_Builder& bb, const TopoDS_Shape& shape) {
     for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next())
       if (seen.Contains(ex.Current())) twice.Add(ex.Current());
       else seen.Add(ex.Current());
+    // Edges in the order their loops run (and with the sense they run in), so on a periodic surface each edge's curve
+    // can start where the one before it ended: a loop across the seam stays one piece in (u, v).
+    std::vector<TopoDS_Edge> order;
+    for (TopExp_Explorer wx(face, TopAbs_WIRE); wx.More(); wx.Next())
+      for (BRepTools_WireExplorer we(TopoDS::Wire(wx.Current()), face); we.More(); we.Next()) order.push_back(we.Current());
     for (int k = 1; k <= seen.Extent(); ++k) {
-      TopoDS_Edge e = TopoDS::Edge(seen(k));
-      if (twice.Contains(e) || BRep_Tool::Degenerated(e)) continue;
+      bool listed = false;
+      for (auto& o : order) listed = listed || o.IsSame(seen(k));
+      if (!listed) order.push_back(TopoDS::Edge(seen(k)));
+    }
+    double pu = s->IsUPeriodic() ? s->UPeriod() : 0, pv = s->IsVPeriodic() ? s->VPeriod() : 0;
+    bool have_end = false;
+    gp_Pnt2d last_end;
+    for (auto& e : order) {
+      if (twice.Contains(e) || BRep_Tool::Degenerated(e)) {
+        have_end = false;
+        continue;
+      }
       try {
         double a, b;
-        if (!BRep_Tool::CurveOnSurface(e, face, a, b).IsNull()) continue;
+        if (Handle(Geom2d_Curve) has = BRep_Tool::CurveOnSurface(e, face, a, b); !has.IsNull()) {
+          // A curve the file gave is in the surface's first period: moved by whole periods to carry on from the edge
+          // before it.
+          bool backward = e.Orientation() == TopAbs_REVERSED;
+          gp_Pnt2d start = has->Value(backward ? b : a), end = has->Value(backward ? a : b);
+          if (have_end && (pu > 0 || pv > 0)) {
+            double du = pu > 0 ? pu * std::round((last_end.X() - start.X()) / pu) : 0;
+            double dv = pv > 0 ? pv * std::round((last_end.Y() - start.Y()) / pv) : 0;
+            if (du != 0 || dv != 0) {
+              Handle(Geom2d_Curve) moved = Handle(Geom2d_Curve)::DownCast(has->Copy());
+              moved->Translate(gp_Vec2d(du, dv));
+              bb.UpdateEdge(e, moved, face, BRep_Tool::Tolerance(e));
+              end.SetCoord(end.X() + du, end.Y() + dv);
+            }
+          }
+          last_end = end;
+          have_end = true;
+          continue;
+        }
         double f, l;
         Handle(Geom_Curve) c = BRep_Tool::Curve(e, f, l);
         if (c.IsNull() || !(l > f)) continue;
@@ -622,6 +655,19 @@ void pcurves_by_marching(BRep_Builder& bb, const TopoDS_Shape& shape) {
         for (int j = 2; j <= n + 1 && ok; ++j)
           if (uv->Value(j).Distance(uv->Value(j - 1)) < 1e-12) ok = false;
         if (!ok) continue;
+        // Whole periods added so the edge starts (in the loop's sense) where the edge before it ended.
+        bool backward = e.Orientation() == TopAbs_REVERSED;
+        gp_Pnt2d start = uv->Value(backward ? n + 1 : 1), end = uv->Value(backward ? 1 : n + 1);
+        if (have_end && (pu > 0 || pv > 0)) {
+          double du = pu > 0 ? pu * std::round((last_end.X() - start.X()) / pu) : 0;
+          double dv = pv > 0 ? pv * std::round((last_end.Y() - start.Y()) / pv) : 0;
+          if (du != 0 || dv != 0) {
+            for (int j = 1; j <= n + 1; ++j) uv->SetValue(j, gp_Pnt2d(uv->Value(j).X() + du, uv->Value(j).Y() + dv));
+            end.SetCoord(end.X() + du, end.Y() + dv);
+          }
+        }
+        last_end = end;
+        have_end = true;
         Geom2dAPI_Interpolate in(uv, ts, false, 1e-12);
         in.Perform();
         if (!in.IsDone()) continue;
@@ -684,8 +730,17 @@ Handle(Geom_Curve) read_curve3(Rd& r, size_t kind) {
         mm(int(i) + 1) = m[i];
       }
       if (periodic && clamped_fit(deg, np, m)) periodic = false;
-      if (rational) return new Geom_BSplineCurve(poles, w, kk, mm, deg, periodic);
-      return new Geom_BSplineCurve(poles, kk, mm, deg, periodic);
+      Handle(Geom_BSplineCurve) bc =
+          rational ? new Geom_BSplineCurve(poles, w, kk, mm, deg, periodic) : new Geom_BSplineCurve(poles, kk, mm, deg, periodic);
+      // Stored unclamped (end knots below degree + 1, the way Parasolid keeps a closed curve): clamped to its own range
+      // it is the same curve, and OCCT's edge and face building then follow it all the way round.
+      if (!periodic && (m.front() <= deg || m.back() <= deg)) {
+        try {
+          bc->Segment(bc->FirstParameter(), bc->LastParameter());
+        } catch (Standard_Failure&) {
+        }
+      }
+      return bc;
     }
     case 4: {
       size_t np = r.idx(CAP);
@@ -826,6 +881,8 @@ TopoDS_Shape build(Rd& r, std::vector<TopoDS_Shape>* made = nullptr) {
           VK(int(j) + 1) = vk[j];
           VM(int(j) + 1) = vm[j];
         }
+        // The file's periodic flag, kept for a surface stored clamped (see below).
+        const bool said_up = up, said_vp = vp;
         if (up && clamped_fit(ud, size_t(poles.ColLength()), um)) up = false;
         if (vp && clamped_fit(vd, size_t(poles.RowLength()), vm)) vp = false;
         Handle(Geom_BSplineSurface) bs;
@@ -847,6 +904,21 @@ TopoDS_Shape build(Rd& r, std::vector<TopoDS_Shape>* made = nullptr) {
             if (vopen && bs->IsVClosed()) bs->SetVPeriodic();
           } catch (Standard_Failure&) {
           }
+        }
+        // Flagged periodic but stored clamped (a revolved dome, a closed sweep): the same closed surface, made periodic
+        // so a face bounded by one rim and the surface's pole gets its seam and its degenerate edge from the repair.
+        if (!uopen && !vopen && ((said_up && !up) || (said_vp && !vp))) {
+          try {
+            if (said_up && !up && bs->IsUClosed()) bs->SetUPeriodic();
+            if (said_vp && !vp && bs->IsVClosed()) bs->SetVPeriodic();
+          } catch (Standard_Failure&) {
+          }
+        }
+        if (std::getenv("SK_DEBUG_BUILD")) {
+          double a0, a1, b0, b1;
+          bs->Bounds(a0, a1, b0, b1);
+          fprintf(stderr, "bsurf %zu said %d%d up %d vp %d uopen %d vopen %d closed %d%d periodic %d%d bounds %g %g %g %g\n", i, said_up, said_vp, up, vp, uopen, vopen,
+                  bs->IsUClosed(), bs->IsVClosed(), bs->IsUPeriodic(), bs->IsVPeriodic(), a0, a1, b0, b1);
         }
         surfaces[i] = bs;
         break;
@@ -1095,6 +1167,19 @@ TopoDS_Shape build(Rd& r, std::vector<TopoDS_Shape>* made = nullptr) {
   }
   pcurves_by_marching(bb, result);
   if (std::getenv("SK_DEBUG_BUILD")) {
+    int fi = 0;
+    for (TopExp_Explorer fx(result, TopAbs_FACE); fx.More(); fx.Next(), ++fi) {
+      TopoDS_Face face = TopoDS::Face(fx.Current());
+      for (TopExp_Explorer wx(face, TopAbs_WIRE); wx.More(); wx.Next())
+        for (BRepTools_WireExplorer we(TopoDS::Wire(wx.Current()), face); we.More(); we.Next()) {
+          double a, b;
+          Handle(Geom2d_Curve) pc = BRep_Tool::CurveOnSurface(we.Current(), face, a, b);
+          if (pc.IsNull()) { fprintf(stderr, "uv face %d: edge without pcurve\n", fi); continue; }
+          bool rev = we.Current().Orientation() == TopAbs_REVERSED;
+          gp_Pnt2d p0 = pc->Value(rev ? b : a), p1 = pc->Value(rev ? a : b);
+          fprintf(stderr, "uv face %d: (%.4f %.4f) -> (%.4f %.4f)%s\n", fi, p0.X(), p0.Y(), p1.X(), p1.Y(), rev ? " rev" : "");
+        }
+    }
     TopTools_IndexedMapOfShape fm;
     TopExp::MapShapes(result, TopAbs_FACE, fm);
     BRepCheck_Analyzer an(result);
@@ -1120,6 +1205,9 @@ TopoDS_Shape build(Rd& r, std::vector<TopoDS_Shape>* made = nullptr) {
   ShapeFix_Shape fix(result);
   fix.SetPrecision(1e-7);
   fix.SetMaxTolerance(1e-2);
+  // The curves in (u, v) already run on from edge to edge round each loop (pcurves_by_marching), across seams too.
+  // The repair's own shifting moved a correct loop across a cylinder's seam a period apart and left it open.
+  fix.FixWireTool()->FixShiftedMode() = 0;
   fix.Perform();
   result = fix.Shape();
   BRepLib::SameParameter(result, 1e-6);

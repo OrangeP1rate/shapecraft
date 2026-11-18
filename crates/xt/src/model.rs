@@ -325,6 +325,7 @@ impl<'a> Cx<'a> {
     }
 
     fn nurbs_surface(&self, p: u32) -> Result<NurbsSurface> {
+        let clamped = |m: &[u32], degree: usize| m.first().zip(m.last()).is_some_and(|(a, b)| *a as usize > degree && *b as usize > degree);
         let n = self.node(p).ok_or_else(|| bad("b-surface without NURBS data"))?;
         let int = |f: &str| self.get(n, f).and_then(Val::int).unwrap_or(0).max(0) as usize;
         let flag = |f: &str| self.get(n, f).and_then(Val::bool).unwrap_or(false);
@@ -339,6 +340,8 @@ impl<'a> Cx<'a> {
         let (v_knots, v_mults) = self.knots(self.ptr(n, "v_knot_mult"), self.ptr(n, "v_knots"), count("n_v_knots"))?;
         let poles = verts.iter().map(|(c, _)| DVec3::new(c[0], c[1], c.get(2).copied().unwrap_or(0.0)) * MM).collect();
         let weights = rational.then(|| verts.iter().map(|(_, w)| *w).collect());
+        let u_periodic = flag("u_periodic") && clamped(&u_mults, int("u_degree"));
+        let v_periodic = flag("v_periodic") && clamped(&v_mults, int("v_degree"));
         Ok(NurbsSurface {
             u_degree: int("u_degree") as u32,
             v_degree: int("v_degree") as u32,
@@ -350,9 +353,11 @@ impl<'a> Cx<'a> {
             u_mults,
             v_knots,
             v_mults,
-            // The full knot vectors are stored, so the open form gives the same surface.
-            u_periodic: false,
-            v_periodic: false,
+            // The full knot vectors are stored, so the open form gives the same surface. Only a surface the file
+            // calls periodic yet stores clamped keeps the flag: the kernel builds it from its clamped knots and closes
+            // it, so a face from one rim to the surface's pole gets its seam (a revolved dome).
+            u_periodic,
+            v_periodic,
         })
     }
 

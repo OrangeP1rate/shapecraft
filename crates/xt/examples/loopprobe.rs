@@ -17,7 +17,15 @@ fn main() {
             for fin in l {
                 let e = &b.edges[fin.edge];
                 let (s, t) = if fin.forward { (e.start, e.end) } else { (e.end, e.start) };
-                let kind = e.curve.map(|c| format!("{:?}", b.curves[c]).chars().take(60).collect::<String>()).unwrap_or_default();
+                let kind = e
+                    .curve
+                    .map(|c| {
+                        format!("{:?}", b.curves[c])
+                            .chars()
+                            .take(if std::env::var_os("LONG").is_some() { 100_000 } else { 60 })
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default();
                 println!(
                     "  loop {li} edge {} fwd {} rev {} {:?}->{:?} {}",
                     fin.edge,

@@ -179,9 +179,10 @@ pub(super) fn import_shapr(s: &mut Session, path: &std::path::Path) -> Result<Va
         for (id, step, item_name_id) in links {
             let Some(b) = s.doc.body(id) else { continue };
             let (color, hidden) = (b.appearance.as_ref().map(|a| a.color), !b.visible);
-            let print = match prints.remove(&id) {
-                Some(print) => print,
-                None => fingerprint_within(s, &b.shape.clone())?,
+            let print = match (prints.remove(&id), &b.facets) {
+                (Some(print), _) => print,
+                (None, Some(f)) => (facets_print(f), true),
+                (None, None) => fingerprint_within(s, &b.shape.clone())?,
             };
             refs.push(shapecraft_doc::ShaprBody {
                 body: id,
@@ -852,6 +853,19 @@ fn look(b: &shapecraft_doc::Body) -> shapecraft_shapr::Look {
     shapecraft_shapr::Look { color: b.appearance.as_ref().map(|a| a.color), hidden: !b.visible }
 }
 
+/// A mesh body's fingerprint, laid out as [`fingerprint`]'s: it has no kernel shape to measure, so its triangles are.
+fn facets_print(f: &shapecraft_doc::Facets) -> Vec<f64> {
+    let (area, volume) = f.area_volume();
+    let (lo, hi) = f.bounds().unwrap_or_default();
+    let centre = f.points.iter().sum::<glam::DVec3>() / f.points.len().max(1) as f64;
+    [volume.unwrap_or(0.0), area, f.triangles.len() as f64]
+        .into_iter()
+        .chain(centre.to_array())
+        .chain(lo.to_array())
+        .chain(hi.to_array())
+        .collect()
+}
+
 /// Volume, area, face count, centroid and bounding box: enough to tell whether a body changed or moved.
 fn fingerprint(s: &Session, shape: &shapecraft_kernel::Shape) -> Result<Vec<f64>> {
     print_of(s, shape, s.kernel.mass_props(shape)?)
@@ -946,14 +960,17 @@ pub(super) fn export_shapr(s: &mut Session, p: &Params) -> Result<Value> {
             };
             if done { Ok(()) } else { Err(EngineError::BadParams("cannot safely identify the body to replace in this project".into())) }
         };
-        match s.doc.body(r.body).map(|b| (b.name.clone(), b.shape.clone(), look(b))) {
+        match s.doc.body(r.body).map(|b| (b.name.clone(), b.shape.clone(), look(b), b.facets.clone())) {
             None => {
                 delete(&mut w)?;
                 deleted += 1;
             }
-            Some((name, shape, now_look)) => {
+            Some((name, shape, now_look, facets)) => {
                 // Measured as it was when it came over; one that now needs its triangles counts as changed.
-                let now: Vec<f64> = fingerprint_like(s, &shape, r.mesh_fingerprint)?.unwrap_or_default();
+                let now: Vec<f64> = match &facets {
+                    Some(f) => facets_print(f),
+                    None => fingerprint_like(s, &shape, r.mesh_fingerprint)?.unwrap_or_default(),
+                };
                 let moved_by = if r.unchanged(&now) { None } else { r.moved_by(&now) };
                 let edited = |w: &mut shapecraft_shapr::Writer| {
                     extrude_edit(s, r).zip(r.extrude.as_ref()).is_some_and(|((d, draft, radius), x)| {

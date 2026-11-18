@@ -115,8 +115,27 @@ fn full_knots(k: &[f64], m: &[u32]) -> Vec<f64> {
     k.iter().zip(m).flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize)).collect()
 }
 
-/// A spline surface's point and its u and v derivatives.
+/// A spline surface's point and its u and v derivatives. Past its edges the surface carries on straight, as the
+/// modeller that wrote the file extends it (a blend's spine stored beyond a support's edge is a straight line there):
+/// from the nearest point of the edge along the first derivatives, with the twist so both directions stay consistent.
 fn nurbs_d1(s: &NurbsSurface, fu: &[f64], fv: &[f64], u: f64, v: f64) -> Option<(DVec3, DVec3, DVec3)> {
+    let (pu, pv) = (s.u_degree as usize, s.v_degree as usize);
+    let (u0, u1, v0, v1) = (*fu.get(pu)?, *fu.get(s.nu)?, *fv.get(pv)?, *fv.get(s.nv)?);
+    let (uc, vc) = (u.clamp(u0, u1), v.clamp(v0, v1));
+    let (du, dv) = (u - uc, v - vc);
+    let (p, su, sv) = nurbs_inside(s, fu, fv, uc, vc)?;
+    if du == 0.0 && dv == 0.0 {
+        return Some((p, su, sv));
+    }
+    // The twist, from the v derivative a little way along u (inside the range).
+    let h = (u1 - u0) * 1e-6;
+    let (ua, ub) = if uc + h <= u1 { (uc, uc + h) } else { (uc - h, uc) };
+    let suv = (nurbs_inside(s, fu, fv, ub, vc)?.2 - nurbs_inside(s, fu, fv, ua, vc)?.2) / (ub - ua);
+    Some((p + du * su + dv * sv + du * dv * suv, su + dv * suv, sv + du * suv))
+}
+
+/// [`nurbs_d1`] within the surface's own range.
+fn nurbs_inside(s: &NurbsSurface, fu: &[f64], fv: &[f64], u: f64, v: f64) -> Option<(DVec3, DVec3, DVec3)> {
     let (pu, pv) = (s.u_degree as usize, s.v_degree as usize);
     let (su, sv) = (span(fu, pu, s.nu, u), span(fv, pv, s.nv, v));
     let (nu, du) = basis_ders(fu, pu, su, u);
@@ -219,10 +238,8 @@ fn project_nurbs(s: &NurbsSurface, p: DVec3) -> Option<(DVec3, DVec3)> {
         if det.abs() < 1e-300 {
             break;
         }
-        // A little past the edges the spans' polynomials carry on smoothly: blends and their boundaries reach there.
-        // (A straight direction extends exactly, so further.)
-        let reach = |deg: usize, range: f64| range * if deg == 1 { 10.0 } else { 1.0 };
-        let (eu, ev) = (reach(pu, u1 - u0), reach(pv, v1 - v0));
+        // Past the edges the surface carries on straight: blends and their boundaries reach there.
+        let (eu, ev) = ((u1 - u0) * 10.0, (v1 - v0) * 10.0);
         let (du, dv) = ((r1 * c - r2 * b) / det, (a * r2 - b * r1) / det);
         let mut scale = 1.0;
         let mut next = None;
@@ -280,23 +297,117 @@ pub fn on_both(surfaces: &[Surface], a: (usize, f64), b: (usize, f64), mut p: DV
 }
 
 /// Chart points made dense (at least `min` pieces overall) and moved onto the exact curve by `exact`.
-/// None when any point can't be placed.
+///
+/// The chart's own points are points of the curve and stay, in their order. A point between two of them is added
+/// only when `exact` puts it where it belongs: across the chord from its seed (within the chord's sag) and no
+/// further along the chord than half a step. Where a surface stops short of the curve the foot points pile up
+/// instead, and those are left out, so the result never doubles back. None when fewer than two points remain.
 pub fn densify(chart: &[DVec3], min: usize, exact: impl Fn(DVec3) -> Option<DVec3>) -> Option<Vec<DVec3>> {
     let pieces = chart.len().saturating_sub(1).max(1);
     let m = min.div_ceil(pieces).clamp(1, 16);
     let mut out = Vec::with_capacity(pieces * m + 1);
     for (i, w) in chart.windows(2).enumerate() {
-        for k in 0..m {
-            if i > 0 && k == 0 {
-                continue;
+        let length = w[0].distance(w[1]);
+        let dir = (w[1] - w[0]) / length.max(1e-300);
+        let (reach, slide) = (0.25 * length + 1e-6, 0.45 * length / m as f64 + 1e-9);
+        // A chart point is on the curve already; the exact one is taken when it is the same point to a micron.
+        let own = |p: DVec3| exact(p).filter(|q| q.distance(p) <= 1e-3).unwrap_or(p);
+        out.push(own(w[0]));
+        for k in 1..m {
+            let seed = w[0].lerp(w[1], k as f64 / m as f64);
+            if let Some(q) = exact(seed).filter(|q| q.distance(seed) <= reach && (*q - seed).dot(dir).abs() <= slide) {
+                out.push(q);
             }
-            out.push(exact(w[0].lerp(w[1], k as f64 / m as f64))?);
         }
         if i == pieces - 1 {
-            out.push(exact(w[1])?);
+            out.push(own(w[1]));
         }
     }
     (out.len() >= 2).then_some(out)
+}
+
+/// The ball centers of a blend, dense and exact: the spine's chart points with points between them, each moved onto
+/// the curve where the two offset supports meet. A spine can run on past where a support ends (the file keeps the
+/// whole intersection, the blend face uses a part of it): a point that has to move far from the chart to reach both
+/// supports isn't on the blend, and the longest stretch of points that stay by the chart is what the blend follows.
+fn spine_on_supports(surfaces: &[Surface], s: [Support; 2], chart: &[DVec3]) -> Option<Vec<DVec3>> {
+    let pieces = chart.len().checked_sub(1).filter(|&n| n > 0)?;
+    let m = 32usize.div_ceil(pieces).clamp(1, 16);
+    let mut placed: Vec<Option<DVec3>> = Vec::with_capacity(pieces * m + 1);
+    for (i, w) in chart.windows(2).enumerate() {
+        // A point of the curve lies across the chord from its seed, by the chord's sag (a small part of its length).
+        // One that moved further, or along the chord by as much as the step to the next seed, landed on another
+        // branch or where a support stops: the points pile up there.
+        let length = w[0].distance(w[1]);
+        let dir = (w[1] - w[0]) / length.max(1e-300);
+        let (reach, slide) = (0.25 * length + 1e-6, 0.45 * length / m as f64 + 1e-9);
+        let last = if i == pieces - 1 { m } else { m - 1 };
+        for k in 0..=last {
+            let seed = w[0].lerp(w[1], k as f64 / m as f64);
+            placed.push(on_both(surfaces, s[0], s[1], seed).filter(|q| q.distance(seed) <= reach && (*q - seed).dot(dir).abs() <= slide));
+        }
+    }
+    // The longest run of placed points that keep moving on.
+    let (mut best, mut run): (Vec<DVec3>, Vec<DVec3>) = (Vec::new(), Vec::new());
+    for p in placed.into_iter().chain(std::iter::once(None)) {
+        match p {
+            Some(p) if run.last().is_none_or(|q: &DVec3| q.distance(p) > 1e-9) => run.push(p),
+            Some(_) => {}
+            None => {
+                if run.len() > best.len() {
+                    best = std::mem::take(&mut run);
+                }
+                run.clear();
+            }
+        }
+    }
+    (best.len() >= 4).then_some(best)
+}
+
+/// The part of a blend's spine its faces need: from three stations before the first one any face corner lies at to
+/// three after the last, with stations added in its long stretches so the surface follows the ball closely.
+/// A closed spine, or corners spread over most of it, keeps everything.
+fn stretch_for(surfaces: &[Surface], s: [Support; 2], spine: Vec<DVec3>, near: &[DVec3]) -> Vec<DVec3> {
+    let n = spine.len();
+    let closed = spine[0].distance(spine[n - 1]) < 1e-6;
+    // A corner lies on the ball's section at its station: across the spine from the center there. Among the stations
+    // about a ball's radius away, that is the one whose tangent the corner is least along.
+    let tangent = |i: usize| (spine[(i + 1).min(n - 1)] - spine[i.saturating_sub(1)]).normalize_or_zero();
+    let radius = s[0].1.abs().max(s[1].1.abs());
+    let station = |p: &DVec3| {
+        let along = |i: usize| (*p - spine[i]).dot(tangent(i)).abs();
+        (0..n)
+            .filter(|&i| spine[i].distance(*p) <= 1.5 * radius + 1e-6)
+            .min_by(|&i, &j| along(i).total_cmp(&along(j)))
+            .or_else(|| (0..n).min_by(|&i, &j| spine[i].distance_squared(*p).total_cmp(&spine[j].distance_squared(*p))))
+    };
+    let used: Vec<usize> = near.iter().filter(|p| p.is_finite()).filter_map(station).collect();
+    let (Some(&lo), Some(&hi)) = (used.iter().min(), used.iter().max()) else { return spine };
+    let (lo, hi) = (lo.saturating_sub(3), (hi + 3).min(n - 1));
+    if closed || hi - lo < 1 || (hi - lo) * 5 >= (n - 1) * 4 {
+        return spine;
+    }
+    let mut part = spine[lo..=hi].to_vec();
+    // Even out the stations: a stretch much longer than the rest is halved (a few rounds), short ones are left alone.
+    let goal = part.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>() / 32.0;
+    for _ in 0..6 {
+        let mut finer = Vec::with_capacity(part.len() * 2);
+        for w in part.windows(2) {
+            finer.push(w[0]);
+            let (mid, step) = ((w[0] + w[1]) / 2.0, w[0].distance(w[1]));
+            if step > 1.5 * goal
+                && let Some(q) = on_both(surfaces, s[0], s[1], mid).filter(|q| q.distance(mid) <= 0.25 * step)
+            {
+                finer.push(q);
+            }
+        }
+        finer.push(part[part.len() - 1]);
+        if finer.len() == part.len() || finer.len() > 256 {
+            break;
+        }
+        part = finer;
+    }
+    part
 }
 
 /// A support of a blend: surface index and the signed offset that puts it through the ball's center.
@@ -304,13 +415,26 @@ pub type Support = (usize, f64);
 
 /// The rolling-ball blend between two supports along `spine` (ball centers in the spine's own order), as a
 /// rational surface: u along the spine, v around the ball from the first support to the second.
-pub fn rolling_ball(surfaces: &[Surface], s: [Support; 2], spine: &[DVec3]) -> Result<NurbsSurface, &'static str> {
-    let spine = densify(spine, 32, |p| on_both(surfaces, s[0], s[1], p)).ok_or("ball centers do not meet the offset supports")?;
-    // One extra station past each end, so the face's end arcs sit inside the surface.
+///
+/// `near` are the corners of the faces that lie on the blend. The file keeps the whole curve the ball's center could
+/// run along, often far past the faces (straight on, beyond the supports' edges); with corners given, the surface is
+/// made for the stretch they need and a little more, where its stations are close enough to follow it well.
+pub fn rolling_ball(surfaces: &[Surface], s: [Support; 2], spine: &[DVec3], near: &[DVec3]) -> Result<NurbsSurface, &'static str> {
+    let spine = spine_on_supports(surfaces, s, spine).ok_or("ball centers do not meet the offset supports")?;
+    let spine = stretch_for(surfaces, s, spine, near);
+    // One extra station past each end, so the face's end arcs sit inside the surface. Where a support ends there
+    // (a short step is tried before giving up), the blend ends with its spine.
     let n = spine.len();
-    let before = on_both(surfaces, s[0], s[1], spine[0] * 2.0 - spine[1]).ok_or("cannot extend the start of the blend")?;
-    let after = on_both(surfaces, s[0], s[1], spine[n - 1] * 2.0 - spine[n - 2]).ok_or("cannot extend the end of the blend")?;
-    let centers: Vec<DVec3> = std::iter::once(before).chain(spine.iter().copied()).chain(std::iter::once(after)).collect();
+    let past = |end: DVec3, inner: DVec3| {
+        [1.0, 0.5, 0.25].into_iter().find_map(|k| {
+            let seed = end + (end - inner) * k;
+            // It has to carry on outwards: at least half the step past the end, and not swung far aside.
+            let (step, out) = (seed.distance(end), (seed - end).normalize_or_zero());
+            on_both(surfaces, s[0], s[1], seed).filter(|q| (*q - end).dot(out) >= 0.5 * step && q.distance(seed) <= 0.75 * step)
+        })
+    };
+    let (before, after) = (past(spine[0], spine[1]), past(spine[n - 1], spine[n - 2]));
+    let centers: Vec<DVec3> = before.into_iter().chain(spine.iter().copied()).chain(after).collect();
     let mut rows: Vec<[[f64; 4]; 5]> = Vec::with_capacity(centers.len());
     for c in &centers {
         let (f0, _) = project(surfaces, s[0].0, *c).ok_or("cannot project to the first blend support")?;
@@ -494,7 +618,7 @@ mod tests {
             Surface::Plane { origin: DVec3::ZERO, normal: DVec3::Y, x: DVec3::X },
         ];
         let spine: Vec<DVec3> = (0..6).map(|i| DVec3::new(i as f64, 2.0, 2.0)).collect();
-        let s = rolling_ball(&surfaces, [(0, 2.0), (1, 2.0)], &spine).expect("blend");
+        let s = rolling_ball(&surfaces, [(0, 2.0), (1, 2.0)], &spine, &[]).expect("blend");
         for u in [0.0, 0.3, 0.5, 0.9, 1.0] {
             for v in [0.0, 0.25, 0.5, 1.0] {
                 let p = eval(&s, u, v);

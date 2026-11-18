@@ -7,6 +7,7 @@
 //! (`HistoryImportedPrototypes`). Shapr3D rebuilds the model from the history when the cached partition,
 //! deltas and calls are missing, which is how edits are written back.
 
+mod json_nodes;
 mod legacy;
 pub mod write;
 pub mod zip;
@@ -304,22 +305,115 @@ pub struct Item {
     pub color: Option<[f32; 3]>,
 }
 
-pub(crate) fn text(v: rusqlite::types::Value) -> String {
-    match v {
-        rusqlite::types::Value::Text(t) => t,
-        rusqlite::types::Value::Blob(b) => String::from_utf8_lossy(&b).into_owned(),
-        rusqlite::types::Value::Integer(i) => i.to_string(),
-        rusqlite::types::Value::Real(r) => r.to_string(),
-        rusqlite::types::Value::Null => String::new(),
+/// A column's value as it lies in the file. SQLite lets a TEXT cell hold any bytes (the 2024 releases keep binary
+/// step results in one), and reading such a cell as a string would fail, so text and blobs both come out as bytes.
+pub(crate) enum Cell {
+    Bytes(Vec<u8>),
+    Integer(i64),
+    Real(f64),
+    Null,
+}
+
+impl rusqlite::types::FromSql for Cell {
+    fn column_result(v: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        use rusqlite::types::ValueRef;
+        Ok(match v {
+            ValueRef::Text(b) | ValueRef::Blob(b) => Cell::Bytes(b.to_vec()),
+            ValueRef::Integer(i) => Cell::Integer(i),
+            ValueRef::Real(r) => Cell::Real(r),
+            ValueRef::Null => Cell::Null,
+        })
     }
 }
 
-pub(crate) fn blob(v: rusqlite::types::Value) -> Vec<u8> {
+pub(crate) fn text(v: Cell) -> String {
     match v {
-        rusqlite::types::Value::Blob(b) => b,
-        rusqlite::types::Value::Text(t) => t.into_bytes(),
+        Cell::Bytes(b) => String::from_utf8(b).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
+        Cell::Integer(i) => i.to_string(),
+        Cell::Real(r) => r.to_string(),
+        Cell::Null => String::new(),
+    }
+}
+
+pub(crate) fn blob(v: Cell) -> Vec<u8> {
+    match v {
+        Cell::Bytes(b) => b,
         _ => Vec::new(),
     }
+}
+
+/// Whether the file keeps its steps' cached results: `PersistedCalls`, or `ModelerEffects` in releases of 2024.
+fn has_calls(c: &rusqlite::Connection) -> bool {
+    has_table(c, "PersistedCalls") || has_table(c, "ModelerEffects")
+}
+
+/// Every cached step result as (key, data). A key is `[step node, [call index]]`. `ModelerEffects` rows hold what the
+/// releases up to early 2025 keep in the third slot of a `PersistedCalls` row, so they are handed on in that form:
+/// `[0, [0], [true, effects]]`.
+fn call_rows(c: &rusqlite::Connection) -> Result<Vec<(Value, Value)>> {
+    let (sql, wrap) = if has_table(c, "PersistedCalls") {
+        ("SELECT CallKey, CallData FROM PersistedCalls", false)
+    } else if has_table(c, "ModelerEffects") {
+        ("SELECT CallKey, Effects FROM ModelerEffects", true)
+    } else {
+        return Ok(Vec::new());
+    };
+    let mut q = c.prepare(sql)?;
+    let rows = q.query_map([], |r| Ok((blob(r.get(0)?), blob(r.get(1)?))))?;
+    let mut out = Vec::new();
+    for (k, d) in rows.flatten().take(10_000_000) {
+        let (Some(k), Some(d)) = (unpack(&k), unpack(&d)) else { continue };
+        let d = if wrap {
+            Value::Array(vec![Value::from(0), Value::Array(vec![Value::from(0)]), Value::Array(vec![Value::from(true), d])])
+        } else {
+            d
+        };
+        out.push((k, current_layout(d)));
+    }
+    Ok(out)
+}
+
+/// A cached step result in the current layout. Releases up to early 2025 keep `[0, [0], [true, [partitions, frames,
+/// records, 0]]]`: `partitions` lists `[partition, mark]` (a mark of -1: the step used the partition up) and each
+/// record is `[index into partitions, before, after, tags, names, n, groups, lineage]`. The current layout keeps the
+/// same record under its partition, `[0, [0], [true, [frames, [[partition, [true, [before, after, …]]], …], _]],
+/// [false], [false], [false]]`, and calls the body itself tag 0 where the older one says 2147483647.
+fn current_layout(d: Value) -> Value {
+    const SELF: i64 = 2_147_483_647;
+    let Some(a) = d.as_array().filter(|a| a.len() == 3) else { return d };
+    let inner =
+        a[2].as_array().filter(|x| x.first().and_then(Value::as_bool) == Some(true)).and_then(|x| x.get(1)).and_then(Value::as_array);
+    let Some(inner) = inner else { return d };
+    let (Some(parts), Some(records)) = (inner.first().and_then(Value::as_array), inner.get(2).and_then(Value::as_array)) else { return d };
+    fn own(v: &Value, depth: usize) -> Value {
+        match v {
+            Value::Integer(i) if i.as_i64() == Some(SELF) => Value::from(0),
+            Value::Array(a) if depth < 8 => Value::Array(a.iter().map(|x| own(x, depth + 1)).collect()),
+            other => other.clone(),
+        }
+    }
+    let pid = |i: usize| parts.get(i).and_then(Value::as_array).and_then(|p| p.first()).and_then(Value::as_i64);
+    let no = || Value::Array(vec![Value::from(false)]);
+    let mut seen = std::collections::HashSet::new();
+    let mut changed = Vec::new();
+    for r in records.iter().take(1_000_000) {
+        let Some(r) = r.as_array() else { continue };
+        let Some(pid) = r.first().and_then(Value::as_u64).and_then(|i| pid(i as usize)) else { continue };
+        seen.insert(pid);
+        let detail: Vec<Value> = r.iter().skip(1).enumerate().map(|(k, v)| if k >= 2 { own(v, 0) } else { v.clone() }).collect();
+        changed.push(Value::Array(vec![Value::from(pid), Value::Array(vec![Value::from(true), Value::Array(detail)])]));
+    }
+    // A partition the step used up with no record of its own.
+    for p in parts.iter().filter_map(Value::as_array) {
+        if let (Some(pid), Some(-1)) = (p.first().and_then(Value::as_i64), p.get(1).and_then(Value::as_i64))
+            && seen.insert(pid)
+        {
+            changed.push(Value::Array(vec![Value::from(pid), Value::Array(vec![Value::from(true), Value::Array(vec![no(), no()])])]));
+        }
+    }
+    let frames = inner.get(1).cloned().unwrap_or_else(|| Value::Array(Vec::new()));
+    let result = Value::Array(vec![Value::from(true), Value::Array(vec![frames, Value::Array(changed), Value::Array(Vec::new())])]);
+    Value::Array(vec![a[0].clone(), a[1].clone(), result, no(), no(), no()])
 }
 
 /// MessagePack properties of a history node.
@@ -340,7 +434,12 @@ fn history_steps(c: &rusqlite::Connection) -> Result<Vec<Step>> {
         let mut q = c.prepare("SELECT HistoryTreeNodeID, HistoryTreeNodeType, Properties FROM HistoryTreeNodes")?;
         let rows = q.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, blob(r.get(2)?))))?;
         for (id, ty, props) in rows.flatten() {
-            if let Some(v) = unpack(&props) {
+            // Releases of 2024 keep each node as JSON; a step's parameter values are opaque there.
+            if props.first() == Some(&b'{') {
+                if let Some(v) = json_nodes::node(ty, &props) {
+                    nodes.insert(id, (ty, v));
+                }
+            } else if let Some(v) = unpack(&props) {
                 nodes.insert(id, (ty, v));
             }
         }
@@ -825,10 +924,7 @@ fn typed_curves(c: &rusqlite::Connection, sketch: &rusqlite::types::Value) -> Re
         let mut q = c.prepare(&sql)?;
         let n = cols.len();
         let found = q.query_map([sketch], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                (1..=n).map(|i| r.get::<_, rusqlite::types::Value>(i).map(blob)).collect::<rusqlite::Result<Vec<_>>>()?,
-            ))
+            Ok((r.get::<_, i64>(0)?, (1..=n).map(|i| r.get::<_, Cell>(i).map(blob)).collect::<rusqlite::Result<Vec<_>>>()?))
         })?;
         Ok(found.flatten().take(100_000).collect())
     };
@@ -858,7 +954,7 @@ fn typed_curves(c: &rusqlite::Connection, sketch: &rusqlite::types::Value) -> Re
     if has_table(c, "SketchSplinePoints") {
         for (row, p) in rows("SketchSplines", "SplineID", &["SplineID"])? {
             let mut q = c.prepare("SELECT PointID FROM SketchSplinePoints WHERE SplineID = ?1 ORDER BY PointIndexInSpline")?;
-            let ids = q.query_map([&p[0]], |r| r.get::<_, rusqlite::types::Value>(0).map(blob))?;
+            let ids = q.query_map([&p[0]], |r| r.get::<_, Cell>(0).map(blob))?;
             let pts: Vec<[f64; 2]> = ids.flatten().take(10_000).filter_map(|i| at(&i)).collect();
             if pts.len() >= 2 {
                 out.push(SketchCurve::Spline { id: id(row), points: pts, poles: Vec::new(), construction: false });
@@ -932,13 +1028,36 @@ fn items(c: &rusqlite::Connection, folders: &[Folder], item_by_meta: &mut std::c
         let rgb = (rgba >> 8) as u32 & 0xFF_FFFF;
         (rgb != 0xA0_A0A4).then(|| [(rgb >> 16) as f32 / 255.0, ((rgb >> 8) & 0xFF) as f32 / 255.0, (rgb & 0xFF) as f32 / 255.0])
     };
+    // Showing or hiding a body later (a move, a split) puts its visibility on a new anchor of that later step, which
+    // points at the same body name as the item's own anchor: the newest visibility set on any of them counts.
+    let target = |name: i64| names.get(&name).and_then(|a| a["nameToAnchor"].as_i64());
+    let mut shown: BTreeMap<i64, (i64, bool)> = BTreeMap::new(); // anchored name → (metadata id, hidden)
+    for (name_id, metas) in &by_meta {
+        let Some(t) = target(*name_id) else { continue };
+        for m in metas.iter().filter(|m| m.1 == 1) {
+            if shown.get(&t).is_none_or(|e| e.0 < m.0) {
+                shown.insert(t, (m.0, m.2.trim() == "1"));
+            }
+        }
+    }
     let mut out = Vec::new();
     for (name_id, metas) in &by_meta {
         for m in metas {
             item_by_meta.insert(m.0.to_string(), *name_id);
         }
         let Some(name) = metas.iter().filter(|m| m.1 == 0).max_by_key(|m| m.0).map(|m| m.2.clone()) else { continue };
-        let own_hidden = metas.iter().filter(|m| m.1 == 1).max_by_key(|m| m.0).is_some_and(|m| m.2.trim() == "1");
+        let own = metas.iter().filter(|m| m.1 == 1).max_by_key(|m| m.0).map(|m| (m.0, m.2.trim() == "1"));
+        let later = target(*name_id).and_then(|t| shown.get(&t).copied());
+        let own_hidden = match (own, later) {
+            (Some(o), Some(l)) => {
+                if l.0 > o.0 {
+                    l.1
+                } else {
+                    o.1
+                }
+            }
+            (o, l) => o.or(l).is_some_and(|v| v.1),
+        };
         let color = wrapped(*name_id).and_then(|w| materials.get(&w)).and_then(|m| colour(m.1));
         let (folder, hidden) = folders
             .iter()
@@ -956,16 +1075,13 @@ fn items(c: &rusqlite::Connection, folders: &[Folder], item_by_meta: &mut std::c
 /// the step used the body up (the inputs of a Subtract or Union).
 fn drop_removed(c: &rusqlite::Connection, steps: &[Step], bodies: &mut Vec<Body>) -> Result<std::collections::HashSet<i64>> {
     // Files from before about 2025 keep no cached calls.
-    if !has_table(c, "PersistedCalls") {
+    if !has_calls(c) {
         return Ok(std::collections::HashSet::new());
     }
     // A step may have several calls (`[node, [0]]`, `[node, [1]]`, …), kept in that order.
     let mut calls: BTreeMap<i64, BTreeMap<i64, Value>> = BTreeMap::new();
     {
-        let mut q = c.prepare("SELECT CallKey, CallData FROM PersistedCalls")?;
-        let rows = q.query_map([], |r| Ok((blob(r.get(0)?), blob(r.get(1)?))))?;
-        for (k, d) in rows.flatten() {
-            let (Some(k), Some(d)) = (unpack(&k), unpack(&d)) else { continue };
+        for (k, d) in call_rows(c)? {
             let key = k.as_array();
             if let Some(node) = key.and_then(|a| a.first()).and_then(Value::as_i64) {
                 let sub = key.and_then(|a| a.get(1)).and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_i64).unwrap_or(0);
@@ -1063,16 +1179,13 @@ fn name_bodies(
 /// Step node → the cached partitions its call made or changed.
 fn call_partitions(c: &rusqlite::Connection, bodies: &[Body]) -> Result<BTreeMap<i64, Vec<i64>>> {
     // Files from before about 2025 keep no cached calls.
-    if !has_table(c, "PersistedCalls") {
+    if !has_calls(c) {
         return Ok(BTreeMap::new());
     }
     let known: Vec<i64> = bodies.iter().filter_map(|b| b.partition).collect();
     let mut calls: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
     {
-        let mut q = c.prepare("SELECT CallKey, CallData FROM PersistedCalls")?;
-        let rows = q.query_map([], |r| Ok((blob(r.get(0)?), blob(r.get(1)?))))?;
-        for (k, d) in rows.flatten() {
-            let (Some(k), Some(d)) = (unpack(&k), unpack(&d)) else { continue };
+        for (k, d) in call_rows(c)? {
             let Some(node) = k.as_array().and_then(|a| a.first()).and_then(Value::as_i64) else { continue };
             // Created partitions (slot 5: [index, partition, 3, tag]) then modified ones (slot 2: [partition, …]).
             let mut found = Vec::new();
@@ -1114,7 +1227,7 @@ fn call_partitions(c: &rusqlite::Connection, bodies: &[Body]) -> Result<BTreeMap
 /// bodies is applied here, from the matrix its cached call keeps.
 fn apply_moves(c: &rusqlite::Connection, steps: &[Step], bodies: &mut [Body]) -> Result<()> {
     // Files from before about 2025 keep no cached calls.
-    if !has_table(c, "PersistedCalls") {
+    if !has_calls(c) {
         return Ok(());
     }
     let calls = call_partitions(c, bodies)?;
@@ -1141,13 +1254,11 @@ fn apply_moves(c: &rusqlite::Connection, steps: &[Step], bodies: &mut [Body]) ->
     // A Transform's result call is keyed [node, [2]].
     let mut results: BTreeMap<i64, Value> = BTreeMap::new();
     {
-        let mut q = c.prepare("SELECT CallKey, CallData FROM PersistedCalls")?;
-        for (k, d) in q.query_map([], |r| Ok((blob(r.get(0)?), blob(r.get(1)?))))?.flatten() {
-            let Some(k) = unpack(&k) else { continue };
+        for (k, d) in call_rows(c)? {
             let key = k.as_array().map(|a| {
                 (a.first().and_then(Value::as_i64), a.get(1).and_then(Value::as_array).and_then(|e| e.first()).and_then(Value::as_i64))
             });
-            if let (Some((Some(node), Some(2))), Some(d)) = (key, unpack(&d)) {
+            if let (Some((Some(node), Some(2))), Some(d)) = (key, Some(d)) {
                 results.insert(node, d);
             }
         }
@@ -1357,15 +1468,13 @@ fn name_by_topology(
     bodies: &mut [Body],
 ) -> Result<()> {
     use std::collections::{HashMap, HashSet};
-    if !has_table(c, "HistoryNames") || !has_table(c, "PersistedCalls") || !has_table(c, "MetadataAssignments") {
+    if !has_table(c, "HistoryNames") || !has_calls(c) || !has_table(c, "MetadataAssignments") {
         return Ok(());
     }
     let order: HashMap<i64, usize> = steps.iter().enumerate().map(|(i, s)| (s.node, i)).collect();
     let mut calls: Vec<(usize, i64, Value)> = Vec::new();
     {
-        let mut q = c.prepare("SELECT CallKey, CallData FROM PersistedCalls")?;
-        for (k, d) in q.query_map([], |r| Ok((blob(r.get(0)?), blob(r.get(1)?))))?.flatten() {
-            let (Some(k), Some(d)) = (unpack(&k), unpack(&d)) else { continue };
+        for (k, d) in call_rows(c)? {
             let Some(key) = k.as_array() else { continue };
             let Some(at) = key.first().and_then(Value::as_i64).and_then(|n| order.get(&n)) else { continue };
             let sub = key.get(1).and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_i64).unwrap_or(0);
@@ -1443,19 +1552,48 @@ fn name_by_topology(
         let (ty, data) = row.query_row([id], |r| Ok((r.get::<_, i64>(0)?, text(r.get(1)?)))).ok()?;
         Some((ty, serde_json::from_str(&data).ok()?))
     };
+    // A step's own names by (step, qualifier), with their entropy: what a call-prefix name stands for.
+    type Entropies = Vec<(Vec<i64>, i64)>;
+    let mut by_call: HashMap<(i64, i64), Entropies> = HashMap::new();
+    {
+        let mut q = c.prepare("SELECT NameID, Data FROM HistoryNames WHERE Type = 0")?;
+        for (id, data) in q.query_map([], |r| Ok((r.get::<_, i64>(0)?, text(r.get(1)?))))?.flatten().take(10_000_000) {
+            let Ok(d) = serde_json::from_str::<serde_json::Value>(&data) else { continue };
+            let (Some(node), Some(qualifier)) = (d["callKey"]["nodeID"].as_i64(), d["qualifier"].as_i64()) else { continue };
+            let entropy =
+                d["callKey"]["entropy"].as_array().map(|e| e.iter().filter_map(serde_json::Value::as_i64).collect()).unwrap_or_default();
+            by_call.entry((node, qualifier)).or_default().push((entropy, id));
+        }
+    }
     // partition → (newest name's metadata id, the name it hangs off), (newest visibility's metadata id, hidden)
     type Newest = (Option<(i64, i64)>, Option<(i64, bool)>);
     let mut newest: HashMap<i64, Newest> = HashMap::new();
     for (name_id, metas) in &set_on {
         let Some((18, anchor)) = json(*name_id) else { continue };
         let Some((ty, target)) = anchor["nameToAnchor"].as_i64().and_then(&mut json) else { continue };
-        let faces = match ty {
-            8 => &target["faceNames"],
-            5 => &target["originals"],
+        // A call-prefix name (a body a step made, named by the step itself) stands for the step's names that start
+        // with it: the partitions carrying those are that body.
+        let prefixed: Vec<i64> = if ty == 1 {
+            let (node, qualifier) = (target["callKeyPrefix"]["nodeID"].as_i64(), target["qualifier"].as_i64());
+            let prefix: Vec<i64> = target["callKeyPrefix"]["entropyPrefix"]
+                .as_array()
+                .map(|e| e.iter().filter_map(serde_json::Value::as_i64).collect())
+                .unwrap_or_default();
+            node.zip(qualifier)
+                .and_then(|k| by_call.get(&k))
+                .map(|v| v.iter().filter(|(e, _)| e.starts_with(&prefix)).map(|(_, id)| *id).collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let faces: Vec<i64> = match ty {
+            8 => target["faceNames"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_i64).take(100_000).collect(),
+            5 => target["originals"].as_array().into_iter().flatten().filter_map(serde_json::Value::as_i64).take(100_000).collect(),
+            1 => prefixed,
             _ => continue,
         };
         let mut votes: HashMap<i64, usize> = HashMap::new();
-        for n in faces.as_array().into_iter().flatten().filter_map(serde_json::Value::as_i64).take(100_000) {
+        for n in faces {
             for pid in holders.get(&n).into_iter().flatten() {
                 *votes.entry(*pid).or_default() += 1;
             }
@@ -1500,7 +1638,7 @@ fn resolve_transformed_items(
     gone: &std::collections::HashSet<i64>,
     bodies: &mut [Body],
 ) -> Result<()> {
-    if !has_table(c, "HistoryNames") || !has_table(c, "PersistedCalls") || !has_table(c, "MetadataAssignments") {
+    if !has_table(c, "HistoryNames") || !has_calls(c) || !has_table(c, "MetadataAssignments") {
         return Ok(());
     }
     let mut names = BTreeMap::new();
@@ -1536,9 +1674,7 @@ fn resolve_transformed_items(
     let mut modified: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
     let mut unchanged: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
     let mut surviving: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
-    let mut q = c.prepare("SELECT CallKey, CallData FROM PersistedCalls")?;
-    for (key, data) in q.query_map([], |r| Ok((blob(r.get(0)?), blob(r.get(1)?))))?.flatten() {
-        let (Some(key), Some(data)) = (unpack(&key), unpack(&data)) else { continue };
+    for (key, data) in call_rows(c)? {
         let Some(node) = key.as_array().and_then(|a| a.first()).and_then(Value::as_i64) else { continue };
         let changed = data
             .as_array()
@@ -1602,8 +1738,24 @@ fn resolve_transformed_items(
         }
     }
     let mut associations = Vec::new();
+    // A Move/Rotate with its Copy switch on (its sixth parameter, `[1, true]`) leaves the source where it is and
+    // makes a new body, as Mirror does.
+    let copies = |step: &Step| {
+        step.op == "Transform"
+            && step.params.get(5).is_some_and(|(_, v)| {
+                fn flag(v: &Value, depth: usize) -> Option<bool> {
+                    match v.as_array()?.as_slice() {
+                        [Value::Integer(k), Value::Boolean(b)] if k.as_i64() == Some(1) => Some(*b),
+                        [inner] if depth < 4 => flag(inner, depth + 1),
+                        _ => None,
+                    }
+                }
+                flag(v, 0) == Some(true)
+            })
+    };
     for step in steps.iter().filter(|s| matches!(s.op.as_str(), "Transform" | "Rotate" | "Mirror")) {
-        let pids = if step.op == "Mirror" { &unchanged } else { &modified };
+        let makes_new = step.op == "Mirror" || copies(step);
+        let pids = if makes_new { &unchanged } else { &modified };
         if let (Some(pids), Some((_, target))) = (pids.get(&step.node), step.params.first()) {
             let mut pids = pids.clone();
             pids.sort_unstable();
@@ -1617,10 +1769,9 @@ fn resolve_transformed_items(
                 associations.push((*pid, *id));
             }
         }
-        // Mirror has one unchanged source and one modified result. The latter has its own call-prefix name.
-        if step.op == "Mirror"
-            && let (Some(pids), Some(ids)) = (modified.get(&step.node), outputs.get(&step.node))
-        {
+        // Mirror (and a copying move) has one unchanged source and one modified result. The latter has its own
+        // call-prefix name.
+        if makes_new && let (Some(pids), Some(ids)) = (modified.get(&step.node), outputs.get(&step.node)) {
             let mut pids = pids.clone();
             pids.sort_unstable();
             pids.dedup();
@@ -1921,7 +2072,7 @@ impl FacePaint {
 /// Only calls in the newer layout (more than three slots) are read; files in the older one keep every imported
 /// body in `BodyRevisionPartitions`.
 fn uncovered_imports(c: &rusqlite::Connection, steps: &[Step], gone: &std::collections::HashSet<i64>) -> Result<Vec<i64>> {
-    if !has_table(c, "PersistedCalls") {
+    if !has_calls(c) {
         return Ok(Vec::new());
     }
     let mut known: std::collections::HashSet<i64> = gone.clone();
@@ -1938,14 +2089,12 @@ fn uncovered_imports(c: &rusqlite::Connection, steps: &[Step], gone: &std::colle
 /// step's k-th created partition (by creation index) belongs to its k-th import. Only calls in the newer layout (more
 /// than three slots) record them.
 fn import_slots(c: &rusqlite::Connection, steps: &[Step]) -> Result<Vec<(i64, Option<i64>)>> {
-    if !has_table(c, "PersistedCalls") {
+    if !has_calls(c) {
         return Ok(Vec::new());
     }
     let mut step_parts: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
     {
-        let mut q = c.prepare("SELECT CallKey, CallData FROM PersistedCalls")?;
-        for (k, d) in q.query_map([], |r| Ok((blob(r.get(0)?), blob(r.get(1)?))))?.flatten() {
-            let (Some(k), Some(d)) = (unpack(&k), unpack(&d)) else { continue };
+        for (k, d) in call_rows(c)? {
             let Some(node) = k.as_array().and_then(|a| a.first()).and_then(Value::as_i64) else { continue };
             let Some(a) = d.as_array() else { continue };
             if a.len() <= 3 {

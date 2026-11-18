@@ -65,6 +65,8 @@ struct Cx<'a> {
     curves: HashMap<u32, (usize, bool)>,
     vertices: HashMap<u32, usize>,
     edges: HashMap<u32, usize>,
+    /// Surface node → the corner points (mm) of the faces lying on it, worked out when a blend first asks.
+    corners: Option<HashMap<u32, Vec<DVec3>>>,
 }
 
 fn bad(msg: impl Into<String>) -> Error {
@@ -113,6 +115,43 @@ impl<'a> Cx<'a> {
     }
     fn minus(&self, n: &Node, field: &str) -> bool {
         self.f.field(n, field).and_then(Val::char) == Some(b'-')
+    }
+
+    /// The corner points of every face on surface `p` (each vertex its loops pass).
+    fn face_corners(&mut self, p: u32) -> Vec<DVec3> {
+        if self.corners.is_none() {
+            let mut map: HashMap<u32, Vec<DVec3>> = HashMap::new();
+            for face in self.f.nodes.iter().filter(|n| self.f.type_name(n.ty) == "FACE") {
+                let sp = self.ptr(face, "surface");
+                if sp == 0 {
+                    continue;
+                }
+                let mut lp = self.ptr(face, "loop");
+                let mut guard = 0usize;
+                while let Some(l) = self.node(lp) {
+                    let first = self.ptr(l, "fin");
+                    let mut fp = first;
+                    while let Some(fin) = self.node(fp) {
+                        let point = self.node(self.ptr(fin, "vertex")).and_then(|v| self.node(self.ptr(v, "point")));
+                        if let Some(at) = point.and_then(|pt| self.vec(pt, "pvec").ok()) {
+                            map.entry(sp).or_default().push(at * MM);
+                        }
+                        fp = self.ptr(fin, "forward");
+                        guard += 1;
+                        if fp == first || guard > 1 << 22 {
+                            break;
+                        }
+                    }
+                    lp = self.ptr(l, "next");
+                    guard += 1;
+                    if guard > 1 << 22 {
+                        break;
+                    }
+                }
+            }
+            self.corners = Some(map);
+        }
+        self.corners.as_ref().and_then(|m| m.get(&p)).cloned().unwrap_or_default()
     }
 
     /// Surface index in the B-rep and whether its natural normal points opposite the file's.
@@ -213,7 +252,8 @@ impl<'a> Cx<'a> {
                     }
                     _ => return Err(bad(format!("blend #{p} has a spine we can't follow yet"))),
                 };
-                let s = blend::rolling_ball(&self.b.surfaces, supports, &centers).map_err(|e| bad(format!("blend #{p}: {e}")))?;
+                let near = self.face_corners(p);
+                let s = blend::rolling_ball(&self.b.surfaces, supports, &centers, &near).map_err(|e| bad(format!("blend #{p}: {e}")))?;
                 (Surface::BSpline(s), reversed)
             }
             other => return Err(bad(format!("surface type {other} (#{p}) is not supported yet"))),
@@ -713,8 +753,15 @@ impl<'a> Cx<'a> {
 }
 
 fn body(f: &XtFile, n: &Node) -> Result<Body> {
-    let mut cx =
-        Cx { f, b: Brep::default(), surfaces: HashMap::new(), curves: HashMap::new(), vertices: HashMap::new(), edges: HashMap::new() };
+    let mut cx = Cx {
+        f,
+        b: Brep::default(),
+        surfaces: HashMap::new(),
+        curves: HashMap::new(),
+        vertices: HashMap::new(),
+        edges: HashMap::new(),
+        corners: None,
+    };
     cx.b.kind = match f.field(n, "body_type").and_then(Val::int) {
         Some(2) => BodyKind::Wire,
         Some(3) => BodyKind::Sheet,

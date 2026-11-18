@@ -16,6 +16,14 @@ whole.**
   reopen gives the same part.
 - **Empty sketches survive a save.** A named sketch plane with nothing drawn on it yet stays in the project when you
   save it as .shapr.
+- **Projects saved in 2024 come in as they were left.** Their history is read too, so deleted bodies and planes stay
+  deleted, construction planes are planes again rather than bodies, and moved, mirrored and split bodies keep
+  their names, folders and shown/hidden state. One such project failed to open at all.
+- **More rounded edges read.** A fillet whose stored path runs on past the faces it rounds (common where a fillet
+  meets a curved face) failed to come in, so the body was left out. It now comes in, matching the original's volume
+  to within a few thousandths of a percent.
+- **A copied body keeps its own name.** Move/Rotate with Copy makes a new body; it no longer takes the name and
+  visibility of the body it was copied from.
 
 ## 0.10.1-alpha
 **The iPhone app is back in the release, and on an ordinary iPhone it's a viewer: the whole modeler stays on the

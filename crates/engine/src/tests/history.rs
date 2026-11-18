@@ -137,6 +137,23 @@ fn editing_a_sketch_in_the_past_rebuilds_later_steps() {
 }
 
 #[test]
+fn leaving_a_sketch_unchanged_does_not_run_the_later_steps_again() {
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("rectangle", &json!({"corner": [0, 0], "opposite": [20, 10]})).unwrap();
+    let sketch = s.active_sketch.unwrap();
+    s.execute("extrude", &json!({"sketch": sketch.0, "region": 0, "distance": 5})).unwrap();
+    // The first rebuild keeps what each step made (a plain command keeps the latest).
+    s.execute("edit_step", &json!({"step": 1, "params": {"distance": 6}})).unwrap();
+    let made = s.doc.bodies[0].mesh.clone();
+
+    s.execute("edit_sketch_step", &json!({"step": 0})).unwrap();
+    s.execute("exit_sketching", &json!({})).unwrap();
+    assert_eq!(s.doc.bodies.len(), 1);
+    assert!(std::sync::Arc::ptr_eq(&made, &s.doc.bodies[0].mesh), "the extrusion was taken from the last rebuild, not made again");
+}
+
+#[test]
 fn deleting_a_history_step_rebuilds_without_it() {
     let mut s = session();
     s.execute("sketch", &json!({"plane": "xy"})).unwrap();

@@ -161,22 +161,75 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
     } else {
         rows.into_iter().map(|r| (r.0, r.1, r.2, r.3, 0)).collect()
     };
-    // Where a dragged row would land, from the pointer over the (evenly spaced) rows.
-    let top = rows_top;
+    // The list scrolls with the wheel when it overflows; the wheel over it never reaches the camera (the
+    // viewport only reads the wheel while it is hovered). The deltas go straight from the events: the rows
+    // follow the wheel at once, with no smoothing tail piling them up at the edges.
+    let view = Rect::from_min_max(pos2(r.left(), rows_top), pos2(r.right(), footer_y - 26.0));
+    let max_scroll = (rows.len() as f32 * row_h - view.height()).max(0.0);
+    let mut wheel_y = 0.0_f32;
+    ui.input(|i| {
+        for ev in &i.events {
+            if let egui::Event::MouseWheel { delta, unit, modifiers, .. } = ev {
+                if modifiers.command || modifiers.ctrl {
+                    continue; // pinch / ctrl-scroll is a zoom, not a list scroll
+                }
+                wheel_y += if *unit == egui::MouseWheelUnit::Point { delta.y } else { delta.y * row_h };
+            }
+        }
+    });
+    if max_scroll > 0.0 && wheel_y != 0.0 && pointer.is_some_and(|q| view.contains(q)) {
+        ws.items_scroll = (ws.items_scroll - wheel_y).clamp(0.0, max_scroll);
+    } else {
+        ws.items_scroll = ws.items_scroll.clamp(0.0, max_scroll);
+    }
+    // Where a dragged row would land, from the pointer over the (evenly spaced, scrolled) rows.
+    let top = rows_top - ws.items_scroll;
     let drop = ws
         .items_dragging
-        .zip(pointer.filter(|q| r.contains(*q)))
+        .zip(pointer.filter(|q| view.contains(*q)))
         .and_then(|(item, q)| drop_at(&ws.session.doc, &rows, item, top, q.y, row_h));
-    let mut y = rows_top;
+    let n_rows = rows.len();
     let mut row_hover = None;
     let waiting = tool_mode(ws).is_some();
+    // Folders on the way to anything picked, filled dark blue as in the reference: the whole containing chain
+    // lights up when an item inside is picked, at any depth.
+    let mut containing = std::collections::BTreeSet::new();
+    let mut parents = std::collections::BTreeMap::new();
+    for f in &ws.session.doc.folders {
+        for i in &f.items {
+            parents.insert(*i, f.id);
+        }
+    }
+    let picked_items: Vec<shapecraft_doc::ItemId> = ws
+        .session
+        .selection
+        .iter()
+        .filter_map(|p| match p {
+            Pick::Body { body } => Some(*body),
+            Pick::Sketch { sketch } => Some(*sketch),
+            Pick::Face { body, .. } => Some(*body),
+            _ => None,
+        })
+        .collect();
+    for item in &picked_items {
+        let mut up = parents.get(item).copied();
+        while let Some(f) = up {
+            if !containing.insert(f) {
+                break;
+            }
+            up = parents.get(&f).copied();
+        }
+    }
     let mut dragged_row: Option<(String, Icon)> = None;
-    for (id, name, visible, kind, depth) in rows {
-        if y + row_h > footer_y - 26.0 {
-            break;
+    // The rows paint through a clip on the list area; a row takes clicks only where it shows.
+    let lp = p.clone().with_clip_rect(view);
+    for (idx, (id, name, visible, kind, depth)) in rows.into_iter().enumerate() {
+        let y = rows_top + idx as f32 * row_h - ws.items_scroll;
+        if y + row_h <= rows_top || y >= view.bottom() {
+            continue;
         }
         let indent = 13.0 * depth as f32;
-        let row = Rect::from_min_size(pos2(r.left() + 9.0, y), vec2(r.width() - 18.0, row_h - 2.0));
+        let row = Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), row_h)).intersect(view);
         let resp = ui.interact(row, ui.scope_id().with(("item", id.0)), Sense::click_and_drag());
         // Dragging a row onto another lights it up blue (a folder takes it in, an item makes a folder with it);
         // between rows a blue line shows where it goes (s24-022, s24-025).
@@ -186,19 +239,38 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
         let dragging_this = ws.items_dragging == Some(id);
         let drop_on_this = matches!(drop, Some(Drop::Onto(t)) if t == id);
         if drop_on_this {
-            p.rect_filled(row, radius(5), theme::c(0x2e68ff));
-            p.rect_stroke(row, radius(5), Stroke::new(1.5, Color32::WHITE), StrokeKind::Inside);
+            lp.rect_filled(row, radius(0), theme::c(0x2e68ff));
+            lp.rect_stroke(row, radius(0), Stroke::new(1.5, Color32::WHITE), StrokeKind::Inside);
         }
         let selected = ws.item_selected(id);
-        // The whole item selected (not just a face or edge of it) fills the row: blue while the list has focus,
-        // grey once a tool starts or the view is clicked, as observed.
-        let whole = ws.session.selection.iter().any(|p| {
+        // A folder with everything in it picked fills like a picked item, and a folder on the way to something
+        // picked fills dark blue, as in the reference.
+        let folder_full = if kind == ItemKind::Folder {
+            let deep = ws.session.doc.folder_items_deep(id);
+            let picked_n = deep.iter().filter(|i| ws.item_selected(**i)).count();
+            !deep.is_empty() && picked_n == deep.len()
+        } else {
+            false
+        };
+        // The row's own flag drives its eye; the effective one (own flag and the folders above it) drives the
+        // dimming — a visible item inside a hidden folder shows through neither.
+        let shown = ws.session.doc.item_shown(id);
+        let contains_picked = containing.contains(&id);
+        // The whole item picked (from the list or the view, a tool running or not) fills its row bright blue;
+        // a picked face or edge fills its body's row lighter; and every folder containing a picked item fills
+        // dark blue — as in the reference.
+        let on_item = ws.session.selection.iter().any(|p| {
             matches!(*p, Pick::Body { body } if body == id)
                 || matches!(*p, Pick::Sketch { sketch } if sketch == id)
+                || matches!(*p, Pick::Face { body, .. } if body == id)
+                || matches!(*p, Pick::Edge { body, .. } if body == id)
                 || *p == Pick::Plane { plane: id }
                 || *p == Pick::Axis { axis: id }
                 || *p == Pick::Image { image: id }
         });
+        let face_on_item =
+            ws.session.selection.iter().any(|p| matches!(*p, Pick::Face { body, .. } | Pick::Edge { body, .. } if body == id));
+        let whole = on_item && !face_on_item;
         // Hovering a row lights its item up in the view.
         if resp.hovered() {
             row_hover = match kind {
@@ -210,32 +282,45 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
                 ItemKind::Folder => None,
             };
         }
-        if whole {
-            p.rect_filled(row, radius(5), if ws.items_focus { theme::c(0x2e68ff) } else { theme::c(0x454548) });
+        // Measured on the reference (video 2026-11-16): a picked row fills #2b53ba, and a folder on the way to a
+        // picked row fills #2b3b66 — the whole containing chain lights up, at any depth.
+        if on_item {
+            let fill = if face_on_item && !whole { theme::c(0x1e5aa8) } else { theme::c(0x2b53ba) };
+            lp.rect_filled(row, radius(0), fill);
+        } else if folder_full {
+            lp.rect_filled(row, radius(0), theme::c(0x2b53ba));
+        } else if contains_picked {
+            lp.rect_filled(row, radius(0), theme::c(0x2b3b66));
         } else if selected {
-            p.rect_filled(row, radius(5), Tokens::row_selected());
-        } else if resp.hovered() {
-            p.rect_filled(row, radius(5), Tokens::row_hover());
+            lp.rect_filled(row, radius(0), theme::c(0x2b53ba));
+        }
+        // The pointer lays a white veil (alpha 18, fading in and out) over whatever the row already shows: over
+        // nothing it reads as a grey, over a picked row as a lighter blue — as in the reference.
+        let hover_t = if drop_on_this || dragging_this {
+            0.0
+        } else {
+            ui.ctx().animate_value_with_time(ui.scope_id().with(("row-hover", id.0)), if resp.hovered() { 1.0 } else { 0.0 }, 0.12)
+        };
+        if hover_t > 0.0 {
+            lp.rect_filled(row, radius(0), Color32::from_white_alpha((18.0 * hover_t) as u8));
         }
         // While a tool waits for picks in the view, the list goes dim except what it can still take: Mirror and
         // Split Body take more bodies (as observed, 324–334).
         let takes = kind == ItemKind::Body && matches!(ws.tool, Tool::Mirror(_) | Tool::Boolean(_));
         // Measured (s22-002): names #DFDFDF, hidden ones #818181; icons a grey hairline, #9D9D9F or #5F5F5F hidden.
-        let lit = visible && (!waiting || takes) && !dragging_this;
-        let color = if whole && ws.items_focus || drop_on_this {
+        let lit = shown && (!waiting || takes) && !dragging_this;
+        // Hidden names keep their grey even when picked (the eye-crossed row reads as hidden at a glance, as in the
+        // reference), and so does a row a tool can't take right now — a visible row under a hidden folder dims too.
+        let color = if (on_item || drop_on_this) && shown {
             Color32::WHITE
         } else if lit {
             Tokens::text()
         } else {
             theme::c(0x818181)
         };
-        let icon_color = if color == Color32::WHITE {
-            color
-        } else if lit {
-            Tokens::text_dim()
-        } else {
-            theme::c(0x5f5f5f)
-        };
+        // The icon wears the same colour as the name, in every state — white when visible and picked, grey when
+        // hidden — as in the reference.
+        let icon_color = color;
         let icon = match kind {
             ItemKind::Body if ws.session.doc.body(id).is_some_and(|b| b.is_mesh()) => Icon::MeshBody,
             ItemKind::Body => Icon::Body,
@@ -252,14 +337,15 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
         let open = kind == ItemKind::Folder && ws.items_expanded.contains(&id);
         if kind == ItemKind::Folder {
             icons::paint(
-                &p,
-                Rect::from_center_size(pos2(r.left() + 25.0 + indent, row.center().y), vec2(10.0, 10.0)),
+                &lp,
+                Rect::from_center_size(pos2(r.left() + 15.0 + indent, row.center().y), vec2(8.0, 8.0)),
                 if open { Icon::ChevronDown } else { Icon::ChevronRight },
                 color,
             );
         }
-        // Measured: 14 px icons centred 49 px in, names from 66 px.
-        icons::paint(&p, Rect::from_center_size(pos2(r.left() + 49.0 + indent, row.center().y), vec2(19.0, 19.0)), icon, icon_color);
+        // Measured: 19 px icons centred 33.5 px in, names from 48 px — the chevron (8 px, centred 15) and the
+        // icon leave the same 5 px gap either side of the icon, so the row reads as three even columns.
+        icons::paint(&lp, Rect::from_center_size(pos2(r.left() + 33.5 + indent, row.center().y), vec2(19.0, 19.0)), icon, icon_color);
         let editing = matches!(&ws.renaming, Some((Some(rid), ..)) if *rid == id);
         if editing {
             if let Some((_, text, focus)) = &mut ws.renaming {
@@ -280,16 +366,17 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
                     let new = text.clone();
                     ws.renaming = None;
                     let _ = ws.run("rename", json!({ "item": id.0, "name": new }));
+                    ui.ctx().request_discard("an item was renamed");
                 } else if esc {
                     ws.renaming = None;
                 }
             }
         } else {
             // Long names end in "…" before the eye, as in the reference (s36), instead of running into the viewport.
-            let x = r.left() + 66.0 + indent;
+            let x = r.left() + 48.0 + indent;
             let eye_room = if touch { 52.0 } else { 32.0 };
             let shown = theme::elide(&p, &name, theme::body(name_px), row.right() - eye_room - x);
-            p.text(pos2(x, row.center().y), Align2::LEFT_CENTER, shown, theme::body(name_px), color);
+            lp.text(pos2(x, row.center().y), Align2::LEFT_CENTER, shown, theme::body(name_px), color);
         }
         if resp.secondary_clicked() {
             ws.item_menu = resp.interact_pointer_pos().map(|pos| (id, pos));
@@ -304,14 +391,19 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
             (e, e)
         };
         let eye_resp = ui.interact(eye_hit, ui.scope_id().with(("eye", id.0)), Sense::click());
-        if touch || !visible || resp.hovered() || eye_resp.hovered() {
-            // A hidden row's eye stays dim, as in the reference (s20-030).
-            let tint = if visible || eye_resp.hovered() { Tokens::text_dim() } else { egui::Color32::from_rgb(0x3e, 0x3d, 0x3d) };
-            icons::paint(&p, eye, if visible { Icon::Eye } else { Icon::EyeOff }, tint);
+        // The eye is the row's own flag — a folder's too, never what its children decide. Hidden rows always
+        // carry it; a visible row shows it on hover, to hide.
+        let own_visible = if kind == ItemKind::Folder { ws.session.doc.folder(id).is_some_and(|f| f.visible) } else { visible };
+        if touch || !own_visible || resp.hovered() || eye_resp.hovered() {
+            // The eye pairs with the name's grey when the row is hidden, so it reads at a glance (s20-030, dimmed).
+            let tint = if own_visible || eye_resp.hovered() { Tokens::text_dim() } else { theme::c(0x818181) };
+            icons::paint(&lp, eye, if own_visible { Icon::Eye } else { Icon::EyeOff }, tint);
         }
-        let on_chevron = kind == ItemKind::Folder && resp.interact_pointer_pos().is_some_and(|q| q.x < r.left() + 36.0 + indent);
+        let on_chevron = kind == ItemKind::Folder && resp.interact_pointer_pos().is_some_and(|q| q.x < r.left() + 24.0 + indent);
         if eye_resp.clicked() {
             let _ = ws.run("show_hide", json!({ "items": [id.0] }));
+            // show_hide toggles, so it must not re-fire on a discarded pass; one repaint paints it in.
+            ui.ctx().request_repaint();
         } else if resp.clicked() && on_chevron {
             if !ws.items_expanded.remove(&id) {
                 ws.items_expanded.insert(id);
@@ -347,19 +439,33 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
                 if open {
                     let all: Vec<Pick> = (0..n as u32).map(|entity| Pick::SketchEntity { sketch: id, entity }).collect();
                     let _ = ws.run("select", json!({ "picks": all }));
+                    ui.ctx().request_repaint();
                 }
                 open
             });
             if !opened {
                 let _ = ws.run("select", json!({ "picks": picks, "add": shift }));
                 ws.predict_tool();
+                // The rows above the picked one were painted before the pick landed; one repaint brings the whole
+                // list in with the pick (discarding the pass would run the scene's UI pass twice per click).
+                ui.ctx().request_repaint();
             }
             ws.items_focus = true;
         }
         if resp.double_clicked() {
             ws.renaming = Some((Some(id), name.clone(), true));
+            ui.ctx().request_discard("a row switched to renaming");
         }
-        y += row_h;
+    }
+    // A click on the empty space under the rows deselects, like a click on nothing in the view.
+    let y_end = rows_top + n_rows as f32 * row_h - ws.items_scroll;
+    let empty = Rect::from_min_max(pos2(r.left() + 4.0, y_end.min(footer_y - 26.0)), pos2(r.right() - 4.0, footer_y - 26.0));
+    if empty.height() > 0.0 && ws.items_dragging.is_none() {
+        let resp = ui.interact(empty, ui.scope_id().with("items-empty"), Sense::click());
+        if resp.clicked() {
+            ws.session.selection.clear();
+            ui.ctx().request_repaint();
+        }
     }
     // The dragged row follows the pointer, see-through; letting go puts it in the folder under it, or takes it out of
     // its folder anywhere else in the list.
@@ -376,12 +482,13 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
             fg.text(pos2(r.left() + 66.0, ghost.center().y), Align2::LEFT_CENTER, name, theme::body(14.0), Color32::from_white_alpha(150));
         }
         if let Some(Drop::Between { y, depth, .. }) = drop {
-            let a = pos2(r.left() + 9.0 + 13.0 * depth as f32, y);
-            p.line_segment([a, pos2(r.right() - 9.0, y)], Stroke::new(2.0, theme::c(0x2e68ff)));
+            let a = pos2(r.left() + 11.0 + 13.0 * depth as f32, y);
+            lp.line_segment([a, pos2(r.right() - 9.0, y)], Stroke::new(2.0, theme::c(0x2e68ff)));
         }
         if ui.input(|i| i.pointer.any_released()) {
             ws.items_dragging = None;
             let doc = &ws.session.doc;
+            let moved = drop.is_some();
             match drop {
                 // The folder stays as it was (closed, as observed).
                 Some(Drop::Onto(t)) if doc.folder(t).is_some() => {
@@ -397,6 +504,11 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
                     let _ = ws.run("place_item", json!({ "item": item.0, "folder": id(folder), "after": id(after), "before": id(before) }));
                 }
                 None => {}
+            }
+            // Moving an item makes or reorders folders; those runs aren't safe to re-fire on a discarded pass, so
+            // one repaint paints the new tree in.
+            if moved {
+                ui.ctx().request_repaint();
             }
         }
     }
@@ -734,6 +846,18 @@ mod rename_tests {
             type_name(&ctx, &mut ws, "Lid");
             assert!(names(&ws).iter().any(|n| n == "Lid"), "row {i}: renamed, names now {:?}", names(&ws));
         }
+    }
+
+    /// A click on the empty space under the rows clears the selection, like a click on nothing in the view.
+    #[test]
+    fn click_below_the_rows_clears_the_selection() {
+        let (ctx, mut ws, row) = setup();
+        let at = row(&ws, 0);
+        click(&ctx, &mut ws, at, PointerButton::Primary);
+        assert!(ws.session.selection.iter().any(|p| p.item().is_some()), "a row's click picks its item");
+        let empty_at = row(&ws, 5);
+        click(&ctx, &mut ws, empty_at, PointerButton::Primary);
+        assert!(ws.session.selection.iter().all(|p| p.item().is_none()), "the empty space below the rows clears the selection");
     }
 
     /// #46: a double click on a body's row renames it; on a sketch's row it opens the sketch, and renaming stays

@@ -1212,23 +1212,25 @@ fn paint_dark(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                 pen.line(&[(x + ux * r, y + uy * r), (nx - ux * r, ny - uy * r)]);
             }
         }
-        // A solid almond with a dark pupil, as in the reference's Items list (s20-030); hidden ones are struck through
-        // with the stroke cut out of the eye.
+        // The eye, in the line style of the set: a wide, flat almond (19×9.6 on the 24 grid) with a stroked pupil;
+        // the hidden ones are struck through.
         Eye | EyeOff => {
-            let lens = |cy: f32, a0: f32| {
-                (0..=12).map(move |i| {
-                    let a = (a0 + 132.2 * i as f32 / 12.0).to_radians();
-                    (12.0 + 10.94 * a.cos(), cy + 10.94 * a.sin())
+            let arc_pts = |cx: f32, cy: f32, r: f32, a0: f32, a1: f32| {
+                (0..=24).map(move |i| {
+                    let a = (a0 + (a1 - a0) * i as f32 / 24.0).to_radians();
+                    (cx + r * a.cos(), cy + r * a.sin())
                 })
             };
-            let almond: Vec<(f32, f32)> = lens(16.44, 203.9).chain(lens(7.56, 23.9)).collect();
-            pen.fill(&almond, pen.stroke.color);
-            let cut = theme::c(0x232325);
-            pen.p.circle_filled(pen.at(12.0, 12.0), 3.0 * pen.s, cut);
+            // Two arcs through the corners (2.5, 12) and (21.5, 12), bulging to y 7.2 and y 16.8 — the lower one
+            // traced back, so the loop closes on itself without a chord across the middle.
+            let upper = arc_pts(12.0, 19.0, 11.8, 216.4, 323.6);
+            let lower = arc_pts(12.0, 5.0, 11.8, 143.6, 36.4).rev();
+            let almond: Vec<(f32, f32)> = upper.chain(lower).collect();
+            pen.closed(&almond);
+            // Both states carry the pupil; the hidden ones add the slash over it.
+            pen.circle(12.0, 12.0, 3.2);
             if icon == EyeOff {
-                let slash = |w: f32, c: Color32| pen.p.line_segment([pen.at(5.0, 4.5), pen.at(19.0, 19.5)], Stroke::new(w * pen.s, c));
-                slash(3.0, cut);
-                slash(1.0, pen.stroke.color);
+                pen.line(&[(3.0, 3.0), (21.0, 21.0)]);
             }
         }
         Tablet => {

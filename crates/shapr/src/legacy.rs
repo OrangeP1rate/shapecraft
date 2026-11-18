@@ -111,6 +111,8 @@ pub(crate) fn read(c: &rusqlite::Connection, p: &mut Project) -> Result<()> {
             column(c, "Shapes", "Hidden", "0"),
             column(c, "Shapes", "ShapeName", "''")
         );
+        // Shapr3D itself lists a solid from those releases as "Body".
+        let unnamed = if crate::has_column(c, "Shapes", "ShapeName") { None } else { Some("Body".to_string()) };
         let mut q = c.prepare(&sql)?;
         let rows = q.query_map([], |r| Ok((text(r.get(0)?), blob(r.get(1)?), r.get::<_, Option<bool>>(2)?, text(r.get(3)?))))?;
         for (id, data, hidden, name) in rows.flatten().take(100_000) {
@@ -130,7 +132,7 @@ pub(crate) fn read(c: &rusqlite::Connection, p: &mut Project) -> Result<()> {
                     import: None,
                     folder: folder.clone(),
                     step: None,
-                    name: Some(name.clone()).filter(|n| !n.is_empty()).or(solid.name),
+                    name: Some(name.clone()).filter(|n| !n.is_empty()).or(solid.name).or_else(|| unnamed.clone()),
                     item_name_id: Some(name_id),
                     brep: solid.brep,
                     color,

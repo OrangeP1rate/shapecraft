@@ -667,7 +667,14 @@ declare_class!(
 
             let delta = {
                 let (x, y) = unsafe { (event.scrollingDeltaX(), event.scrollingDeltaY()) };
-                if unsafe { event.hasPreciseScrollingDeltas() } {
+                // ShapeCraft patch: a mouse with smooth scrolling (Logitech's and other drivers) reports precise
+                // deltas like a trackpad, but without a gesture phase. Trackpad and Magic Mouse scrolls always
+                // carry one (or a momentum phase after the fingers lift), so a precise scroll with neither is a
+                // wheel: report it in lines (50 points a line) so apps zoom with it instead of orbiting.
+                let gesture = unsafe { event.phase().0 != 0 || event.momentumPhase().0 != 0 };
+                if unsafe { event.hasPreciseScrollingDeltas() } && !gesture {
+                    MouseScrollDelta::LineDelta((x / 50.0) as f32, (y / 50.0) as f32)
+                } else if unsafe { event.hasPreciseScrollingDeltas() } {
                     let delta = LogicalPosition::new(x, y).to_physical(self.scale_factor());
                     MouseScrollDelta::PixelDelta(delta)
                 } else {

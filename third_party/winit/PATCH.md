@@ -22,3 +22,7 @@ iOS (same patch, later): the `pointers` module moved to `src/platform/pointers.r
 - `src/platform_impl/ios/window.rs`: `inner_size` is the whole view rather than the safe area. eframe sizes the
   render surface from it while the Metal layer covers the screen, so the safe-area size stretched the picture
   vertically (1.21x on the iPhone Duo). The app keeps clear of the safe area itself.
+
+macOS (later, #81): `src/platform_impl/macos/view.rs` `scroll_wheel` reports a precise scroll that has neither a
+gesture phase nor a momentum phase as a `LineDelta` (50 points a line). That is a mouse wheel with a smooth-scrolling
+driver; trackpads and the Magic Mouse always send a phase. Without it the wheel looked like a trackpad and orbited.

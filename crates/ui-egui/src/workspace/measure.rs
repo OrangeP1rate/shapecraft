@@ -297,9 +297,12 @@ pub fn card(ws: &mut Workspace, ui: &mut Ui) {
         p.galley(pos2(r.left() + 16.0, y - 8.0), g, Tokens::text_dim());
         y += gh + 14.0;
     }
+    // Where the pin and bin buttons are this frame (tests click them).
+    let mut pins = Vec::new();
     for (i, m) in unpinned.iter().enumerate() {
         measured_row(&p, r, y, m);
         let pin = Rect::from_center_size(pos2(r.right() - 26.0, y), vec2(26.0, 26.0));
+        pins.push(pin);
         let resp = ui.interact(pin, ui.scope_id().with(("measure-pin", i)), Sense::click());
         icons::paint(&p, pin.shrink(3.0), Icon::Pin, if resp.hovered() { Tokens::text_strong() } else { Tokens::text_dim() });
         if resp.clicked() {
@@ -315,20 +318,23 @@ pub fn card(ws: &mut Workspace, ui: &mut Ui) {
         p.galley(pos2(r.left() + 16.0, y - 8.0), g, Tokens::text_dim());
     }
     let mut remove = None;
+    let mut bins = Vec::new();
     for (i, m) in ws.pinned.iter().enumerate() {
         if y > r.bottom() - 20.0 {
             break;
         }
         let row = Rect::from_min_max(pos2(r.left() + 8.0, y - 22.0), pos2(r.right() - 8.0, y + 22.0));
-        let resp = ui.interact(row, ui.scope_id().with(("measure-pinned", i)), Sense::hover());
-        if resp.hovered() {
+        // The bin is always there to click, and shows while the pointer is anywhere on the row: asking the row's
+        // own hover lost it as soon as the pointer reached the bin on top of it, so its click never landed (#82).
+        let bin = Rect::from_center_size(pos2(r.right() - 26.0, y), vec2(22.0, 22.0));
+        let bin_resp = ui.interact(bin, ui.scope_id().with(("measure-unpin", i)), Sense::click());
+        bins.push(bin);
+        if ui.rect_contains_pointer(row) {
             p.rect_filled(row, radius(6), theme::c(0x343336));
-            let bin = Rect::from_center_size(pos2(r.right() - 26.0, y), vec2(22.0, 22.0));
-            let bin_resp = ui.interact(bin, ui.scope_id().with(("measure-unpin", i)), Sense::click());
             icons::paint(&p, bin.shrink(3.0), Icon::Delete, if bin_resp.hovered() { Tokens::text_strong() } else { Tokens::text_dim() });
-            if bin_resp.clicked() {
-                remove = Some(i);
-            }
+        }
+        if bin_resp.clicked() {
+            remove = Some(i);
         }
         measured_row(&p, r, y, m);
         y += 46.0;
@@ -336,6 +342,10 @@ pub fn card(ws: &mut Workspace, ui: &mut Ui) {
     if let Some(i) = remove {
         ws.pinned.remove(i);
     }
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(egui::Id::NULL.with("measure-pins"), pins);
+        d.insert_temp(egui::Id::NULL.with("measure-bins"), bins);
+    });
 }
 
 fn measured_row(p: &egui::Painter, r: Rect, y: f32, m: &Measured) {
@@ -440,5 +450,40 @@ mod point_tests {
         frame(&ctx, &mut ws, Vec::new());
         assert_eq!(ws.measure_points.len(), 1, "moved, not a new point");
         assert!(ws.measure_points[0].distance(corner) < 0.05, "moved onto the corner: {:?}", ws.measure_points[0]);
+    }
+
+    /// A pinned measurement comes off again with its bin (#82): the bin stays under the pointer once it's there.
+    #[test]
+    fn a_pinned_value_comes_off_with_its_bin() {
+        let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "M");
+        let mut ws = Workspace::new(session, crate::settings::Settings::default());
+        ws.session.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        ws.session.execute("rectangle", &json!({"corner": [0, 0], "opposite": [10, 10]})).unwrap();
+        let k = ws.session.active_sketch.unwrap().0;
+        let out = ws.session.execute("extrude", &json!({"sketch": k, "region": 0, "distance": 5})).unwrap();
+        let body = out.value["body"].as_u64().unwrap();
+        ws.session.execute("select", &json!({"picks": [{"kind": "body", "body": body}]})).unwrap();
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut ws, Vec::new());
+        ws.ui_action(super::super::toolbar::UiAction::Measure);
+        for _ in 0..3 {
+            frame(&ctx, &mut ws, Vec::new());
+        }
+        let rects = |ctx: &egui::Context, key: &str| ctx.data(|d| d.get_temp::<Vec<Rect>>(egui::Id::NULL.with(key))).unwrap_or_default();
+        let pin = rects(&ctx, "measure-pins").first().copied().expect("a value to pin").center();
+        frame(&ctx, &mut ws, vec![egui::Event::PointerMoved(pin)]);
+        frame(&ctx, &mut ws, vec![button(pin, true)]);
+        frame(&ctx, &mut ws, vec![button(pin, false)]);
+        frame(&ctx, &mut ws, Vec::new());
+        assert_eq!(ws.pinned.len(), 1, "pinned");
+        let bin = rects(&ctx, "measure-bins").first().copied().expect("the pinned row's bin").center();
+        // Onto the row first, then onto the bin, as a hand moves.
+        frame(&ctx, &mut ws, vec![egui::Event::PointerMoved(bin - vec2(120.0, 0.0))]);
+        frame(&ctx, &mut ws, vec![egui::Event::PointerMoved(bin)]);
+        frame(&ctx, &mut ws, Vec::new());
+        frame(&ctx, &mut ws, vec![button(bin, true)]);
+        frame(&ctx, &mut ws, vec![button(bin, false)]);
+        frame(&ctx, &mut ws, Vec::new());
+        assert!(ws.pinned.is_empty(), "the bin took it off");
     }
 }

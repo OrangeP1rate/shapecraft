@@ -259,3 +259,27 @@ fn step_parts_are_numbered_imported_and_left_unselected() {
     assert!(s.execute("import_file", &json!({"path": path, "heal": 3})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A long import says what it is doing: the stage it is in and how many of its steps are done, for the screen
+/// that waits for it.
+#[test]
+fn an_import_reports_its_stages() {
+    let dir = std::env::temp_dir().join(format!("sc-progress-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("two.step");
+    let mut a = session();
+    for (x0, x1) in [(0, 10), (20, 30)] {
+        a.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        a.execute("rectangle", &json!({"corner": [x0, 0], "opposite": [x1, 10]})).unwrap();
+        a.execute("extrude", &json!({"sketch": a.active_sketch.unwrap().0, "region": 0, "distance": 4, "result": "new"})).unwrap();
+    }
+    a.execute("export_step", &json!({"path": file})).unwrap();
+    let progress = std::sync::Arc::new(crate::progress::Progress::default());
+    let mut s = session();
+    s.progress = Some(progress.clone());
+    s.execute("import_file", &json!({"path": file})).unwrap();
+    let (text, done, total) = progress.snapshot();
+    assert_eq!(text, "Repairing and adding the parts…");
+    assert_eq!((done, total), (2, 2), "both parts counted");
+    let _ = std::fs::remove_dir_all(&dir);
+}

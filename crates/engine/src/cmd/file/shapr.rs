@@ -12,8 +12,10 @@ use crate::{EngineError, Params, Result, Session};
 /// A Shapr3D project's current solids as bodies, named and foldered like its Items list.
 pub(super) fn import_shapr(s: &mut Session, path: &std::path::Path) -> Result<Value> {
     let bad = |e: String| EngineError::BadParams(e);
+    s.stage("Reading the project file…", 0);
     let bytes = read_capped(path)?;
     let file = shapecraft_shapr::ShaprFile::parse(&bytes).map_err(|e| bad(e.to_string()))?;
+    s.stage("Reading its bodies, names and history…", 0);
     let project = shapecraft_shapr::Project::read(&file).map_err(|e| bad(e.to_string()))?;
     if project.bodies.len() > 10_000 {
         return Err(bad("that project has too many bodies to import".into()));
@@ -35,6 +37,7 @@ pub(super) fn import_shapr(s: &mut Session, path: &std::path::Path) -> Result<Va
     let mut deferred = Vec::new();
     // The kernel's work on each body (rebuilding, triangulating, measuring) is most of an import's time and each
     // body's is its own: done ahead, on several cores.
+    s.stage("Rebuilding the bodies…", project.bodies.len() as u64);
     let mut ready = prepare(s, &project.bodies, linking);
     let mut prints = std::collections::HashMap::new();
     let mut sketch_ids = Vec::new();
@@ -48,7 +51,9 @@ pub(super) fn import_shapr(s: &mut Session, path: &std::path::Path) -> Result<Va
     let mut order: Vec<(usize, Item)> = project.bodies.iter().enumerate().map(|(i, b)| (at(b.step), Ok((i, b)))).collect();
     order.extend(project.sketches.iter().take(10_000).map(|k| (at(project.sketch_step(k.id)), Err(k))));
     order.sort_by_key(|(i, _)| *i);
+    s.stage("Adding bodies and sketches…", order.len() as u64);
     for (_, item) in order {
+        s.progress_step();
         match item {
             Ok((index, body)) => {
                 let op = body.step.and_then(|n| project.steps.iter().find(|st| st.node == n)).map(|st| st.op.as_str());
@@ -373,7 +378,8 @@ fn prepare(s: &Session, bodies: &[shapecraft_shapr::Body], prints: bool) -> Vec<
     use std::sync::atomic::{AtomicUsize, Ordering};
     let kernel: &dyn shapecraft_kernel::Kernel = s.kernel.as_ref();
     let deflection = shapecraft_doc::project::deflection();
-    let build = |body: &shapecraft_shapr::Body| -> shapecraft_kernel::Result<Ready> {
+    let progress = s.progress.clone();
+    let build_body = |body: &shapecraft_shapr::Body| -> shapecraft_kernel::Result<Ready> {
         let (shape, faces) = build_shape(kernel, &body.brep)?;
         let mesh = kernel.tessellate(&shape, deflection)?;
         let print = (prints && body.step.is_some())
@@ -382,6 +388,13 @@ fn prepare(s: &Session, bodies: &[shapecraft_shapr::Body], prints: bool) -> Vec<
             })
             .flatten();
         Ok(Ready { shape, mesh, print, faces })
+    };
+    let build = |body: &shapecraft_shapr::Body| {
+        let built = build_body(body);
+        if let Some(p) = &progress {
+            p.step();
+        }
+        built
     };
     let wanted = |body: &shapecraft_shapr::Body| !(body.mesh.is_some() && body.brep.faces.is_empty());
     let mut out: Vec<Option<shapecraft_kernel::Result<Ready>>> = bodies.iter().map(|_| None).collect();

@@ -243,12 +243,15 @@ fn import_any(s: &mut Session, p: &Params) -> Result<Value> {
         "step" | "stp" => import_step(s, &path, heal_options(p)?),
         "shapr" => import_shapr(s, &path),
         "x_t" | "x_b" | "xmt_txt" | "xmt_bin" => {
+            s.stage("Reading the file…", 0);
             let bytes = read_capped(&path)?;
             let file = shapecraft_xt::parse(&bytes).map_err(|e| bad(e.to_string()))?;
             let bodies = shapecraft_xt::bodies(&file).map_err(|e| bad(e.to_string()))?;
             let mut ids = Vec::new();
             let mut cut = 0;
+            s.stage("Building the bodies…", bodies.len() as u64);
             for (k, b) in bodies.into_iter().enumerate() {
+                s.progress_step();
                 let shape = healed(s, &s.kernel.from_brep(&b.brep)?, heal_options(p)?, &mut cut)?;
                 let name = b.name.unwrap_or_else(|| format!("Imported {:02}", k + 1));
                 ids.extend(add_bodies(s, vec![shape], Some(&name))?);
@@ -258,11 +261,14 @@ fn import_any(s: &mut Session, p: &Params) -> Result<Value> {
             Ok(json!({ "bodies": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "folder": folder, "repair_cut": cut }))
         }
         "iges" | "igs" => {
+            s.stage("Reading the IGES file…", 0);
             let shapes = s.kernel.read_iges(&path)?;
             let mut ids = Vec::new();
             let mut cut = 0;
             let heal = heal_options(p)?;
+            s.stage("Repairing and adding the shapes…", shapes.len() as u64);
             for (k, shape) in shapes.into_iter().enumerate() {
+                s.progress_step();
                 let shape = healed(s, &shape, heal, &mut cut)?;
                 let name = format!("Imported {:02}", k + 1);
                 ids.extend(add_bodies(s, vec![shape], Some(&name))?);
@@ -366,6 +372,7 @@ fn sniff(path: &std::path::Path) -> Option<String> {
 /// A STEP file's parts as bodies with the names and colors the file gives them; parts inside assemblies go into an
 /// Items folder per assembly ("Engine / Piston" for nested ones).
 fn import_step(s: &mut Session, path: &std::path::Path, heal: shapecraft_kernel::HealOptions) -> Result<Value> {
+    s.stage("Reading the STEP file…", 0);
     let parts = s.kernel.read_step_parts(path)?;
     if parts.len() > 10_000 {
         return Err(EngineError::BadParams("that file has too many parts to import".into()));
@@ -376,7 +383,9 @@ fn import_step(s: &mut Session, path: &std::path::Path, heal: shapecraft_kernel:
     // Everything lands in a folder named after the file, parts of assemblies in folders below it.
     let file = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
     // Parts are "Imported 01", "02"… in each file, whatever the file calls them.
+    s.stage("Repairing and adding the parts…", parts.len() as u64);
     for (k, (read, mut info)) in parts.into_iter().enumerate() {
+        s.progress_step();
         let shape = healed(s, &read, heal, &mut cut)?;
         let face_colors = repaired_face_colors(s, &read, &shape, &info.face_colors);
         let name = format!("Imported {:02}", k + 1);

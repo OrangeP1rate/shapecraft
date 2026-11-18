@@ -403,12 +403,17 @@ fn current_layout(d: Value) -> Value {
         let detail: Vec<Value> = r.iter().skip(1).enumerate().map(|(k, v)| if k >= 2 { own(v, 0) } else { v.clone() }).collect();
         changed.push(Value::Array(vec![Value::from(pid), Value::Array(vec![Value::from(true), Value::Array(detail)])]));
     }
-    // A partition the step used up with no record of its own.
+    // A partition with no record of its own: used up by the step (mark -1), or one it read and left as it was (a
+    // pattern's or a copy's source), which the current layout lists as unchanged.
     for p in parts.iter().filter_map(Value::as_array) {
-        if let (Some(pid), Some(-1)) = (p.first().and_then(Value::as_i64), p.get(1).and_then(Value::as_i64))
-            && seen.insert(pid)
-        {
+        let (Some(pid), mark) = (p.first().and_then(Value::as_i64), p.get(1).and_then(Value::as_i64)) else { continue };
+        if !seen.insert(pid) {
+            continue;
+        }
+        if mark == Some(-1) {
             changed.push(Value::Array(vec![Value::from(pid), Value::Array(vec![Value::from(true), Value::Array(vec![no(), no()])])]));
+        } else {
+            changed.push(Value::Array(vec![Value::from(pid), no()]));
         }
     }
     let frames = inner.get(1).cloned().unwrap_or_else(|| Value::Array(Vec::new()));
@@ -1419,6 +1424,28 @@ fn name_from_calls(
     }
     resolve_transformed_items(c, steps, items, folders, gone, bodies)?;
     name_by_topology(c, steps, items, gone, bodies)?;
+    // A copy a step made without an item of its own (a pattern's copies) is listed under the body it was copied
+    // from: the one named body the same step worked on.
+    for pids in calls.values() {
+        let named: Vec<usize> = (0..bodies.len())
+            .filter(|&i| bodies[i].item_name_id.is_some() && bodies[i].partition.is_some_and(|p| pids.contains(&p)))
+            .collect();
+        let mut sources: Vec<i64> = named.iter().filter_map(|&i| bodies[i].item_name_id).collect();
+        sources.sort_unstable();
+        sources.dedup();
+        let ([_], Some(&from)) = (sources.as_slice(), named.first()) else { continue };
+        let (name, item, folder, hidden, color) =
+            (bodies[from].name.clone(), bodies[from].item_name_id, bodies[from].folder.clone(), bodies[from].hidden, bodies[from].color);
+        for b in
+            bodies.iter_mut().filter(|b| b.item_name_id.is_none() && b.name.is_none() && b.partition.is_some_and(|p| pids.contains(&p)))
+        {
+            b.name = name.clone();
+            b.item_name_id = item;
+            b.folder = folder.clone();
+            b.hidden = hidden;
+            b.color = b.color.or(color);
+        }
+    }
     Ok(())
 }
 

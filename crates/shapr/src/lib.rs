@@ -296,6 +296,8 @@ pub enum SketchCurve {
 pub struct Item {
     /// The `HistoryNames` id the item's metadata hangs off.
     pub name_id: i64,
+    /// The imported body the item names, through the file's own chain, when it has one.
+    pub import_body: Option<i64>,
     pub name: String,
     /// Folder names from the top ("box.step"), not counting the root.
     pub folder: Vec<String>,
@@ -1033,43 +1035,38 @@ fn items(c: &rusqlite::Connection, folders: &[Folder], item_by_meta: &mut std::c
         let rgb = (rgba >> 8) as u32 & 0xFF_FFFF;
         (rgb != 0xA0_A0A4).then(|| [(rgb >> 16) as f32 / 255.0, ((rgb >> 8) & 0xFF) as f32 / 255.0, (rgb & 0xFF) as f32 / 255.0])
     };
-    // Showing or hiding a body later (a move, a split) puts its visibility on a new anchor of that later step, which
-    // points at the same body name as the item's own anchor: the newest visibility set on any of them counts.
-    let target = |name: i64| names.get(&name).and_then(|a| a["nameToAnchor"].as_i64());
-    let mut shown: BTreeMap<i64, (i64, bool)> = BTreeMap::new(); // anchored name → (metadata id, hidden)
-    for (name_id, metas) in &by_meta {
-        let Some(t) = target(*name_id) else { continue };
-        for m in metas.iter().filter(|m| m.1 == 1) {
-            if shown.get(&t).is_none_or(|e| e.0 < m.0) {
-                shown.insert(t, (m.0, m.2.trim() == "1"));
-            }
-        }
+    // A rename adds a name row on the anchor of the old one, and a copy of a body adds a
+    // nameless row beside the named one: the item is the anchor, its display the newest name
+    // on it, and its folder the tree entry of any of its rows.
+    let mut by_anchor: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    for name_id in by_meta.keys() {
+        let anchor = names.get(name_id).and_then(|d| d["nameToAnchor"].as_i64()).unwrap_or(*name_id);
+        by_anchor.entry(anchor).or_default().push(*name_id);
     }
     let mut out = Vec::new();
-    for (name_id, metas) in &by_meta {
-        for m in metas {
-            item_by_meta.insert(m.0.to_string(), *name_id);
+    for rows in by_anchor.values() {
+        let metas: Vec<(i64, i64, String)> = rows.iter().flat_map(|r| by_meta.get(r).cloned().unwrap_or_default()).collect();
+        for m in &metas {
+            item_by_meta.insert(m.0.to_string(), rows[0]);
         }
-        let Some(name) = metas.iter().filter(|m| m.1 == 0).max_by_key(|m| m.0).map(|m| m.2.clone()) else { continue };
-        let own = metas.iter().filter(|m| m.1 == 1).max_by_key(|m| m.0).map(|m| (m.0, m.2.trim() == "1"));
-        let later = target(*name_id).and_then(|t| shown.get(&t).copied());
-        let own_hidden = match (own, later) {
-            (Some(o), Some(l)) => {
-                if l.0 > o.0 {
-                    l.1
-                } else {
-                    o.1
-                }
-            }
-            (o, l) => o.or(l).is_some_and(|v| v.1),
+        // The item speaks with its newest name row: the one the newest display metadata hangs off.
+        let Some(display_row) = metas
+            .iter()
+            .filter(|m| m.1 == 0)
+            .max_by_key(|m| m.0)
+            .and_then(|newest| rows.iter().copied().find(|r| by_meta.get(r).is_some_and(|ms| ms.iter().any(|m| m.0 == newest.0))))
+        else {
+            continue;
         };
-        let color = wrapped(*name_id).and_then(|w| materials.get(&w)).and_then(|m| colour(m.1));
+        let Some(name) = metas.iter().filter(|m| m.1 == 0).max_by_key(|m| m.0).map(|m| m.2.clone()) else { continue };
+        let own_hidden = metas.iter().filter(|m| m.1 == 1).max_by_key(|m| m.0).is_some_and(|m| m.2.trim() == "1");
+        let color = wrapped(display_row).and_then(|w| materials.get(&w)).and_then(|m| colour(m.1));
         let (folder, hidden) = folders
             .iter()
             .find(|f| f.children.iter().any(|(id, ty)| *ty == 6 && metas.iter().any(|m| m.0.to_string() == *id)))
             .and_then(|f| paths.get(&f.id).cloned())
             .unwrap_or_default();
-        out.push(Item { name_id: *name_id, name, folder, hidden: hidden || own_hidden, color });
+        out.push(Item { name_id: display_row, import_body: None, name, folder, hidden: hidden || own_hidden, color });
     }
     Ok(out)
 }
@@ -1318,10 +1315,12 @@ fn name_from_calls(
     // The item each imported body is, named through the file's own chain (#66), and which imported body each
     // partition an import step made is: an import's bodies need not line up with its anchors one by one.
     let chained = imported_items(c, items)?;
-    let import_of: BTreeMap<i64, i64> = import_slots(c, steps)?.into_iter().filter_map(|(id, pid)| Some((pid?, id))).collect();
+    let pairs = import_slots(c, steps)?;
+    let import_of: BTreeMap<i64, i64> = pairs.iter().filter_map(|(id, pid)| pid.map(|pid| (pid, *id))).collect();
     // By position only an item the chain gives no body.
     let chained_ids: std::collections::HashSet<i64> = chained.values().map(|i| i.name_id).collect();
     let mut claimed = std::collections::HashSet::new();
+    let mut weak = std::collections::HashSet::new(); // partitions an inheritance bound
     let mut item_of: BTreeMap<i64, (Option<i64>, Option<Item>)> = BTreeMap::new(); // partition → (creating step, item)
     for step in steps {
         let Some(pids) = calls.get(&step.node) else { continue };
@@ -1333,6 +1332,7 @@ fn name_from_calls(
                 if claimed.insert(*pid)
                     && let Some((creator, item)) = &inherited
                 {
+                    weak.insert(*pid);
                     item_of.insert(*pid, (*creator, item.clone()));
                     if let Some(b) = bodies.iter_mut().find(|b| b.partition == Some(*pid)) {
                         b.step = *creator;
@@ -1375,7 +1375,151 @@ fn name_from_calls(
             k += 1;
         }
     }
-    // Bodies we kept a copy of: their step anchors their item.
+    // A Move step that copies a body names the copy itself: the names its call created belong
+    // to the partitions the step brought in, matched by the size they keep from the body they
+    // copied.
+    let mut created: BTreeMap<i64, Vec<i64>> = BTreeMap::new(); // step node → name ids
+    if has_table(c, "HistoryNames") {
+        let mut q = c.prepare("SELECT NameID, Data FROM HistoryNames WHERE Type IN (18, 19)")?;
+        for (id, data) in q.query_map([], |r| Ok((r.get::<_, i64>(0)?, text(r.get(1)?))))?.flatten().take(1_000_000) {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) else { continue };
+            if let Some(node) = v["callKey"]["nodeID"].as_i64() {
+                created.entry(node).or_default().push(id);
+            }
+        }
+    }
+    let mut boxes: BTreeMap<i64, [f64; 3]> = BTreeMap::new();
+    for b in bodies.iter().filter_map(|b| Some((b.partition?, &b.brep))) {
+        let (mut lo, mut hi) = ([f64::MAX; 3], [-f64::MAX; 3]);
+        for v in &b.1.vertices {
+            for (k, c) in [(0usize, v.x), (1, v.y), (2, v.z)] {
+                lo[k] = lo[k].min(c);
+                hi[k] = hi[k].max(c);
+            }
+        }
+        if lo[0] <= hi[0] {
+            boxes.insert(b.0, [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]);
+        }
+    }
+    let box_of = |pid: i64| boxes.get(&pid).copied();
+    let near = |a: [f64; 3], b: [f64; 3]| (a[0] - b[0]).abs() < 0.5 && (a[1] - b[1]).abs() < 0.5 && (a[2] - b[2]).abs() < 0.5;
+    let mut seen = std::collections::HashSet::new();
+    for step in steps {
+        let Some(rows) = created.get(&step.node) else { continue };
+        let Some(pids) = calls.get(&step.node) else { continue };
+        // The partitions the step brought in: its call's that nothing had seen before it and
+        // that the import pairing doesn't know (the delta-moves of imported bodies aren't
+        // copies).
+        let outputs: Vec<i64> = pids.iter().copied().filter(|pid| !seen.contains(pid) && !import_of.contains_key(pid)).collect();
+        for pid in &outputs {
+            seen.insert(*pid);
+        }
+        if outputs.is_empty() {
+            continue;
+        }
+        let mut its: Vec<&Item> = rows.iter().filter_map(|r| items.iter().find(|i| i.name_id == *r)).collect();
+        if its.is_empty() {
+            continue;
+        }
+        // One copy per name: pair them by the size of the body each name derives from (its
+        // anchor's originals → the body the step copied), nearest first.
+        let Ok(mut q2) = c.prepare("SELECT Type, Data FROM HistoryNames WHERE NameID = ?1") else { continue };
+        // The body a copy's name derives from: its chain hops names, anchors and derivation
+        // anchors (a copy of a copy of a …) until it reaches the body's own name.
+        let mut source_body = |name_id: i64| -> Option<i64> {
+            let mut cur = name_id;
+            for _ in 0..16 {
+                let (ty, data) = q2.query_row([cur], |r| Ok((r.get::<_, i64>(0)?, text(r.get(1)?)))).ok()?;
+                let a: serde_json::Value = serde_json::from_str(&data).ok()?;
+                cur = match ty {
+                    18 => a["nameToAnchor"].as_i64()?,
+                    0 => a["sourceTopologyNames"].as_array()?.first()?.as_i64()?,
+                    5 => a["originals"].as_array()?.first()?.as_i64()?,
+                    11 => {
+                        if a.get("identifier").is_some_and(|v| !v.is_null()) {
+                            return None;
+                        }
+                        return a["bodyID"].as_i64();
+                    }
+                    _ => return None,
+                };
+            }
+            None
+        };
+        let mut source_box = |name_id: i64| -> Option<[f64; 3]> {
+            let id = source_body(name_id)?;
+            let pid = pairs.iter().find(|(k, _)| *k == id)?.1?;
+            box_of(pid)
+        };
+        let dist = |s: Option<[f64; 3]>, to: [f64; 3]| -> f64 {
+            match s {
+                Some(x) => (x[0] - to[0]).abs() + (x[1] - to[1]).abs() + (x[2] - to[2]).abs(),
+                None => f64::INFINITY,
+            }
+        };
+        for pid in &outputs {
+            let Some(box_) = box_of(*pid) else { continue };
+            let Some(best) = its.iter().min_by(|a, b| {
+                let (da, db) = (source_box(a.name_id), source_box(b.name_id));
+                let (near_a, near_b) = (da.is_some_and(|x| near(x, box_)), db.is_some_and(|x| near(x, box_)));
+                near_b.cmp(&near_a).then(dist(da, box_).total_cmp(&dist(db, box_)))
+            }) else {
+                break;
+            };
+            let item = *best;
+            its.retain(|i| i.name_id != item.name_id);
+            weak.remove(pid);
+            if let Some(b) = bodies.iter_mut().find(|b| b.partition == Some(*pid)) {
+                b.name = Some(item.name.clone());
+                b.item_name_id = Some(item.name_id);
+                b.folder = item.folder.clone();
+                b.hidden = item.hidden;
+                b.color = b.color.or(item.color);
+            }
+        }
+    }
+    // The bodies a Delete step removed leave their items orphaned; a copy of one of them that a
+    // Move step brought in takes the orphan of its own size, the last removal first.
+    let mut deleted_at: BTreeMap<i64, usize> = BTreeMap::new();
+    for (i, step) in steps.iter().enumerate().filter(|(_, s)| s.op == "Delete") {
+        if let Some(pids) = calls.get(&step.node) {
+            for pid in pids {
+                deleted_at.entry(*pid).or_insert(i);
+            }
+        }
+    }
+    if has_table(c, "HistoryImportedBodies")
+        && has_table(c, "HistoryImportedPrototypes")
+        && !pairs.is_empty()
+        && let Ok(mut q3) = c.prepare(
+            "SELECT p.BodyData FROM HistoryImportedBodies b \
+             JOIN HistoryImportedPrototypes p ON p.ImportedPrototypeID = b.ImportedPrototypeID WHERE b.ImportedBodyID = ?1",
+        )
+    {
+        let mut orphans: Vec<(usize, &Item, [f64; 3])> = Vec::new();
+        for (id, pid) in pairs.iter().filter(|(_, pid)| pid.is_some_and(|p| gone.contains(&p))) {
+            let Some(item) = chained.get(id) else { continue };
+            let Ok((_, data)) = q3.query_row([id], |r| Ok((r.get::<_, i64>(0)?, blob(r.get(1)?)))) else { continue };
+            let Some(s) = size_of(&data) else { continue };
+            let Some(order) = pid.as_ref().and_then(|p| deleted_at.get(p)).copied() else { continue };
+            orphans.push((order, item, s));
+        }
+        orphans.sort_by_key(|(order, _, _)| std::cmp::Reverse(*order));
+        let free: Vec<i64> = weak.iter().copied().filter(|pid| !import_of.contains_key(pid)).collect();
+        for pid in free {
+            let Some(box_) = box_of(pid) else { continue };
+            let Some((_, item, _)) = orphans.iter().find(|(_, _, s)| near(*s, box_)) else { continue };
+            weak.remove(&pid);
+            if let Some(b) = bodies.iter_mut().find(|b| b.partition == Some(pid)) {
+                b.name = Some(item.name.clone());
+                b.item_name_id = Some(item.name_id);
+                b.folder = item.folder.clone();
+                b.hidden = item.hidden;
+                b.color = b.color.or(item.color);
+            }
+        }
+    }
+
     for b in bodies.iter_mut().filter(|b| b.partition.is_none() && b.import.is_none()) {
         let Some(node) = b.step else { continue };
         let named = anchors.get(&node).and_then(|ns| ns.iter().find_map(|n| items.iter().find(|i| i.name_id == *n)));
@@ -1469,8 +1613,9 @@ fn imported_items<'a>(c: &rusqlite::Connection, items: &'a [Item]) -> Result<BTr
         let Some((0, anchor)) = a["nameToAnchor"].as_i64().and_then(&mut name) else { continue };
         let [source] = anchor["sourceTopologyNames"].as_array().map(Vec::as_slice).unwrap_or_default() else { continue };
         let Some((11, body)) = source.as_i64().and_then(&mut name) else { continue };
-        // A face's name carries its identifier too; an item names a whole body.
-        if body.get("identifier").is_some() {
+        // A face's name carries its identifier too; an item names a whole body. Files since 2026 keep an
+        // `identifier` key on body names as well, null there — only a real value marks a face.
+        if body.get("identifier").is_some_and(|v| !v.is_null()) {
             continue;
         }
         let Some(id) = body["bodyID"].as_i64() else { continue };
@@ -1535,6 +1680,21 @@ fn name_by_topology(
                 .and_then(Value::as_array)
                 .map(|a| a.iter().filter_map(Value::as_i64).take(100_000).collect())
                 .unwrap_or_default();
+            // Files since 2026 stamp the names in other slots: an import keeps them under tag 0 (`[0, name, …]`)
+            // and a transform keeps `[name, [name], …]` triples, where the tag's own marker carries a 0.
+            for el in detail.iter().filter_map(Value::as_array) {
+                if el.first() == Some(&Value::Integer(0.into())) {
+                    for n in el.iter().skip(1).filter_map(Value::as_i64) {
+                        names.insert(n);
+                    }
+                } else {
+                    for n in el.iter().filter_map(|t| t.as_array().and_then(|t| t.first()).and_then(Value::as_i64)) {
+                        if n > 0 {
+                            names.insert(n);
+                        }
+                    }
+                }
+            }
             // Tag 0 is the body itself: `[0, [own], [[index of a body in this call, [0]], …]]`.
             let whole = detail
                 .get(6)
@@ -1793,7 +1953,7 @@ fn resolve_transformed_items(
             refs.sort_unstable();
             refs.dedup();
             if let ([pid], [id]) = (pids.as_slice(), refs.as_slice()) {
-                associations.push((*pid, *id));
+                associations.push((*pid, *id, step.node));
             }
         }
         // Mirror (and a copying move) has one unchanged source and one modified result. The latter has its own
@@ -1803,7 +1963,7 @@ fn resolve_transformed_items(
             pids.sort_unstable();
             pids.dedup();
             if let ([pid], [id]) = (pids.as_slice(), ids.as_slice()) {
-                associations.push((*pid, *id));
+                associations.push((*pid, *id, step.node));
             }
         }
     }
@@ -1876,13 +2036,19 @@ fn resolve_transformed_items(
             None
         };
         if let ([pid], Some(id)) = (pids.as_slice(), selected) {
-            associations.push((*pid, id));
+            associations.push((*pid, id, step.node));
         }
     }
-    for (pid, id) in associations {
+    for (pid, id, node) in associations {
         let Some((Some((_, name_id)), hidden)) = latest.get(&id) else { continue };
         let Some(item) = items.iter().find(|i| i.name_id == *name_id) else { continue };
         if let Some(body) = bodies.iter_mut().find(|b| b.partition == Some(pid)) {
+            // The name the step created for its own result outranks the selector's: the selector
+            // identifies the body the step transformed, and the result carries the name the step
+            // gave it.
+            if body.item_name_id.is_some_and(|nid| names.get(&nid).and_then(|n| n["callKey"]["nodeID"].as_i64()) == Some(node)) {
+                continue;
+            }
             body.name = Some(item.name.clone());
             body.item_name_id = Some(item.name_id);
             body.folder = item.folder.clone();
@@ -2115,6 +2281,21 @@ fn uncovered_imports(c: &rusqlite::Connection, steps: &[Step], gone: &std::colle
 /// Each import's imported body and the partition the import step made for it, when the step's call records one: the
 /// step's k-th created partition (by creation index) belongs to its k-th import. Only calls in the newer layout (more
 /// than three slots) record them.
+/// The size of the box of a body's vertices: the signature of a shape that a Move moves and a
+/// copy keeps.
+fn size_of(data: &[u8]) -> Option<[f64; 3]> {
+    let f = shapecraft_xt::parse(data).ok()?;
+    let b = shapecraft_xt::bodies(&f).ok()?.first()?.clone();
+    let (mut lo, mut hi) = ([f64::MAX; 3], [-f64::MAX; 3]);
+    for v in &b.brep.vertices {
+        for (k, c) in [(0usize, v.x), (1, v.y), (2, v.z)] {
+            lo[k] = lo[k].min(c);
+            hi[k] = hi[k].max(c);
+        }
+    }
+    (lo[0] <= hi[0]).then_some([hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]])
+}
+
 fn import_slots(c: &rusqlite::Connection, steps: &[Step]) -> Result<Vec<(i64, Option<i64>)>> {
     if !has_calls(c) {
         return Ok(Vec::new());
@@ -2146,6 +2327,22 @@ fn import_slots(c: &rusqlite::Connection, steps: &[Step]) -> Result<Vec<(i64, Op
             if !indexed.is_empty() {
                 indexed.sort_unstable_by_key(|&(idx, _)| idx);
                 step_parts.entry(node).or_default().extend(indexed.into_iter().map(|(_, pid)| pid));
+            } else if let Some(changed) = a
+                .get(2)
+                .and_then(Value::as_array)
+                .filter(|x| x.first().and_then(Value::as_bool) == Some(true))
+                .and_then(|x| x.get(1))
+                .and_then(Value::as_array)
+                .and_then(|gs| gs.get(1))
+                .and_then(Value::as_array)
+            {
+                // Files since 2026 list an import's bodies as modified instead: slot 5 is `[false]`, and the
+                // call's second modified group lists the partitions it brought in, in output order — the same
+                // order the step lists its imported bodies in.
+                step_parts
+                    .entry(node)
+                    .or_default()
+                    .extend(changed.iter().filter_map(|e| e.as_array().and_then(|e| e.first()).and_then(Value::as_i64)));
             }
         }
     }
@@ -2166,6 +2363,80 @@ fn import_slots(c: &rusqlite::Connection, steps: &[Step]) -> Result<Vec<(i64, Op
         step.params.iter().for_each(|(_, v)| import_id(v, &mut ids));
         for (k, id) in ids.into_iter().enumerate() {
             out.push((id, partitions.get(k).copied()));
+        }
+    }
+    // The imports list their bodies in another order than the partitions their call made when
+    // bodies share a shape: the body a partition sizes to is another one's. Swap the pairs that
+    // size to each other's, and let the removed partitions keep the bodies they removed. The
+    // sizes come from the cached partitions and the prototypes: without both tables, the pairing
+    // stays as the lists order it.
+    if !has_table(c, "BodyRevisionBlocks") || !has_table(c, "HistoryImportedBodies") || !has_table(c, "HistoryImportedPrototypes") {
+        return Ok(out);
+    }
+    let mut part_size: BTreeMap<i64, Option<[f64; 3]>> = BTreeMap::new();
+    {
+        let mut q = c.prepare("SELECT PartitionID, ChunkIndex, Block FROM BodyRevisionBlocks WHERE IsDeleted = 0 AND Phase = 2")?;
+        let mut chunks: BTreeMap<i64, Vec<(i64, Vec<u8>)>> = BTreeMap::new();
+        for (pid, chunk, b) in q.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, blob(r.get(2)?))))?.flatten() {
+            chunks.entry(pid).or_default().push((chunk, b));
+        }
+        for (pid, mut cs) in chunks {
+            cs.sort_by_key(|c| c.0);
+            let data: Vec<u8> = cs.into_iter().flat_map(|c| c.1).collect();
+            part_size.insert(pid, size_of(&data));
+        }
+    }
+    let mut proto_size: BTreeMap<i64, Option<[f64; 3]>> = BTreeMap::new();
+    {
+        let mut q = c.prepare(
+            "SELECT b.ImportedBodyID, p.BodyData FROM HistoryImportedBodies b \
+             JOIN HistoryImportedPrototypes p ON p.ImportedPrototypeID = b.ImportedPrototypeID",
+        )?;
+        for (id, data) in q.query_map([], |r| Ok((r.get::<_, i64>(0)?, blob(r.get(1)?))))?.flatten() {
+            proto_size.insert(id, size_of(&data));
+        }
+    }
+    let near = |a: [f64; 3], b: [f64; 3]| (a[0] - b[0]).abs() < 0.5 && (a[1] - b[1]).abs() < 0.5 && (a[2] - b[2]).abs() < 0.5;
+    // Only the mis-sized pairs swap: two pairs that already size consistently would keep
+    // trading partitions for ever (the imports repeat shapes across families).
+    for _ in 0..64 {
+        let bad: Vec<usize> = (0..out.len())
+            .filter(|&k| {
+                out.get(k).is_some_and(|(id, pid)| {
+                    let (Some(w), Some(h)) =
+                        (proto_size.get(id).copied().flatten(), pid.as_ref().and_then(|p| part_size.get(p)).copied().flatten())
+                    else {
+                        return false;
+                    };
+                    !near(w, h)
+                })
+            })
+            .collect();
+        let mut swapped = false;
+        'outer: for a in 0..bad.len() {
+            for b in a + 1..bad.len() {
+                let (i, j) = (bad[a], bad[b]);
+                let ((idi, pidi), (idj, pidj)) = (out[i], out[j]);
+                let (Some(wi), Some(hj)) =
+                    (proto_size.get(&idi).copied().flatten(), pidj.as_ref().and_then(|p| part_size.get(p)).copied().flatten())
+                else {
+                    continue;
+                };
+                let (Some(wj), Some(hi)) =
+                    (proto_size.get(&idj).copied().flatten(), pidi.as_ref().and_then(|p| part_size.get(p)).copied().flatten())
+                else {
+                    continue;
+                };
+                if near(wi, hj) && near(wj, hi) {
+                    out[i].1 = pidj;
+                    out[j].1 = pidi;
+                    swapped = true;
+                    break 'outer;
+                }
+            }
+        }
+        if !swapped {
+            break;
         }
     }
     Ok(out)
@@ -2368,6 +2639,7 @@ mod identity_tests {
         let refs = Value::Array([7, 8, 9].into_iter().map(|n| Value::Array(vec![Value::from(11), Value::from(n)])).collect());
         let steps = vec![Step { node: 10, name: "Import".into(), op: "MaterializeImportedBodies".into(), params: vec![(1, refs)] }];
         let item = |name_id: i64, folder: &str, hidden: bool| Item {
+            import_body: None,
             name_id,
             name: "Top Cover (3)".into(),
             folder: if folder.is_empty() { vec![] } else { vec![folder.into()] },
@@ -2412,7 +2684,7 @@ mod identity_tests {
         let steps = vec![Step { node: 10, name: "Import".into(), op: "MaterializeImportedBodies".into(), params: vec![] }];
         let items: Vec<Item> = [100, 101]
             .into_iter()
-            .map(|name_id| Item { name_id, name: format!("Body {name_id}"), folder: vec![], hidden: false, color: None })
+            .map(|name_id| Item { name_id, import_body: None, name: format!("Body {name_id}"), folder: vec![], hidden: false, color: None })
             .collect();
         let mut bodies: Vec<Body> = [20, 21]
             .into_iter()
@@ -2492,7 +2764,7 @@ mod identity_tests {
             op: "Rotate".into(),
             params: vec![(1, Value::Array(vec![Value::from(7), Value::from(12)]))],
         };
-        let item = Item { name_id: 10, name: "Current".into(), folder: vec![], hidden: true, color: None };
+        let item = Item { name_id: 10, import_body: None, name: "Current".into(), folder: vec![], hidden: true, color: None };
         let mut bodies = vec![Body {
             partition: Some(100),
             import: None,
@@ -2539,7 +2811,7 @@ mod identity_tests {
         let mut copy = bodies[0].clone();
         copy.partition = Some(101);
         bodies.push(copy);
-        let output = Item { name_id: 61, name: "Mirror".into(), folder: vec![], hidden: true, color: None };
+        let output = Item { name_id: 61, import_body: None, name: "Mirror".into(), folder: vec![], hidden: true, color: None };
         resolve_transformed_items(&c, &[mirror], &[item, output], &[], &Default::default(), &mut bodies)?;
         assert_eq!((bodies[0].name.as_deref(), bodies[0].hidden), (Some("Current"), false));
         assert_eq!((bodies[1].name.as_deref(), bodies[1].hidden), (Some("Mirror"), true));
@@ -2585,8 +2857,8 @@ mod identity_tests {
                 body
             })
             .collect();
-        let result = Item { name_id: 71, name: "Boolean result".into(), folder: vec![], hidden: true, color: None };
-        let input = Item { name_id: 10, name: "Current".into(), folder: vec![], hidden: false, color: None };
+        let result = Item { name_id: 71, import_body: None, name: "Boolean result".into(), folder: vec![], hidden: true, color: None };
+        let input = Item { name_id: 10, import_body: None, name: "Current".into(), folder: vec![], hidden: false, color: None };
         resolve_transformed_items(
             &c,
             std::slice::from_ref(&boolean),
@@ -2600,7 +2872,7 @@ mod identity_tests {
         c.execute_batch(
             "INSERT INTO Metadata VALUES (9,0,'Renamed'), (10,1,'0'); INSERT INTO MetadataAssignments VALUES (11,9), (11,10);",
         )?;
-        let renamed = Item { name_id: 11, name: "Renamed".into(), folder: vec![], hidden: false, color: None };
+        let renamed = Item { name_id: 11, import_body: None, name: "Renamed".into(), folder: vec![], hidden: false, color: None };
         resolve_transformed_items(
             &c,
             &[boolean],

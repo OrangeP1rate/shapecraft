@@ -393,6 +393,30 @@ pub const BODY: &[ToolDef] = &[
     t(Icon::ProjectEdge, "Project as Edge", "", Tool(ToolKind::ProjectEdge)),
 ];
 
+/// Two or more bodies picked (26.210, r75-02): the booleans come up under Chamfer and Shell moves down after Mirror,
+/// so a short window keeps them in the column instead of behind More (#75).
+pub const BODIES: &[ToolDef] = &[
+    t(Icon::MoveRotate, "Move/Rotate", "M", Tool(ToolKind::Move)),
+    t(Icon::Scale, "Scale", "S", Tool(ToolKind::Scale)),
+    t(Icon::Pattern, "Pattern - Linear", "", Tool(ToolKind::Pattern)),
+    t(Icon::PatternCircular, "Pattern - Circular", "", Tool(ToolKind::CircularPattern)),
+    t(Icon::Align, "Align", "", Tool(ToolKind::Align)),
+    t(Icon::Fillet, "Fillet", "F", Tool(ToolKind::Fillet)),
+    t(Icon::Fillet, "Chamfer", "", Tool(ToolKind::Chamfer)),
+    t(Icon::Union, "Union", "⌘U", Tool(ToolKind::Union)),
+    t(Icon::Subtract, "Subtract", "⌘B", Tool(ToolKind::Subtract)),
+    t(Icon::Intersect, "Intersect", "⌘I", Tool(ToolKind::Intersect)),
+    t(Icon::Visualize, "Visualize", "", U(UiAction::Visualization)),
+    t(Icon::CreateDrawing, "Create Drawing", "", U(UiAction::CreateDrawing)),
+    t(Icon::Translate, "Translate", "N", Tool(ToolKind::Translate)),
+    t(Icon::RotateAxis, "Rotate Around Axis", "", Tool(ToolKind::RotateAxis)),
+    t(Icon::Mirror, "Mirror", "", Tool(ToolKind::Mirror)),
+    t(Icon::Shell, "Shell", "H", Tool(ToolKind::Shell)),
+    t(Icon::SplitBody, "Split Body", "", Tool(ToolKind::SplitBody)),
+    t(Icon::ProjectSketch, "Project as Sketch", "P", Tool(ToolKind::Project)),
+    t(Icon::ProjectEdge, "Project as Edge", "", Tool(ToolKind::ProjectEdge)),
+];
+
 /// A mesh body picked: no tools that need exact faces; booleans only for a closed mesh
 /// (`left_toolbar` drops them for an open one).
 pub const MESH: &[ToolDef] = &[

@@ -60,6 +60,7 @@ fn context_tools(ws: &Workspace) -> (Vec<ToolDef>, Option<String>) {
                 toolbar::MESH
             }
         }
+        SelectionKind::Bodies if many => toolbar::BODIES,
         SelectionKind::Bodies => toolbar::BODY,
         SelectionKind::Mixed => toolbar::MIXED,
         SelectionKind::SketchEntities => toolbar::SKETCHING,
@@ -852,4 +853,53 @@ impl Workspace {
 fn any_mesh_picked(ws: &crate::workspace::Workspace) -> bool {
     let meshes: Vec<_> = ws.session.doc.bodies.iter().filter(|b| b.is_mesh()).map(|b| b.id).collect();
     !meshes.is_empty() && ws.session.selection.iter().any(|p| p.body().is_some_and(|b| meshes.contains(&b)))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    /// Two bodies picked in a short window (a 1080p laptop): the booleans stay in the column, under Chamfer, as
+    /// the reference lists them for several bodies; one body keeps them lower, after Mirror (#75).
+    #[test]
+    fn booleans_stay_in_a_short_column_for_two_bodies() {
+        let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "B");
+        let mut ws = Workspace::new(session, crate::settings::Settings::default());
+        let mut bodies = Vec::new();
+        for x in [0, 30] {
+            ws.session.execute("sketch", &json!({"plane": "xy"})).unwrap();
+            ws.session.execute("rectangle", &json!({"corner": [x, 0], "opposite": [x + 20, 20]})).unwrap();
+            let k = ws.session.active_sketch.unwrap().0;
+            bodies.push(ws.session.execute("extrude", &json!({"sketch": k, "region": 0, "distance": 10})).unwrap().value["body"].clone());
+        }
+        let pick = |b: &serde_json::Value| json!({"kind": "body", "body": b});
+        ws.session.execute("select", &json!({"picks": [pick(&bodies[0]), pick(&bodies[1])]})).unwrap();
+        let labels = |ws: &Workspace| context_tools(ws).0.iter().map(|d| d.label).collect::<Vec<_>>();
+        let two = labels(&ws);
+        let at = |l: &[&str], s: &str| l.iter().position(|x| *x == s).unwrap();
+        assert_eq!(at(&two, "Union"), at(&two, "Chamfer") + 1, "{two:?}");
+        let ctx = egui::Context::default();
+        let frame = |ws: &mut Workspace| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1916.0, 960.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| ws.ui(ui, None));
+            out.textures_delta.clear();
+        };
+        for _ in 0..3 {
+            frame(&mut ws);
+        }
+        let hidden: Vec<&str> = ws.overflow.iter().map(|d| d.label).collect();
+        assert!(!hidden.is_empty(), "the window is short enough to cut the column");
+        for b in ["Union", "Subtract", "Intersect"] {
+            assert!(!hidden.contains(&b), "{b} behind More: {hidden:?}");
+        }
+        ws.session.execute("select", &json!({"picks": [pick(&bodies[0])]})).unwrap();
+        let one = labels(&ws);
+        assert_eq!(at(&one, "Union"), at(&one, "Mirror") + 1, "{one:?}");
+    }
 }

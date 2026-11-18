@@ -26,6 +26,9 @@ whole.**
   inside out: a dome closing to a point, a face bounded by a closed spline stored without end knots, and a short
   wall on a round face that crosses the place where the round surface starts over. One wallet project had bodies
   off by up to the whole body; they now match the original to within a hundredth of a percent or so.
+- **Hollow lofted ducts come in.** A shelled body whose wall is an offset of a lofted surface was left out of the
+  project ("offset of a C0 surface"). It now comes in, within a twentieth of a percent of the original's volume.
+- **The oldest projects name their bodies as Shapr3D does.** A body from a 2018 project is called "Body".
 - **A copied body keeps its own name.** Move/Rotate with Copy makes a new body; it no longer takes the name and
   visibility of the body it was copied from.
 

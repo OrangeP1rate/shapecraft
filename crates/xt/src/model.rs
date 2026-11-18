@@ -583,9 +583,21 @@ impl<'a> Cx<'a> {
         }
         let (Ok((a, false)), Ok((b, false))) = (self.surface(ptrs[0]), self.surface(ptrs[1])) else { return Ok(None) };
         let surfaces = &self.b.surfaces;
-        // Closest points on a spline surface are only local: on a thread's flank they can jump a turn. Keep the
-        // chart there (blends above still use them, near their supports).
-        if [a, b].iter().any(|&k| matches!(surfaces.get(k), Some(Surface::BSpline(_)))) {
+        // Closest points on a spline surface (or an offset of one) are only local: on a thread's flank they can jump a
+        // turn, round a closed duct they land on the far side. Keep the chart there (blends above still use them,
+        // near their supports).
+        let spline = |k: usize| {
+            let mut k = k;
+            // An offset is as local as the surface under it.
+            for _ in 0..8 {
+                match surfaces.get(k) {
+                    Some(Surface::Offset { basis, .. }) => k = *basis,
+                    other => return matches!(other, Some(Surface::BSpline(_))),
+                }
+            }
+            true
+        };
+        if [a, b].into_iter().any(spline) {
             return Ok(None);
         }
         Ok(blend::densify(chart, 32, |p| blend::on_both(surfaces, (a, 0.0), (b, 0.0), p)))

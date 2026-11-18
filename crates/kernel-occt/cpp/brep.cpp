@@ -296,6 +296,37 @@ static bool tangent_joins(const Handle(Geom_BSplineSurface)& s) {
 // coordinates the numerator of the difference of the two rational V
 // derivatives is quadratic in U. Its three Bernstein coefficients bound the
 // difference over the entire U interval, not just a set of sampled normals.
+// A copy of `s` with every C0 join taken out (each interior knot of full multiplicity lowered to degree - 1), when
+// that changes the surface by no more than 1e-7: the join was smooth, only written as C0. Null when a join is a real
+// crease (or anything fails).
+static Handle(Geom_BSplineSurface) without_c0_knots(const Handle(Geom_BSplineSurface)& s) {
+  try {
+    Handle(Geom_BSplineSurface) c = Handle(Geom_BSplineSurface)::DownCast(s->Copy());
+    for (int dir = 0; dir < 2; ++dir) {
+      const bool v = dir == 1;
+      const int deg = v ? c->VDegree() : c->UDegree();
+      if (deg < 1) return nullptr;
+      // Walk from the end so indices stay valid when a knot goes.
+      for (int k = (v ? c->NbVKnots() : c->NbUKnots()) - 1; k >= 2; --k) {
+        const int m = v ? c->VMultiplicity(k) : c->UMultiplicity(k);
+        if (m < deg) continue;
+        const bool done = v ? c->RemoveVKnot(k, deg - 1, 1e-7) : c->RemoveUKnot(k, deg - 1, 1e-7);
+        if (!done) return nullptr;
+      }
+      if (c->IsUPeriodic() && !v && c->UMultiplicity(1) >= deg) {
+        if (!c->RemoveUKnot(1, deg - 1, 1e-7)) return nullptr;
+      }
+      if (c->IsVPeriodic() && v && c->VMultiplicity(1) >= deg) {
+        if (!c->RemoveVKnot(1, deg - 1, 1e-7)) return nullptr;
+      }
+    }
+    if (c->Continuity() == GeomAbs_C0) return nullptr;
+    return c;
+  } catch (Standard_Failure&) {
+    return nullptr;
+  }
+}
+
 static bool ruled_c1_joins(const Handle(Geom_BSplineSurface)& s) {
   if (s->IsUPeriodic() || s->IsVPeriodic() || s->UDegree() != 1 ||
       s->NbUPoles() != 2 || s->NbUKnots() != 2 || s->VDegree() < 2 ||
@@ -980,9 +1011,13 @@ TopoDS_Shape build(Rd& r, std::vector<TopoDS_Shape>* made = nullptr) {
       // for dependency resolution and reject it if actual topology refers to it.
       Handle(Geom_BSplineSurface) spline = Handle(Geom_BSplineSurface)::DownCast(surfaces[b]);
       const bool c0 = !spline.IsNull() && spline->Continuity() == GeomAbs_C0;
-      const bool smooth = c0 && (ruled_c1_joins(spline) || tangent_joins(spline));
+      // Joins that only look C0 (pieces that line up, written with full knots): with those knots taken out the
+      // surface is the same within a hair and smooth, and the offset is made of that copy.
+      Handle(Geom_BSplineSurface) reduced = c0 ? without_c0_knots(spline) : Handle(Geom_BSplineSurface)();
+      const bool smooth = c0 && (!reduced.IsNull() || ruled_c1_joins(spline) || tangent_joins(spline));
       bool unchecked = unchecked_offsets[b] || (c0 && !smooth);
-      surfaces[o.first] = unchecked ? surfaces[b] : Handle(Geom_Surface)(new Geom_OffsetSurface(surfaces[b], o.second.second, smooth));
+      Handle(Geom_Surface) base = reduced.IsNull() ? surfaces[b] : Handle(Geom_Surface)(reduced);
+      surfaces[o.first] = unchecked ? surfaces[b] : Handle(Geom_Surface)(new Geom_OffsetSurface(base, o.second.second, smooth && reduced.IsNull()));
       unchecked_offsets[o.first] = unchecked;
       progress = true;
     }

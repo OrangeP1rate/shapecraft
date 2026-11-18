@@ -121,6 +121,10 @@ fn full_knots(k: &[f64], m: &[u32]) -> Vec<f64> {
 fn nurbs_d1(s: &NurbsSurface, fu: &[f64], fv: &[f64], u: f64, v: f64) -> Option<(DVec3, DVec3, DVec3)> {
     let (pu, pv) = (s.u_degree as usize, s.v_degree as usize);
     let (u0, u1, v0, v1) = (*fu.get(pu)?, *fu.get(s.nu)?, *fv.get(pv)?, *fv.get(s.nv)?);
+    // Round a direction where the surface closes up, it carries on from its other end.
+    let (cu, cv) = closes(s);
+    let wrap = |t: f64, a: f64, b: f64, closed: bool| if closed && b > a { a + (t - a).rem_euclid(b - a) } else { t };
+    let (u, v) = (wrap(u, u0, u1, cu), wrap(v, v0, v1, cv));
     let (uc, vc) = (u.clamp(u0, u1), v.clamp(v0, v1));
     let (du, dv) = (u - uc, v - vc);
     let (p, su, sv) = nurbs_inside(s, fu, fv, uc, vc)?;
@@ -132,6 +136,17 @@ fn nurbs_d1(s: &NurbsSurface, fu: &[f64], fv: &[f64], u: f64, v: f64) -> Option<
     let (ua, ub) = if uc + h <= u1 { (uc, uc + h) } else { (uc - h, uc) };
     let suv = (nurbs_inside(s, fu, fv, ub, vc)?.2 - nurbs_inside(s, fu, fv, ua, vc)?.2) / (ub - ua);
     Some((p + du * su + dv * sv + du * dv * suv, su + dv * suv, sv + du * suv))
+}
+
+/// Whether the surface closes up in u and in v: its poles wrap round (a periodic surface written with its full knot
+/// vector repeats its first `degree` pole rows at the end).
+fn closes(s: &NurbsSurface) -> (bool, bool) {
+    let (pu, pv) = (s.u_degree as usize, s.v_degree as usize);
+    let at = |i: usize, j: usize| s.poles.get(i * s.nv + j).copied();
+    let same = |a: Option<DVec3>, b: Option<DVec3>| a.zip(b).is_some_and(|(a, b)| a.distance(b) < 1e-9 * (1.0 + a.length()));
+    let u = pu >= 1 && s.nu > 2 * pu && (0..pu).all(|i| (0..s.nv).all(|j| same(at(i, j), at(s.nu - pu + i, j))));
+    let v = pv >= 1 && s.nv > 2 * pv && (0..pv).all(|j| (0..s.nu).all(|i| same(at(i, j), at(i, s.nv - pv + j))));
+    (u, v)
 }
 
 /// [`nurbs_d1`] within the surface's own range.

@@ -863,7 +863,7 @@ mod tests {
     use std::sync::Arc;
 
     /// Two bodies picked in a short window (a 1080p laptop): the booleans stay in the column, under Chamfer, as
-    /// the reference lists them for several bodies; one body keeps them lower, after Mirror (#75).
+    /// several bodies list them; one body keeps them lower, after Mirror (#75).
     #[test]
     fn booleans_stay_in_a_short_column_for_two_bodies() {
         let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "B");

@@ -393,7 +393,7 @@ pub const BODY: &[ToolDef] = &[
     t(Icon::ProjectEdge, "Project as Edge", "", Tool(ToolKind::ProjectEdge)),
 ];
 
-/// Two or more bodies picked (26.210, r75-02): the booleans come up under Chamfer and Shell moves down after Mirror,
+/// Two or more bodies picked: the booleans come up under Chamfer and Shell moves down after Mirror,
 /// so a short window keeps them in the column instead of behind More (#75).
 pub const BODIES: &[ToolDef] = &[
     t(Icon::MoveRotate, "Move/Rotate", "M", Tool(ToolKind::Move)),

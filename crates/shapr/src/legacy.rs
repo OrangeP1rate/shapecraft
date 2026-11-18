@@ -111,7 +111,7 @@ pub(crate) fn read(c: &rusqlite::Connection, p: &mut Project) -> Result<()> {
             column(c, "Shapes", "Hidden", "0"),
             column(c, "Shapes", "ShapeName", "''")
         );
-        // Shapr3D itself lists a solid from those releases as "Body".
+        // Projects from those releases list such a solid as "Body".
         let unnamed = if crate::has_column(c, "Shapes", "ShapeName") { None } else { Some("Body".to_string()) };
         let mut q = c.prepare(&sql)?;
         let rows = q.query_map([], |r| Ok((text(r.get(0)?), blob(r.get(1)?), r.get::<_, Option<bool>>(2)?, text(r.get(3)?))))?;

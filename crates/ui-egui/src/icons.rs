@@ -285,6 +285,10 @@ fn sketch_dots(pen: &Pen, color: Color32, pts: &[(f32, f32)]) {
 
 /// The icon colour and its grey (the reference's two tones), so dimmed icons dim both.
 fn two_tone(color: Color32) -> (Color32, Color32) {
+    // Dark ink on a lit tool's white cell: the reference draws the body mid grey under the dark ink (#83).
+    if color.r().max(color.g()).max(color.b()) < 77 {
+        return (color, Color32::from_rgba_unmultiplied(0x80, 0x80, 0x80, color.a()));
+    }
     let k = |v: u8| (v as f32 * 0.62) as u8;
     (color, Color32::from_rgba_unmultiplied(k(color.r()), k(color.g()), k(color.b()), color.a()))
 }
@@ -342,6 +346,12 @@ fn cube(pen: &Pen, cx: f32, cy: f32, r: f32) {
 /// dimmed icons dim too.
 fn tones(color: Color32) -> [Color32; 3] {
     let k = color.r().max(color.g()).max(color.b()) as f32 / 255.0;
+    // Dark ink (a lit tool's white cell): scaling the light tones down left three near-blacks, one blob (#83). The
+    // reference keeps the facets apart there: a near-black top over mid-grey sides (measured #2c / #80).
+    if k < 0.3 {
+        let g = |v: u8| Color32::from_rgb(v, v, v);
+        return [g(0x2c), g(0x80), g(0x6e)];
+    }
     let t = |v: u8| {
         let v = (v as f32 * k) as u8;
         Color32::from_rgb(v, v, (v as f32 * 1.01).min(255.0) as u8)

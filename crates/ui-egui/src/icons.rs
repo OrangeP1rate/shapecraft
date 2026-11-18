@@ -1212,26 +1212,34 @@ fn paint_dark(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                 pen.line(&[(x + ux * r, y + uy * r), (nx - ux * r, ny - uy * r)]);
             }
         }
-        // The eye, in the line style of the set: a wide, flat almond (19×9.6 on the 24 grid) with a stroked pupil;
-        // the hidden ones are struck through.
-        Eye | EyeOff => {
+        // Shown: a solid almond with a ring cut out round a centre dot (the ring in what the icon sits on). Hidden: the
+        // eye closed, a shallow lid with three lashes.
+        Eye => {
             let arc_pts = |cx: f32, cy: f32, r: f32, a0: f32, a1: f32| {
                 (0..=24).map(move |i| {
                     let a = (a0 + (a1 - a0) * i as f32 / 24.0).to_radians();
                     (cx + r * a.cos(), cy + r * a.sin())
                 })
             };
-            // Two arcs through the corners (2.5, 12) and (21.5, 12), bulging to y 7.2 and y 16.8 — the lower one
-            // traced back, so the loop closes on itself without a chord across the middle.
             let upper = arc_pts(12.0, 19.0, 11.8, 216.4, 323.6);
-            let lower = arc_pts(12.0, 5.0, 11.8, 143.6, 36.4).rev();
-            let almond: Vec<(f32, f32)> = upper.chain(lower).collect();
-            pen.closed(&almond);
-            // Both states carry the pupil; the hidden ones add the slash over it.
-            pen.circle(12.0, 12.0, 3.2);
-            if icon == EyeOff {
-                pen.line(&[(3.0, 3.0), (21.0, 21.0)]);
-            }
+            let lower = arc_pts(12.0, 5.0, 11.8, 36.4, 143.6);
+            let almond: Vec<Pos2> = upper.chain(lower).map(|(x, y)| pen.at(x, y)).collect();
+            painter.add(Shape::convex_polygon(almond, color, Stroke::NONE));
+            painter.circle_filled(pen.at(12.0, 12.0), 3.4 * pen.s, gap());
+            painter.circle_filled(pen.at(12.0, 12.0), 1.4 * pen.s, color);
+        }
+        EyeOff => {
+            let lid: Vec<(f32, f32)> = (0..=16)
+                .map(|i| {
+                    let x = 3.0 + 18.0 * i as f32 / 16.0;
+                    let u = (x - 12.0) / 9.0;
+                    (x, 10.0 + 3.0 * (1.0 - u * u))
+                })
+                .collect();
+            pen.line(&lid);
+            pen.line(&[(12.0, 13.0), (12.0, 16.5)]);
+            pen.line(&[(6.6, 12.0), (5.2, 14.8)]);
+            pen.line(&[(17.4, 12.0), (18.8, 14.8)]);
         }
         Tablet => {
             pen.closed(&[(3.5, 4.5), (16.5, 4.5), (16.5, 20.0), (3.5, 20.0)]);

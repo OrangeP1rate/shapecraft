@@ -3,9 +3,39 @@
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
 ## 0.10.2-alpha
-**.shapr projects from every year open and save: 25 public projects from 2018 to 2026 now come in and go back out
-whole.**
+**.shapr projects from every year open and save, the .deb and .rpm update themselves, and a round of fixes from your
+reports: the mouse wheel zooms on a Mac again, pinned measurements come off, and the booleans stay in reach.**
+### New
+- **The .deb and .rpm update themselves.** A Linux copy installed from the package now downloads the next one and
+  installs it when you close ShapeCraft, asking for your password the way your desktop does. Thanks
+  [@jan-tdy](https://github.com/jan-tdy) (#72).
+- **Choose the bodies a cut works on.** In a cut's History card, Subtract From lists the bodies it cuts. Edit… lets
+  you pick them in the view, × starts over, and Escape ends the picking and then closes the card. Thanks
+  [@chickey](https://github.com/chickey) (#69).
+- **The import screen shows what it's doing**: reading, repairing, building the bodies, with a running count and how
+  long it has taken. Thanks [@chickey](https://github.com/chickey) (#70).
+### Changed
+- **Union, Subtract and Intersect sit higher with several bodies picked**, under Chamfer, so a short window keeps
+  them in the column instead of behind More. Thanks [@jan-tdy](https://github.com/jan-tdy) (#75).
+- **The Items list, reworked.** Picked rows fill edge to edge, folders light up with what's picked inside them, rows
+  are more compact, and the eye is redrawn. A folder now has its own eye: hiding it hides what's in it without
+  changing each item's own setting, so showing it again brings everything back as it was. Picking from the list is
+  also much faster on big projects. Thanks [@pablohc](https://github.com/pablohc) (#77).
+- **Booleans and History edits work in the background.** Union, Subtract and Intersect, and editing, suppressing or
+  deleting a step, moving the breakpoint or changing a variable, show a card with Cancel when they take a while, and
+  the window keeps drawing, so a slow computer no longer says ShapeCraft isn't responding. Leaving a sketch opened
+  from the History without changing it no longer rebuilds the steps after it. Thanks
+  [@jan-tdy](https://github.com/jan-tdy) (#59) and [@chickey](https://github.com/chickey) (#74, #76).
 ### Fixed
+- **The mouse wheel zooms on a Mac** with mice that scroll smoothly (Logitech and others), instead of turning the
+  view. Thanks [@movh](https://github.com/movh) (#81).
+- **Pinned measurements come off** with their bin again. Thanks [@movh](https://github.com/movh) (#82).
+- **A picked tool's icon reads clearly** on its white button in the dark theme. Thanks
+  [@movh](https://github.com/movh) (#83).
+- **.shapr files saved this year keep their names, folders and visibility** on import. Thanks
+  [@pablohc](https://github.com/pablohc) (#79, #80).
+- **One more kind of rounded offset body comes in** from big .shapr projects. Thanks
+  [@chickey](https://github.com/chickey) (#71).
 - **Older .shapr projects open.** Projects from before 2020, 2018 sketches, shape groups, 2024 projects saved
   without their cached history, and projects with deleted pieces left inside all import now, with their bodies,
   sketches and folders. Saving an older project writes a new project in today's layout instead of failing.

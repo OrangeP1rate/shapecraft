@@ -4,6 +4,10 @@ use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
 use shapecraft_doc::Pick;
 
+/// A picked row's fill (measured, the window focused) and how far the fills sit in from the panel's sides.
+const PICKED_FILL: Color32 = Color32::from_rgb(0x38, 0x70, 0xff);
+const FILL_INSET: f32 = 8.0;
+
 use super::left_toolbar::tool_mode;
 use super::{panel, select_all};
 use crate::icons::{self, Icon};
@@ -223,6 +227,8 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
     let mut dragged_row: Option<(String, Icon)> = None;
     // The rows paint through a clip on the list area; a row takes clicks only where it shows.
     let lp = p.clone().with_clip_rect(view);
+    // Each row's fill: its reserved place under the row's text, the row, and the colour (painted after the loop).
+    let mut fills: Vec<(egui::layers::ShapeIdx, Rect, Option<Color32>)> = Vec::new();
     for (idx, (id, name, visible, kind, depth)) in rows.into_iter().enumerate() {
         let y = rows_top + idx as f32 * row_h - ws.items_scroll;
         if y + row_h <= rows_top || y >= view.bottom() {
@@ -282,18 +288,19 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
                 ItemKind::Folder => None,
             };
         }
-        // A picked row fills #2b53ba, and a folder on the way to a
-        // picked row fills #2b3b66 — the whole containing chain lights up, at any depth.
-        if on_item {
-            let fill = if face_on_item && !whole { theme::c(0x1e5aa8) } else { theme::c(0x2b53ba) };
-            lp.rect_filled(row, radius(0), fill);
-        } else if folder_full {
-            lp.rect_filled(row, radius(0), theme::c(0x2b53ba));
+        // A picked row fills bright blue, and a folder on the way to a picked row a dim blue: the whole containing
+        // chain lights up, at any depth. Painted once the rows below are known, so neighbours join into one block.
+        let fill = if on_item {
+            Some(if face_on_item && !whole { theme::c(0x1e5aa8) } else { PICKED_FILL })
+        } else if folder_full || selected {
+            Some(PICKED_FILL)
         } else if contains_picked {
-            lp.rect_filled(row, radius(0), theme::c(0x2b3b66));
-        } else if selected {
-            lp.rect_filled(row, radius(0), theme::c(0x2b53ba));
-        }
+            Some(theme::c(0x2b3b66))
+        } else {
+            None
+        };
+        fills.push((lp.add(egui::Shape::Noop), row, fill));
+        let row_bg = fill.unwrap_or_else(Tokens::panel);
         // The pointer lays a white veil (alpha 18, fading in and out) over whatever the row already shows: over
         // nothing it reads as a grey, over a picked row as a lighter blue.
         let hover_t = if drop_on_this || dragging_this {
@@ -302,7 +309,7 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
             ui.ctx().animate_value_with_time(ui.scope_id().with(("row-hover", id.0)), if resp.hovered() { 1.0 } else { 0.0 }, 0.12)
         };
         if hover_t > 0.0 {
-            lp.rect_filled(row, radius(0), Color32::from_white_alpha((18.0 * hover_t) as u8));
+            lp.rect_filled(row.shrink2(vec2(FILL_INSET, 0.0)), radius(6), Color32::from_white_alpha((18.0 * hover_t) as u8));
         }
         // While a tool waits for picks in the view, the list goes dim except what it can still take: Mirror and
         // Split Body take more bodies (as observed, 324–334).
@@ -338,14 +345,13 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
         if kind == ItemKind::Folder {
             icons::paint(
                 &lp,
-                Rect::from_center_size(pos2(r.left() + 15.0 + indent, row.center().y), vec2(8.0, 8.0)),
+                Rect::from_center_size(pos2(r.left() + 25.0 + indent, row.center().y), vec2(10.0, 10.0)),
                 if open { Icon::ChevronDown } else { Icon::ChevronRight },
                 color,
             );
         }
-        // Measured: 19 px icons centred 33.5 px in, names from 48 px — the chevron (8 px, centred 15) and the
-        // icon leave the same 5 px gap either side of the icon, so the row reads as three even columns.
-        icons::paint(&lp, Rect::from_center_size(pos2(r.left() + 33.5 + indent, row.center().y), vec2(19.0, 19.0)), icon, icon_color);
+        // 19 px icons centred 49 px in, names from 66 px, with the folder chevron (10 px) centred at 25.
+        icons::paint(&lp, Rect::from_center_size(pos2(r.left() + 49.0 + indent, row.center().y), vec2(19.0, 19.0)), icon, icon_color);
         let editing = matches!(&ws.renaming, Some((Some(rid), ..)) if *rid == id);
         if editing {
             if let Some((_, text, focus)) = &mut ws.renaming {
@@ -373,7 +379,7 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
             }
         } else {
             // Long names end in "…" before the eye, as in the reference (s36), instead of running into the viewport.
-            let x = r.left() + 48.0 + indent;
+            let x = r.left() + 66.0 + indent;
             let eye_room = if touch { 52.0 } else { 32.0 };
             let shown = theme::elide(&p, &name, theme::body(name_px), row.right() - eye_room - x);
             lp.text(pos2(x, row.center().y), Align2::LEFT_CENTER, shown, theme::body(name_px), color);
@@ -396,10 +402,10 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
         let own_visible = if kind == ItemKind::Folder { ws.session.doc.folder(id).is_some_and(|f| f.visible) } else { visible };
         if touch || !own_visible || resp.hovered() || eye_resp.hovered() {
             // The eye pairs with the name's grey when the row is hidden, so it reads at a glance (s20-030, dimmed).
-            let tint = if own_visible || eye_resp.hovered() { Tokens::text_dim() } else { theme::c(0x818181) };
-            icons::paint(&lp, eye, if own_visible { Icon::Eye } else { Icon::EyeOff }, tint);
+            let tint = if own_visible { color } else { theme::c(0x818181) };
+            icons::paint_on(&lp, eye, if own_visible { Icon::Eye } else { Icon::EyeOff }, tint, row_bg);
         }
-        let on_chevron = kind == ItemKind::Folder && resp.interact_pointer_pos().is_some_and(|q| q.x < r.left() + 24.0 + indent);
+        let on_chevron = kind == ItemKind::Folder && resp.interact_pointer_pos().is_some_and(|q| q.x < r.left() + 36.0 + indent);
         if eye_resp.clicked() {
             let _ = ws.run("show_hide", json!({ "items": [id.0] }));
             // show_hide toggles, so it must not re-fire on a discarded pass; one repaint paints it in.
@@ -457,6 +463,19 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
             ui.ctx().request_discard("a row switched to renaming");
         }
     }
+    // Fills join with the rows above and below of the same colour into one block, rounded only at its ends.
+    for (i, (slot, row, fill)) in fills.iter().enumerate() {
+        let Some(fill) = *fill else { continue };
+        let same = |j: Option<usize>| {
+            j.and_then(|j| fills.get(j)).is_some_and(|(_, other, f)| {
+                *f == Some(fill) && (other.top() - row.bottom()).abs().min((row.top() - other.bottom()).abs()) < 1.0
+            })
+        };
+        let (up, down) = (same(i.checked_sub(1)), same(Some(i + 1)));
+        let r = |joined: bool| if joined { 0 } else { 6 };
+        let corners = egui::CornerRadius { nw: r(up), ne: r(up), sw: r(down), se: r(down) };
+        lp.set(*slot, egui::epaint::RectShape::filled(row.shrink2(vec2(FILL_INSET, 0.0)), corners, fill));
+    }
     // A click on the empty space under the rows deselects, like a click on nothing in the view.
     let y_end = rows_top + n_rows as f32 * row_h - ws.items_scroll;
     let empty = Rect::from_min_max(pos2(r.left() + 4.0, y_end.min(footer_y - 26.0)), pos2(r.right() - 4.0, footer_y - 26.0));
@@ -482,7 +501,7 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
             fg.text(pos2(r.left() + 66.0, ghost.center().y), Align2::LEFT_CENTER, name, theme::body(14.0), Color32::from_white_alpha(150));
         }
         if let Some(Drop::Between { y, depth, .. }) = drop {
-            let a = pos2(r.left() + 11.0 + 13.0 * depth as f32, y);
+            let a = pos2(r.left() + 9.0 + 13.0 * depth as f32, y);
             lp.line_segment([a, pos2(r.right() - 9.0, y)], Stroke::new(2.0, theme::c(0x2e68ff)));
         }
         if ui.input(|i| i.pointer.any_released()) {

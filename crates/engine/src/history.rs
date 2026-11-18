@@ -741,7 +741,7 @@ impl Session {
 
     /// [`Session::step_touches`] read off the models kept after each step, when they're kept for every step of this
     /// history as it is: each step touched the bodies whose display mesh it changed.
-    fn touches_kept(&self) -> Option<Vec<Vec<ItemId>>> {
+    pub fn touches_kept(&self) -> Option<Vec<Vec<ItemId>>> {
         let steps = &self.doc.history;
         if self.replayed.len() < steps.len() {
             return None;

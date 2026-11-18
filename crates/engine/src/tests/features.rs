@@ -648,3 +648,35 @@ fn fillet_where_a_side_meets_a_concave_arc() {
         }
     }
 }
+
+/// An extrude's "from" names the bodies a cut works on: without it the cut finds every body it runs into, with it
+/// only those listed, and a list that names nothing usable is refused.
+#[test]
+fn an_extrude_cut_works_on_the_bodies_named_in_from() {
+    let mut s = session();
+    for (a, b) in [(0, 10), (20, 30)] {
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("rectangle", &json!({"corner": [a, 0], "opposite": [b, 10]})).unwrap();
+        s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 10, "result": "new"})).unwrap();
+    }
+    let ids: Vec<u64> = s.doc.bodies.iter().map(|b| b.id.0).collect();
+    let volume_of =
+        |s: &crate::Session, id: u64| s.kernel.mass_props(&s.doc.body(shapecraft_doc::ItemId(id)).unwrap().shape).unwrap().volume;
+    let cut = |s: &mut crate::Session, extra: serde_json::Value| {
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("rectangle", &json!({"corner": [-5, -5], "opposite": [35, 15]})).unwrap();
+        let mut p = json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 5, "result": "subtract"});
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        s.execute("extrude", &p)
+    };
+    let mut named = s.fork();
+    cut(&mut named, json!({"from": [ids[1]]})).unwrap();
+    assert!((volume_of(&named, ids[0]) - 1000.0).abs() < 1e-6, "the first body is left alone");
+    assert!((volume_of(&named, ids[1]) - 500.0).abs() < 1e-6, "the second is cut");
+    cut(&mut s, json!({})).unwrap();
+    assert!((volume_of(&s, ids[0]) - 500.0).abs() < 1e-6 && (volume_of(&s, ids[1]) - 500.0).abs() < 1e-6, "found both without it");
+    assert!(cut(&mut named, json!({"from": []})).is_err());
+    assert!(cut(&mut named, json!({"from": [9999]})).is_err());
+}

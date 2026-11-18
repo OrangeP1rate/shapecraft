@@ -424,6 +424,19 @@ impl Workspace {
         {
             return;
         }
+        // Picking a step's profile or the bodies it cuts ends first, then the open step's card.
+        if self.cut_edit.take().is_some() {
+            self.session.selection.clear();
+            return;
+        }
+        if self.profile_edit.take().is_some() {
+            return;
+        }
+        if self.history.open.is_some() && matches!(self.tool, Tool::Idle) && self.session.active_sketch.is_none() {
+            self.history.open = None;
+            self.history.editing = None;
+            return;
+        }
         // In a sketch, Escape peels one layer at a time (reference 26.202, s36): an armed tool, then the
         // selection, then the sketch itself. A tool armed in a sketch with nothing drawn yet leaves it at once.
         let sketch_empty = self.session.active_sketch.and_then(|id| self.session.doc.sketch(id)).map(|sk| sk.entities.is_empty());

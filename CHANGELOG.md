@@ -17,8 +17,8 @@ reports: the mouse wheel zooms on a Mac again, pinned measurements come off, and
 ### Changed
 - **Union, Subtract and Intersect sit higher with several bodies picked**, under Chamfer, so a short window keeps
   them in the column instead of behind More. Thanks [@jan-tdy](https://github.com/jan-tdy) (#75).
-- **The Items list, reworked.** Picked rows fill edge to edge, folders light up with what's picked inside them, rows
-  are more compact, and the eye is redrawn. A folder now has its own eye: hiding it hides what's in it without
+- **The Items list, reworked.** Picked rows join into one bright blue block, folders light up with what's picked
+  inside them, and a hidden item shows a closed eye. A folder now has its own eye: hiding it hides what's in it without
   changing each item's own setting, so showing it again brings everything back as it was. Picking from the list is
   also much faster on big projects. Thanks [@pablohc](https://github.com/pablohc) (#77).
 - **Booleans and History edits work in the background.** Union, Subtract and Intersect, and editing, suppressing or

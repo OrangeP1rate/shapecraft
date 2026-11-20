@@ -217,7 +217,8 @@ fn generative_render_with_a_local_comfyui() -> Result<(), Error> {
     assert_eq!((pic.width, pic.height), (10, 10));
     assert_eq!(&pic.pixels[0..4], &[255, 0, 0, 255]);
     assert_eq!(&pic.pixels[9 * 4..10 * 4], &[0, 0, 255, 255]);
-    assert!(results[0].details.contains("model kept exact"), "{}", results[0].details);
+    assert!(results[0].details.contains("Model exact"), "{}", results[0].details);
+    assert!(results[0].title.contains("on an oak desk"), "the whole prompt is the title");
     // The workflow carried the person's words and the uploaded picture.
     let log = seen.lock().map(|v| v.join("\n")).unwrap_or_default();
     assert!(log.contains("on an oak desk") && log.contains("view.png") && log.contains("flux1-dev-kontext"), "{log}");

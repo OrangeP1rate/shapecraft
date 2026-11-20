@@ -44,6 +44,9 @@ Add `x86_64` after each command for the emulator's own architecture.
   `packaging/android/java` (javac + d8, so a JDK is needed), and signs it. Without a release key that's the debug
   key (`~/.android/debug.keystore`, made if missing); APKs signed with different keys can't update each other, so
   uninstall first if Android refuses the install.
+- `android-apk` also checks that every system function the library needs is in the NDK's API 26 stub libraries
+  (weak ones aside). A newer one links fine but stops the app loading on older Android (#78: Android 13's
+  `AMotionEvent_getActionButton`).
 - Releases: `cargo xtask android-release-key --upload` makes the release key once
   (`~/.android/shapecraft-release.jks` and `.pass`; back both up, a lost key means no later APK can update the
   installed app) and stores it as the repository secrets `ANDROID_KEYSTORE_B64` / `ANDROID_KEYSTORE_PASS`.

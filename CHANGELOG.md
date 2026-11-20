@@ -2,6 +2,18 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.10.3-alpha
+**Android fixes from your reports: the app starts on Android 8 to 12 again, and the numpad comes up for every value
+you tap.**
+### Fixed
+- **ShapeCraft starts on Android 8 to 12 (and HarmonyOS).** It closed straight away on anything older than Android 13,
+  because it asked the system for something only Android 13 has. Building the app now checks that everything it
+  needs is there on the oldest Android it supports. Thanks [@bootNoob](https://github.com/bootNoob) (#78).
+- **The numpad comes up for every value field on a touch screen.** Tapping a sketch's dimension (a circle's diameter,
+  a line's length, an angle) opened the field with no way to type into it unless a keyboard was attached. Now the
+  numpad opens beside it, clear of the field, and a tap on the field's 123 key brings it back. Thanks
+  [@Capdan83](https://github.com/Capdan83) (#84).
+
 ## 0.10.2-alpha
 **.shapr projects from every year open and save, the .deb and .rpm update themselves, and a round of fixes from your
 reports: the mouse wheel zooms on a Mac again, pinned measurements come off, and the booleans stay in reach.**

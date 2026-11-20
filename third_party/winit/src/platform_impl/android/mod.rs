@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -1159,8 +1159,23 @@ fn record_pointers(e: &android_activity::input::MotionEvent<'_>) {
         _ => return,
     };
     let buttons: u32 = e.button_state().0;
+    // The buttons held as of the last button press or release (a Down already carries the new state, so it can't
+    // be the "before"). Not `action_button()`: that is Android 13+ only and stopped the app loading before it (#78).
+    static HELD: AtomicU32 = AtomicU32::new(0);
     let button: u32 = match phase {
-        Phase::ButtonPress | Phase::ButtonRelease => u32::from(e.action_button()),
+        Phase::ButtonPress | Phase::ButtonRelease => {
+            let before = HELD.swap(buttons, Ordering::Relaxed);
+            let press = phase == Phase::ButtonPress;
+            match pointers::changed_button(before, buttons, press) {
+                // A press whose bit was already counted (a missed release): the lowest one held.
+                0 if press => buttons & buttons.wrapping_neg(),
+                b => b,
+            }
+        }
+        Phase::Up | Phase::Cancel | Phase::Hover | Phase::HoverExit => {
+            HELD.store(buttons, Ordering::Relaxed);
+            0
+        }
         _ => 0,
     };
     let one = matches!(phase, Phase::Down | Phase::Up);

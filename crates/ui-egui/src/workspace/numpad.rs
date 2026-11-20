@@ -37,6 +37,15 @@ impl Workspace {
     }
 
     pub(super) fn numpad(&mut self, ui: &Ui) {
+        // A value field open on a touch screen with no keyboard always has the numpad, whichever way it opened (a
+        // dimension's or Thread's size tapped, a Distance Type picked): there is no other way to type into it (#84).
+        if self.numpad_at.is_none()
+            && self.numeric.is_some()
+            && !crate::tablet::shows_shortcuts()
+            && let Some(f) = crate::workspace::viewport::paint::field_rect(ui.ctx())
+        {
+            self.numpad_at = Some(f.center());
+        }
         if !self.numpad_open() {
             if self.numeric.is_none() {
                 self.numpad_at = None;
@@ -45,11 +54,16 @@ impl Workspace {
         }
         let Some(at) = self.numpad_at else { return };
         let size = vec2(PAD * 2.0 + KEY.x * 4.0 + GAP * 3.0, PAD * 2.0 + 40.0 + GAP + KEY.y * 4.0 + GAP * 3.0);
-        // Beside the pill, to its right where there's room, else its left; kept inside the view.
+        // Beside the pill, to its right where there's room, else its left; kept inside the view. Clear of the value
+        // field when one is drawn, so its text and "123" key stay in sight.
         let vp = self.viewport_rect;
-        let mut x = at.x + 24.0;
+        let (left, right) = match crate::workspace::viewport::paint::field_rect(ui.ctx()) {
+            Some(f) => (f.left() - 12.0, f.right() + 12.0),
+            None => (at.x - 24.0, at.x + 24.0),
+        };
+        let mut x = right;
         if x + size.x > vp.right() - 8.0 {
-            x = at.x - 24.0 - size.x;
+            x = left - size.x;
         }
         let x = x.clamp(vp.left() + 8.0, (vp.right() - 8.0 - size.x).max(vp.left() + 8.0));
         let y = (at.y - size.y / 2.0).clamp(vp.top() + 8.0, (vp.bottom() - 8.0 - size.y).max(vp.top() + 8.0));
@@ -123,10 +137,58 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use egui::{Pos2, Rect, pos2, vec2};
+    use serde_json::json;
+
+    use super::Workspace;
+
     #[test]
     fn the_pad_has_digits_point_minus_back_close_and_done() {
         assert_eq!(super::ROWS.iter().map(|r| r.len()).sum::<usize>(), 15);
         assert!(super::ROWS.iter().all(|r| r.iter().map(|k| k.2).sum::<f32>() == 4.0), "four cells a row");
+    }
+
+    fn frame(ctx: &egui::Context, ws: &mut Workspace, events: Vec<egui::Event>) {
+        let input =
+            egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 900.0))), events, ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| ws.ui(ui, None));
+        out.textures_delta.clear();
+    }
+
+    fn tap(ctx: &egui::Context, ws: &mut Workspace, at: Pos2) {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(ctx, ws, vec![egui::Event::PointerMoved(at)]);
+        frame(ctx, ws, vec![button(true)]);
+        frame(ctx, ws, vec![button(false)]);
+        frame(ctx, ws, Vec::new());
+    }
+
+    /// A tap on a picked circle's diameter opens the value field and, on a touch screen, the numpad beside it, as a
+    /// tool's value pill does: with no keyboard there was no way to type the number (#84).
+    #[test]
+    fn a_dimension_tapped_opens_the_numpad() {
+        let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "N");
+        let mut ws = Workspace::new(session, crate::settings::Settings::default());
+        ws.session.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        ws.session.execute("circle", &json!({"center": [0, 0], "radius": 20})).unwrap();
+        let sk = ws.session.active_sketch.unwrap().0;
+        ws.session.execute("select", &json!({"picks": [{"kind": "sketch_entity", "sketch": sk, "entity": 0}]})).unwrap();
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            frame(&ctx, &mut ws, Vec::new());
+        }
+        let label = ws.entity_dims().first().map(|d| d.label).expect("the circle's diameter");
+        tap(&ctx, &mut ws, label);
+        assert!(ws.dim_edit.is_some(), "the dimension is being edited");
+        assert_eq!(ws.numeric.as_deref(), Some(""));
+        assert!(ws.numpad_at.is_some(), "the numpad has a place beside the value");
     }
 }
 

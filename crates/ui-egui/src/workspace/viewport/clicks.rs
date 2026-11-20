@@ -61,6 +61,12 @@ impl Workspace {
                 self.popup_opened_at = self.now;
                 return;
             }
+            // On a touch screen a tap on the open field (its "123" key) is for the field: it puts the numpad beside
+            // it rather than reaching the drawing under it (#84).
+            if crate::tablet::touch_ui() && super::paint::field_rect(ui.ctx()).is_some_and(|r| r.contains(at)) {
+                self.numpad_at = Some(at);
+                return;
+            }
         }
         self.numeric_fresh = false;
         // Thread's size pill, ≡, ↔ and ↕.
@@ -284,12 +290,14 @@ impl Workspace {
             return;
         }
         self.selected_constraint = None;
-        // A driving dimension's value: type a new one (s11-037).
+        // A driving dimension's value: type a new one. On a touch screen the numpad opens beside it, as a
+        // tool's value pill does (#84).
         if let Some((sketch, entity, kind, ..)) =
             self.driving_dims().0.into_iter().find(|d| (Self::driving_label(d.2, d.5) - c).length() < 30.0)
         {
             self.dim_edit = Some(DimEdit { sketch, entity, kind, other: None, pair: None });
             self.numeric = Some(String::new());
+            self.numpad_at = Some(c);
             return;
         }
         // A distance from a point, kept or shown for what's picked (s15-012).
@@ -297,12 +305,14 @@ impl Workspace {
             self.dim_edit =
                 Some(DimEdit { sketch: d.sketch, entity: u32::MAX, kind: DimKind::PointDistance, other: None, pair: Some((d.a, d.b)) });
             self.numeric = Some(String::new());
+            self.numpad_at = Some(c);
             return;
         }
         // An angle between two lines, kept or shown for the two picked ones (s15-007).
         if let Some(a) = self.angle_dims().into_iter().find(|a| (a.label - c).length() < 30.0) {
             self.dim_edit = Some(DimEdit { sketch: a.sketch, entity: a.first, kind: DimKind::Angle, other: Some(a.second), pair: None });
             self.numeric = Some(String::new());
+            self.numpad_at = Some(c);
             return;
         }
         if let Some(d) = self
@@ -313,6 +323,7 @@ impl Workspace {
         {
             self.dim_edit = Some(DimEdit { sketch: d.sketch, entity: d.entity, kind: d.kind, other: None, pair: None });
             self.numeric = Some(String::new());
+            self.numpad_at = Some(c);
             return;
         }
         if self.dim_edit.take().is_some() {

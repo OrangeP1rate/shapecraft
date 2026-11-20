@@ -192,6 +192,48 @@ fn check_pages(bin: &Path, file: &Path) -> Result<usize> {
     Ok(loads.len())
 }
 
+/// Checks every function and variable the library takes from the system exists on the oldest Android it says it
+/// runs on (`API`, Android 8): the NDK's stub libraries for that level list them. A newer one (Android 13's
+/// `AMotionEvent_getActionButton`, #78) links fine and then stops the app loading on anything older.
+fn check_symbols(bin: &Path, abi: &Abi, file: &Path) -> Result<usize> {
+    let stubs = bin.parent().context("no NDK toolchain folder")?.join("sysroot/usr/lib").join(abi.triple).join(API.to_string());
+    let nm = bin.join("llvm-nm");
+    let mut known = std::collections::HashSet::new();
+    for entry in std::fs::read_dir(&stubs).with_context(|| format!("no API {API} stubs at {}", stubs.display()))? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|e| e == "so") {
+            known.extend(nm_names(&output(s(&nm), &["-D", "--defined-only", s(&path)])?, false));
+        }
+    }
+    if known.is_empty() {
+        bail!("no stub libraries in {}", stubs.display());
+    }
+    let needed = nm_names(&output(s(&nm), &["-D", "--undefined-only", s(file)])?, true);
+    let missing: Vec<&String> = needed.iter().filter(|n| !known.contains(*n)).collect();
+    if !missing.is_empty() {
+        let list: Vec<&str> = missing.iter().map(|m| m.as_str()).collect();
+        bail!("{} needs symbols newer than Android API {API} (it would not start there): {}", file.display(), list.join(", "));
+    }
+    Ok(needed.len())
+}
+
+/// The symbol names in `llvm-nm -D` output, without their version (`memcpy@LIBC`). With `strong_only`, weak ones
+/// (`w`, `v`: optional, null when missing) are left out.
+fn nm_names(text: &str, strong_only: bool) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| {
+            let mut parts = l.split_whitespace().rev();
+            let name = parts.next()?;
+            let kind = parts.next()?;
+            if strong_only && matches!(kind, "w" | "v") {
+                return None;
+            }
+            Some(name.split('@').next().unwrap_or(name).to_string())
+        })
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
 /// The Android package name, which also names the app's folders on the device.
 pub const PACKAGE: &str = "com.jackharvest.shapecraft";
 
@@ -206,6 +248,8 @@ pub fn apk(rest: &[String]) -> Result<()> {
     let bin = build(&abi, "shapecraft-android")?;
     let so = target().join(abi.triple).join("release/libshapecraft.so");
     check_pages(&bin, &so)?;
+    let symbols = check_symbols(&bin, &abi, &so)?;
+    println!("{symbols} system symbols, all in Android API {API}");
     let sdk = PathBuf::from(
         std::env::var_os("ANDROID_HOME").or_else(|| std::env::var_os("ANDROID_SDK_ROOT")).context("set ANDROID_HOME to the Android SDK")?,
     );
@@ -628,6 +672,14 @@ pub fn smoke(rest: &[String]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nm_names_drop_versions_and_weak_ones() {
+        let undefined = "                 U AMotionEvent_getAction\n                 U memcpy@LIBC\n                 w __cxa_thread_atexit_impl@LIBC_N\n";
+        assert_eq!(super::nm_names(undefined, true), ["AMotionEvent_getAction", "memcpy"]);
+        let defined = "0000000000001000 T AMotionEvent_getAction\n0000000000002000 T memcpy@@LIBC\n";
+        assert_eq!(super::nm_names(defined, false), ["AMotionEvent_getAction", "memcpy"]);
+    }
+
     #[test]
     fn previews_are_never_the_platform() {
         let dir = std::env::temp_dir().join(format!("sc-platforms-{}", std::process::id()));

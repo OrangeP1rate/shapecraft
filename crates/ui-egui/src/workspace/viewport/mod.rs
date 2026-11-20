@@ -22,7 +22,7 @@ mod gpu;
 mod handles;
 mod in_place;
 mod navigate;
-mod paint;
+pub(in crate::workspace) mod paint;
 mod picking;
 mod scene;
 mod snap;

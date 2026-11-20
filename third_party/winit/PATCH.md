@@ -26,3 +26,9 @@ iOS (same patch, later): the `pointers` module moved to `src/platform/pointers.r
 macOS (later, #81): `src/platform_impl/macos/view.rs` `scroll_wheel` reports a precise scroll that has neither a
 gesture phase nor a momentum phase as a `LineDelta` (50 points a line). That is a mouse wheel with a smooth-scrolling
 driver; trackpads and the Magic Mouse always send a phase. Without it the wheel looked like a trackpad and orbited.
+
+Android (later, #78): `record_pointers` works out which button a press or release changed from the buttons held
+before and after (`pointers::changed_button`) instead of calling `MotionEvent::action_button()`. That call links
+`AMotionEvent_getActionButton`, which only Android 13 (API 33) has, and the app says it runs from Android 8: the
+library then failed to load on anything older. `cargo xtask android-apk` now checks every system symbol the library
+needs exists at the oldest API it supports.

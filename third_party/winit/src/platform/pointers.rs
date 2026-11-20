@@ -51,6 +51,14 @@ pub const TERTIARY: u32 = 4;
 pub const STYLUS_PRIMARY: u32 = 32;
 pub const STYLUS_SECONDARY: u32 = 64;
 
+/// The button a press or release changed, from the buttons held before it and after it (the lowest such bit; 0
+/// when none changed). Android names it itself only from Android 13 (`AMotionEvent_getActionButton`, API 33);
+/// linking that call kept the app from starting on anything older (#78), so the change is worked out here.
+pub fn changed_button(before: u32, now: u32, press: bool) -> u32 {
+    let changed = if press { now & !before } else { before & !now };
+    changed & changed.wrapping_neg()
+}
+
 /// More than this unread means no one is reading: the oldest go.
 const CAP: usize = 4096;
 
@@ -68,4 +76,18 @@ pub(crate) fn push(r: Record) {
 /// Everything recorded since the last call, oldest first.
 pub fn take() -> Vec<Record> {
     RECORDS.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_changed_button_comes_from_the_held_ones() {
+        assert_eq!(changed_button(0, PRIMARY, true), PRIMARY);
+        assert_eq!(changed_button(PRIMARY, PRIMARY | SECONDARY, true), SECONDARY);
+        assert_eq!(changed_button(PRIMARY | SECONDARY, PRIMARY, false), SECONDARY);
+        assert_eq!(changed_button(TERTIARY, 0, false), TERTIARY);
+        assert_eq!(changed_button(PRIMARY, PRIMARY, true), 0, "nothing new");
+    }
 }

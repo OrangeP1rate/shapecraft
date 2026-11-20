@@ -1147,6 +1147,8 @@ fn sheet(p: &mut Plugins, ui: &mut Ui) {
             let mut text = values.get(id).and_then(Value::as_str).unwrap_or("").to_string();
             let before = text.clone();
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
+            // A long prompt scrolls inside its box instead of spilling under the bar.
+            child.set_clip_rect(field.expand(1.0));
             text_box(&mut child, &format!("sheet-{id}"), &mut text, field.height(), placeholder, false, false);
             if text != before {
                 acts.push(Act::Set(id.clone(), Value::from(text)));

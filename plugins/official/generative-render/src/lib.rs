@@ -13,9 +13,10 @@ struct GenerativeRender;
 
 /// The services, in the order they're listed.
 pub const SERVICES: [(&str, &str); 4] =
-    [("openrouter", "OpenRouter"), ("openai", "OpenAI"), ("gemini", "Google Gemini"), ("comfy", "On This Computer (ComfyUI)")];
+    [("openrouter", "OpenRouter"), ("openai", "OpenAI"), ("gemini", "Google Gemini"), ("comfy", "ComfyUI on This Computer")];
 
-pub const MODES: [&str; 3] = ["Surroundings", "Whole Picture", "Selected Faces"];
+/// The modes offered. "Selected Faces" is handled too, for when the app sends a selection mask (not yet).
+pub const MODES: [&str; 2] = ["Surroundings", "Whole Picture"];
 
 /// A model a service offers: id as the service names it, and what people see.
 #[derive(Clone, Debug)]

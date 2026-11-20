@@ -89,7 +89,14 @@ impl Workspace {
                 action: Action::Ui(UiAction::Screenshot),
                 flyout: false,
             },
-            ToolDef { icon: Icon::CameraSparkle, label: "Generative Render", sub: None, keys: "", action: Action::Soon, flyout: false },
+            ToolDef {
+                icon: Icon::CameraSparkle,
+                label: "Generative Render",
+                sub: None,
+                keys: "",
+                action: Action::Ui(UiAction::GenerativeRender),
+                flyout: false,
+            },
         ];
         let y = view_y + toolbar::group_height(1) + gap;
         if let Some(i) = toolbar::group(ui, pos2(x, y), &defs, &[false, false], false, "vis-capture") {

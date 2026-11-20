@@ -132,6 +132,8 @@ pub enum UiAction {
     ViewDone,
     ViewCancel,
     Screenshot,
+    /// Visualization ▸ Generative Render: the plugin's sheet, or an offer to add the plugin.
+    GenerativeRender,
     /// Screenshot mode's switches and Capture.
     ShotGrid,
     ShotTransparency,

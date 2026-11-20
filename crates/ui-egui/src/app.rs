@@ -1304,6 +1304,15 @@ impl ShapeCraftApp {
     }
 
     pub fn control_call(&mut self, method: &str, params: &Value) -> Result<Value, String> {
+        if method.starts_with("plugins.") {
+            if method == "plugins.open" {
+                let ws = self.ws.as_deref_mut().ok_or("no project")?;
+                ws.generative_render();
+                return Ok(Value::Null);
+            }
+            let ws = self.ws.as_deref_mut();
+            return crate::plugins::control_call(method, params, move || ws.and_then(|w| w.plugin_capture().ok()));
+        }
         match method {
             "engine.execute" => {
                 if self.ws.is_none() {
@@ -1884,7 +1893,7 @@ impl ShapeCraftApp {
         match self.ws.as_deref_mut() {
             Some(ws) => {
                 // The first-run windows sit over the workspace: its keys wait until they're answered.
-                ws.keys_blocked = first_run_open || self.show_log || self.report.takes_keys();
+                ws.keys_blocked = first_run_open || self.show_log || self.report.takes_keys() || crate::plugins::takes_keys();
                 ws.ui(ui, render_state);
                 report_failure = ws.report_request.take();
                 // Tutorials run on the default tool types and leave the remembered ones alone.
@@ -2686,6 +2695,7 @@ impl eframe::App for ShapeCraftApp {
                 open_page(&url);
             }
         }
+        crate::plugins::frame(ui);
         if let Some(url) = crate::landing::take_tablet_link() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }

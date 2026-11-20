@@ -103,12 +103,13 @@ fn installs_from_the_index() -> Result<(), String> {
     // SAFETY-free: a test-only variable naming a folder instead of GitHub.
     unsafe { std::env::set_var("SHAPECRAFT_PLUGIN_INDEX", &pkgs) };
     let idx = index::fetch("0.0.0")?;
-    let hello = idx.plugins.iter().find(|e| e.manifest.id == "hello").ok_or("hello isn't listed")?;
-    let pkg = index::download("0.0.0", hello)?;
+    let listed = idx.plugins.iter().find(|e| e.manifest.id == "generative-render").ok_or("generative-render isn't listed")?;
+    assert!(idx.plugins.iter().all(|e| e.manifest.id != "hello"), "examples aren't listed");
+    let pkg = index::download("0.0.0", listed)?;
     let lib = Library::new(scratch("index"));
     lib.install(&pkg, false).map_err(|e| e.to_string())?;
     // A changed byte is refused.
-    let mut bad = hello.clone();
+    let mut bad = listed.clone();
     bad.sha256 = "0".repeat(64);
     assert!(index::download("0.0.0", &bad).is_err());
     Ok(())

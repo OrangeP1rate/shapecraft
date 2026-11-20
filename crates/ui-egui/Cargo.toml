@@ -12,6 +12,7 @@ shapecraft-engine.workspace = true
 shapecraft-render.workspace = true
 shapecraft-update.workspace = true
 shapecraft-report.workspace = true
+shapecraft-plugin-host.workspace = true
 glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true

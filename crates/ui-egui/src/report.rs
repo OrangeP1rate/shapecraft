@@ -969,12 +969,12 @@ enum Which {
     Log,
 }
 
-fn field_label(ui: &mut Ui, text: &str) {
+pub(crate) fn field_label(ui: &mut Ui, text: &str) {
     ui.label(egui::RichText::new(text).font(theme::strong(11.5)).color(Tokens::text_dim()));
 }
 
 /// A text field drawn like the app's own (a dark well with a hairline), `h` tall; Return adds lines unless `single`.
-fn text_box(ui: &mut Ui, id: &str, text: &mut String, h: f32, hint: &str, read_only: bool, single: bool) -> egui::Response {
+pub(crate) fn text_box(ui: &mut Ui, id: &str, text: &mut String, h: f32, hint: &str, read_only: bool, single: bool) -> egui::Response {
     let w = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
     let p = ui.painter();
@@ -1034,7 +1034,7 @@ fn group(ui: &mut Ui, n: usize, mut row: impl FnMut(&mut Ui, usize, Rect)) {
 }
 
 /// An iOS-style switch, right-aligned at `right`.
-fn switch(ui: &Ui, right: f32, y: f32, id: (&str, usize), on: &mut bool) {
+pub(crate) fn switch(ui: &Ui, right: f32, y: f32, id: (&str, usize), on: &mut bool) {
     let r = Rect::from_min_size(pos2(right - 38.0, y - 11.0), vec2(38.0, 22.0));
     let resp = ui.interact(r.expand(4.0), ui.scope_id().with(id), Sense::click());
     if resp.clicked() {
@@ -1074,13 +1074,13 @@ fn segmented(ui: &Ui, p: &egui::Painter, right: f32, y: f32, id: &str, items: &[
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Style {
+pub(crate) enum Style {
     Primary,
     Plain,
 }
 
 /// A push button right-aligned at `right`, centred on `y`; (clicked, its rect).
-fn button(ui: &Ui, right: f32, y: f32, label: &str, style: Style, enabled: bool) -> (bool, Rect) {
+pub(crate) fn button(ui: &Ui, right: f32, y: f32, label: &str, style: Style, enabled: bool) -> (bool, Rect) {
     let touch = crate::tablet::touch_ui();
     let h = if touch { 34.0 } else { 26.0 };
     let g = ui.painter().layout_no_wrap(label.to_string(), theme::body(13.0), Color32::WHITE);
@@ -1101,7 +1101,7 @@ fn button(ui: &Ui, right: f32, y: f32, label: &str, style: Style, enabled: bool)
 }
 
 /// Blue link text starting at `at` (left, centred on y); its rect.
-fn link(ui: &Ui, at: Pos2, text: &str, id: &str) -> Rect {
+pub(crate) fn link(ui: &Ui, at: Pos2, text: &str, id: &str) -> Rect {
     let p = ui.painter();
     let g = p.layout_no_wrap(text.to_string(), theme::body(12.0), Tokens::icon_blue());
     let r = Rect::from_min_size(pos2(at.x, at.y - g.size().y / 2.0), g.size());
@@ -1115,7 +1115,7 @@ fn link(ui: &Ui, at: Pos2, text: &str, id: &str) -> Rect {
     r
 }
 
-fn error_bar(ui: &mut Ui, text: &str) {
+pub(crate) fn error_bar(ui: &mut Ui, text: &str) {
     let w = ui.available_width();
     let g = ui.painter().layout(text.to_string(), theme::body(12.5), Tokens::text_strong(), w - 24.0);
     let (rect, _) = ui.allocate_exact_size(vec2(w, g.size().y + 16.0), Sense::hover());
@@ -1140,7 +1140,7 @@ fn github_mark(p: &egui::Painter, c: Pos2, r: f32) {
     p.circle_filled(c, 3.5, Tokens::text_strong());
 }
 
-fn spinner(p: &egui::Painter, c: Pos2, now: f64) {
+pub(crate) fn spinner(p: &egui::Painter, c: Pos2, now: f64) {
     let n = 12;
     for k in 0..n {
         let a = k as f32 / n as f32 * std::f32::consts::TAU;

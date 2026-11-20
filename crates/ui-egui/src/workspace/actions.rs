@@ -278,6 +278,7 @@ impl Workspace {
                 }
             }
             UiAction::Screenshot => self.wants_capture = true,
+            UiAction::GenerativeRender => self.generative_render(),
             UiAction::ShotGrid => self.settings.shot_grid = !self.settings.shot_grid,
             UiAction::ShotTransparency => self.settings.shot_transparent = !self.settings.shot_transparent,
             UiAction::ShotEdges => self.settings.shot_edges = !self.settings.shot_edges,

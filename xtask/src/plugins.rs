@@ -1,7 +1,7 @@
 //! Plugins: build the ones in `plugins/` (official and community) into `.scplugin` packages, write the list the app
 //! browses, and run the end-to-end tests against real built plugins.
 //!
-//!   cargo xtask plugin build [FOLDER…]   packages into target/plugins/ (all of plugins/official and /community)
+//!   cargo xtask plugin build [FOLDER…]   packages into target/plugins/ (official, community and examples)
 //!   cargo xtask plugin index             target/plugins/plugins-index.json for this version
 //!   cargo xtask plugin test              builds, then runs the host's end-to-end tests with the packages
 
@@ -25,10 +25,12 @@ fn out_dir() -> PathBuf {
     target().join("plugins")
 }
 
-/// Every plugin folder: plugins/official/* and plugins/community/* with a plugin.toml.
-fn folders() -> Vec<(PathBuf, &'static str)> {
+/// Every plugin folder with a plugin.toml: plugins/official/* and plugins/community/* (listed in Browse), and with
+/// `examples` also plugins/examples/* (built and tested, never listed).
+fn folders(examples: bool) -> Vec<(PathBuf, &'static str)> {
     let mut out = Vec::new();
-    for tier in ["official", "community"] {
+    let tiers: &[&'static str] = if examples { &["official", "community", "examples"] } else { &["official", "community"] };
+    for &tier in tiers {
         let Ok(rd) = std::fs::read_dir(root().join("plugins").join(tier)) else { continue };
         let mut v: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.join("plugin.toml").exists()).collect();
         v.sort();
@@ -61,7 +63,7 @@ pub fn build(only: &[String]) -> Result<Vec<PathBuf>> {
     let wasm_dir = plugin_target.join("wasm32-unknown-unknown").join("release");
     std::fs::create_dir_all(out_dir())?;
     let mut made = Vec::new();
-    for (dir, _) in folders() {
+    for (dir, _) in folders(true) {
         let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
         if !only.is_empty() && !only.iter().any(|o| o == &name || Path::new(o).ends_with(&name)) {
             continue;
@@ -84,7 +86,7 @@ pub fn build(only: &[String]) -> Result<Vec<PathBuf>> {
 /// The list the app reads: every built package with its manifest, tier, size and SHA-256.
 fn index() -> Result<()> {
     let mut plugins = Vec::new();
-    for (dir, tier) in folders() {
+    for (dir, tier) in folders(false) {
         let toml = std::fs::read_to_string(dir.join("plugin.toml"))?;
         let manifest = shapecraft_plugin_host::Manifest::parse(&toml).map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?;
         let file = format!("{}-{}.scplugin", manifest.id, manifest.version);

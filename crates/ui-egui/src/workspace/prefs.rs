@@ -642,18 +642,9 @@ fn qr_code(p: &egui::Painter, r: Rect, text: &str) {
     }
 }
 
-/// Waiting for the plugin system.
+/// Preferences ▸ Plugins: installed plugins and their settings, and Browse (see `crate::plugins`).
 fn plugins_tab(ui: &mut Ui, r: Rect) {
-    let p = ui.painter().clone();
-    let c = pos2(r.center().x, r.top() + 150.0);
-    p.text(c, Align2::CENTER_CENTER, "No plugins yet", theme::body(14.0), Tokens::text_strong());
-    p.text(
-        c + vec2(0.0, 22.0),
-        Align2::CENTER_CENTER,
-        "Plugin support is planned. Your plugins will be listed here.",
-        theme::body(11.0),
-        Tokens::text_dim(),
-    );
+    crate::plugins::prefs_tab(ui, r);
 }
 
 /// Preferences ▸ Sync: the cloud storage apps on this computer (see `crate::cloud`). ShapeCraft saves into their

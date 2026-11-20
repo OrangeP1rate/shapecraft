@@ -135,20 +135,50 @@ impl Workspace {
         Ok(())
     }
 
+    /// What a plugin's button gets (Generative Render): the view as it looks, and where the model is (drawn over black
+    /// and over white without its shadow, so the mask is the model alone with soft edges).
+    pub fn plugin_capture(&mut self) -> Result<shapecraft_plugin_host::Capture, String> {
+        use shapecraft_plugin_host::images::{Mask, Picture};
+        let (w, h, view) = self.capture_over(None, true)?;
+        let (bw, bh, black) = self.capture_over(Some(Rgba::hex(0x000000)), false)?;
+        let (_, _, white) = self.capture_over(Some(Rgba::hex(0xffffff)), false)?;
+        if (bw, bh) != (w, h) {
+            return Err("the view changed size while it was captured".into());
+        }
+        let alpha: Vec<u8> = unmix(&black, &white).as_chunks::<4>().0.iter().map(|px| px[3]).collect();
+        Ok(shapecraft_plugin_host::Capture {
+            view: Picture { width: w, height: h, pixels: view },
+            model: Mask { width: w, height: h, values: alpha },
+            selection: None,
+        })
+    }
+
+    /// Visualization's Generative Render button: the plugin's sheet over a fresh capture of the view, or (without
+    /// the plugin) a card offering to add it.
+    pub(crate) fn generative_render(&mut self) {
+        match crate::plugins::visualization_plugin() {
+            Some((id, panel)) => {
+                let capture = self.plugin_capture().map_err(|e| log::warn!("capture for {id}: {e}")).ok();
+                crate::plugins::open_sheet(&id, &panel, capture);
+            }
+            None => crate::plugins::offer_generative(),
+        }
+    }
+
     fn capture_rgba(&mut self) -> Result<(u32, u32, Vec<u8>), String> {
         // The Transparent environment (or the Screenshot tool's Transparency) captures with a see-through backdrop:
         // drawn over black and over white, what differs between the two is how see-through each pixel is (soft
         // shadows stay half see-through).
         let see_through = if self.visualizing { self.session.doc.visual.environment == 1 } else { self.settings.shot_transparent };
         if see_through {
-            let (w, h, black) = self.capture_over(Some(Rgba::hex(0x000000)))?;
-            let (_, _, white) = self.capture_over(Some(Rgba::hex(0xffffff)))?;
+            let (w, h, black) = self.capture_over(Some(Rgba::hex(0x000000)), true)?;
+            let (_, _, white) = self.capture_over(Some(Rgba::hex(0xffffff)), true)?;
             return Ok((w, h, unmix(&black, &white)));
         }
-        self.capture_over(None)
+        self.capture_over(None, true)
     }
 
-    fn capture_over(&mut self, backdrop: Option<Rgba>) -> Result<(u32, u32, Vec<u8>), String> {
+    fn capture_over(&mut self, backdrop: Option<Rgba>, shadow: bool) -> Result<(u32, u32, Vec<u8>), String> {
         let rect = self.view_rect;
         // The Screenshot tool's size: the view's own pixels, twice that, or Full HD; Visualization's Capture is
         // the view's pixels.
@@ -187,7 +217,7 @@ impl Workspace {
             section: self.section.map(|s| (s.origin(), s.normal)),
             presentation: self.visualizing,
             backdrop: backdrop.unwrap_or_else(|| Rgba::hex(crate::workspace::visual::backdrop(&self.session.doc.visual))),
-            shadow: crate::workspace::visual::shadow(&self.session.doc.visual),
+            shadow: if shadow { crate::workspace::visual::shadow(&self.session.doc.visual) } else { 0.0 },
             ghosts: &[],
             tints: &[],
             drawn: &[],

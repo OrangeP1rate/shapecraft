@@ -38,8 +38,16 @@ pub fn list() -> Result<Vec<Model>, String> {
     Ok(out)
 }
 
+/// "gpt-image-2.6-sunburst" → "GPT Image 2.6 Sunburst".
 fn pretty(id: &str) -> String {
-    id.replace("gpt-image", "GPT Image").replace('-', " ")
+    id.replace("gpt-image", "GPT Image")
+        .split('-')
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn generate(job: &Job) -> Result<Made, String> {

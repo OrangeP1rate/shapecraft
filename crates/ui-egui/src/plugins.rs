@@ -944,7 +944,12 @@ fn control(
 
 /// A pop-up menu of grouped choices; the newly picked value.
 fn menu(ui: &mut Ui, id: &str, options: &[Choice], cur: &str, empty: &str, w: f32) -> Option<String> {
-    let shown = options.iter().find(|c| c.value == cur).map(|c| c.shown().to_string());
+    // A value the list doesn't have (yet: an older pick, a list not refreshed) still shows by its name.
+    let shown = options
+        .iter()
+        .find(|c| c.value == cur)
+        .map(|c| c.shown().to_string())
+        .or_else(|| (!cur.is_empty()).then(|| cur.split_once(':').map_or(cur, |(_, m)| m).to_string()));
     let text = shown.unwrap_or_else(|| if options.is_empty() { empty.to_string() } else { "Choose…".to_string() });
     let mut picked = None;
     egui::ComboBox::from_id_salt(("pl-menu", id))
@@ -1019,7 +1024,11 @@ fn sheet(p: &mut Plugins, ui: &mut Ui) {
     let title = panel.as_ref().map(|p| p.title.clone()).unwrap_or_default();
     let touch = crate::tablet::touch_ui();
     let w = if touch { 640.0 } else { 600.0 };
-    let h = (w - 36.0) * 0.6 + if results.is_empty() { 190.0 } else { 250.0 };
+    let msg_h = message
+        .as_ref()
+        .filter(|(t, s)| !s.is_empty() && *t != Tone::Good)
+        .map_or(0.0, |(_, s)| 30.0 + 16.0 * (s.len() as f32 / 80.0).ceil());
+    let h = (w - 36.0) * 0.6 + if results.is_empty() { 190.0 } else { 250.0 } + msg_h;
     if running.is_some() {
         ctx.request_repaint();
     }

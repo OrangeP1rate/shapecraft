@@ -359,9 +359,25 @@ pub fn http_error(service: &str, r: &host::Response) -> String {
                 .and_then(|m| m.as_str().map(str::to_string))
         })
         .unwrap_or_else(|| body.chars().take(200).collect());
+    let low = said.to_lowercase();
+    let no_credit =
+        ["no credits", "insufficient_quota", "exceeded your current quota", "billing", "insufficient credits", "payment required"]
+            .iter()
+            .any(|k| low.contains(k));
+    if no_credit || r.status == 402 {
+        let page = match service {
+            "OpenAI" => " Add some at platform.openai.com ▸ Settings ▸ Billing.",
+            "Google Gemini" => " Turn on billing for the key's project at aistudio.google.com.",
+            "OpenRouter" => " Add some at openrouter.ai ▸ Credits.",
+            _ => "",
+        };
+        return format!(
+            "{service} says this account has no credit for pictures. API use is paid separately from chat subscriptions \
+             like ChatGPT Plus or Gemini Advanced.{page}"
+        );
+    }
     match r.status {
         401 | 403 => format!("{service} didn't accept the key or sign-in. Check it in Preferences ▸ Plugins. ({said})"),
-        402 => format!("{service} says the account is out of credit. ({said})"),
         429 => format!("{service} is busy or the account's rate limit was reached; try again in a moment. ({said})"),
         s => format!("{service} answered {s}: {said}"),
     }

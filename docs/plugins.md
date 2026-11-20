@@ -100,6 +100,9 @@ help = "Shown in command search"
 panel = "main"                # open this panel… (or: action = "…" to run an action)
 ```
 
+After a `secret` control is saved, the app runs the action `secret-saved` with `{"id": …}` (optional: answer
+"no action" if you don't need it). Generative Render uses it to fetch the new service's models at once.
+
 Errors you return from `run` are shown to the person as they are, so write them as plain sentences that say what
 to do ("Add an API key in Preferences ▸ Plugins first.").
 

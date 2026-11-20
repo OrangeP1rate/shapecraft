@@ -62,6 +62,19 @@ struct Confirm {
     source: Source,
 }
 
+/// The card that follows "Add Plugin": what's happening, then what to do next.
+enum AddCard {
+    Working { name: String, icon: String, size: u64, since: f64 },
+    Done { id: String, name: String, icon: String },
+    Failed { name: String, icon: String, error: String, retry: Option<Box<index::Entry>> },
+}
+
+/// What a plugin card asks the rest of the app for.
+pub(crate) enum Request {
+    /// Preferences ▸ Plugins, with the plugin just added open.
+    OpenPlugins,
+}
+
 enum Source {
     Listed(Box<index::Entry>),
     File(PathBuf),
@@ -79,6 +92,12 @@ pub struct Plugins {
     index: Option<Result<Index, String>>,
     confirm: Option<Confirm>,
     adding: Option<(String, Receiver<Result<Package, String>>)>,
+    add_card: Option<AddCard>,
+    /// A finished add, held until the card has shown "working" long enough to read.
+    add_done: Option<Result<Installed, String>>,
+    requests: Vec<Request>,
+    /// The listing being added, for Try Again.
+    retry: Option<Box<index::Entry>>,
     notice: Option<(Tone, String)>,
     sheet: Option<Sheet>,
     /// The Generative Render button pressed without the plugin: offer to add it.
@@ -111,6 +130,10 @@ impl Plugins {
             index: None,
             confirm: None,
             adding: None,
+            add_card: None,
+            add_done: None,
+            requests: Vec::new(),
+            retry: None,
             notice: None,
             sheet: None,
             offer: false,
@@ -219,9 +242,10 @@ impl Plugins {
                     Err(e) => st.message = Some((Tone::Error, e)),
                 }
             }
-            if let Some((_, t)) = &st.run
+            if let Some((action, t)) = &st.run
                 && let Some(answer) = t.poll()
             {
+                let action = action.clone();
                 st.run = None;
                 st.dirty = true;
                 st.message = Some(match answer {
@@ -233,6 +257,9 @@ impl Plugins {
                         (Tone::Good, msg)
                     }
                     Err(shapecraft_plugin_host::Error::Cancelled) => (Tone::Dim, "Cancelled.".into()),
+                    Err(e) if action == "secret-saved" && e.to_string().starts_with("no action") => {
+                        (Tone::Good, "Saved on this computer.".into())
+                    }
                     Err(e) => (Tone::Error, e.to_string()),
                 });
                 // Newly saved sign-ins or keys change the other panels too.
@@ -257,13 +284,24 @@ impl Plugins {
             if let Ok(r) = rx.try_recv() {
                 let id = id.clone();
                 self.adding = None;
-                match r.and_then(|pkg| {
+                let _ = id;
+                self.add_done = Some(r.and_then(|pkg| {
                     self.lib.as_ref().ok_or("no plugins folder".to_string())?.install(&pkg, false).map_err(|e| e.to_string())
-                }) {
-                    Ok(i) => self.added(i),
-                    Err(e) => self.notice = Some((Tone::Error, format!("{id} couldn't be added: {e}"))),
-                }
+                }));
             }
+        }
+        // The card shows "working" for at least a moment, so a quick add still reads as something that happened.
+        let now = ctx.input(|i| i.time);
+        if let Some(AddCard::Working { since, .. }) = &self.add_card {
+            busy = true;
+            if *since >= 0.0
+                && now - *since >= 1.2
+                && let Some(done) = self.add_done.take()
+            {
+                self.finish_add(done);
+            }
+        } else if let Some(done) = self.add_done.take() {
+            self.finish_add(done);
         }
         if let Some(Some(path)) = self.file_pick.taken() {
             self.confirm_file(path);
@@ -282,6 +320,22 @@ impl Plugins {
         self.urls.extend(shapecraft_plugin_host::runtime::take_urls());
         if busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(80));
+        }
+    }
+
+    fn finish_add(&mut self, done: Result<Installed, String>) {
+        let (name, icon, retry) = match self.add_card.take() {
+            Some(AddCard::Working { name, icon, .. }) => (name, icon, self.retry.take()),
+            _ => (String::new(), String::new(), None),
+        };
+        match done {
+            Ok(i) => {
+                let (id, n, ic) = (i.manifest.id.clone(), i.manifest.name.clone(), i.manifest.icon.clone());
+                self.added(i);
+                self.notice = None;
+                self.add_card = Some(AddCard::Done { id, name: n, icon: ic });
+            }
+            Err(e) => self.add_card = Some(AddCard::Failed { name, icon, error: e, retry }),
         }
     }
 
@@ -317,25 +371,31 @@ impl Plugins {
         }
     }
 
-    fn accept(&mut self) {
+    fn accept(&mut self, now: f64) {
         let Some(c) = self.confirm.take() else { return };
+        let (name, icon) = (c.manifest.name.clone(), c.manifest.icon.clone());
         match c.source {
             Source::Listed(entry) => {
+                let size = entry.size;
+                self.retry = Some(entry.clone());
                 let (tx, rx) = mpsc::channel();
                 let v = app_version().to_string();
                 std::thread::spawn(move || {
                     let _ = tx.send(index::download(&v, entry.as_ref()));
                 });
-                self.adding = Some((c.manifest.name.clone(), rx));
+                self.adding = Some((name.clone(), rx));
+                self.add_card = Some(AddCard::Working { name, icon, size, since: now });
             }
             Source::File(path) => {
-                let r = shapecraft_plugin_host::library::read_package(&path).and_then(|pkg| {
-                    self.lib.as_ref().ok_or(shapecraft_plugin_host::Error::Io("no plugins folder".into()))?.install(&pkg, true)
-                });
-                match r {
-                    Ok(i) => self.added(i),
-                    Err(e) => self.notice = Some((Tone::Error, e.to_string())),
-                }
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                self.retry = None;
+                let r = shapecraft_plugin_host::library::read_package(&path)
+                    .and_then(|pkg| {
+                        self.lib.as_ref().ok_or(shapecraft_plugin_host::Error::Io("no plugins folder".into()))?.install(&pkg, true)
+                    })
+                    .map_err(|e| e.to_string());
+                self.add_card = Some(AddCard::Working { name, icon, size, since: now });
+                self.add_done = Some(r);
             }
         }
     }
@@ -394,6 +454,9 @@ pub(crate) fn frame(ui: &mut Ui) {
         if p.confirm.is_some() {
             confirm_card(p, ui);
         }
+        if p.add_card.is_some() {
+            add_card(p, ui);
+        }
         for url in std::mem::take(&mut p.urls) {
             crate::landing::open_link(&url);
         }
@@ -437,7 +500,12 @@ pub(crate) fn offer_generative() {
 
 /// Whether a plugin sheet or card has the keyboard (the workspace leaves keys alone then).
 pub(crate) fn takes_keys() -> bool {
-    with(|p| p.sheet.is_some() || p.offer || p.confirm.is_some())
+    with(|p| p.sheet.is_some() || p.offer || p.confirm.is_some() || p.add_card.is_some())
+}
+
+/// What the plugin cards asked the rest of the app for since the last frame.
+pub(crate) fn take_requests() -> Vec<Request> {
+    with(|p| std::mem::take(&mut p.requests))
 }
 
 // ——— Preferences ▸ Plugins ———
@@ -662,7 +730,8 @@ fn browse_row(p: &mut Plugins, ui: &mut Ui, e: &index::Entry) {
     let newer = have.as_deref().is_some_and(|v| {
         shapecraft_plugin_host::manifest::parse_version(v) < shapecraft_plugin_host::manifest::parse_version(&e.manifest.version)
     });
-    let busy = p.adding.as_ref().is_some_and(|(n, _)| *n == e.manifest.name);
+    let busy = p.adding.as_ref().is_some_and(|(n, _)| *n == e.manifest.name)
+        || matches!(&p.add_card, Some(AddCard::Working { name, .. }) if *name == e.manifest.name);
     let (label, enabled) = match (&have, newer, busy) {
         (_, _, true) => ("Adding…", false),
         (Some(_), true, _) => ("Update", true),
@@ -791,6 +860,13 @@ fn apply(p: &mut Plugins, plugin: &str, panel_id: &str, acts: Vec<Act>, capture:
             }
             Act::SaveSecret(id, value) => {
                 let r = KeyFile::secrets(dir).set(&id, Some(value.trim()));
+                // Plugins may answer "secret-saved" (fetch what the new key unlocks); its answer becomes the message.
+                if r.is_ok()
+                    && let Some(l) = p.ensure(plugin)
+                {
+                    let t = l.run("secret-saved", &json!({ "id": id }), None);
+                    p.state(plugin, panel_id).run = Some(("secret-saved".into(), t));
+                }
                 let st = p.state(plugin, panel_id);
                 st.drafts.remove(&id);
                 st.dirty = true;
@@ -1234,6 +1310,78 @@ fn save_glyph(p: &egui::Painter, c: egui::Pos2, col: Color32) {
     p.line_segment([c + vec2(7.0, 7.0), c + vec2(7.0, 2.0)], s);
 }
 
+/// A round badge with a tick (permissions, "ready").
+fn tick_badge(p: &egui::Painter, c: egui::Pos2, r: f32, fill: Color32) {
+    p.circle_filled(c, r, fill);
+    let s = Stroke::new((r * 0.22).max(1.4), Color32::WHITE);
+    p.line_segment([c + vec2(-r * 0.42, r * 0.02), c + vec2(-r * 0.1, r * 0.34)], s);
+    p.line_segment([c + vec2(-r * 0.1, r * 0.34), c + vec2(r * 0.45, -r * 0.3)], s);
+}
+
+/// The plugin's tile, bigger and with a soft sheen (the cards).
+fn hero_icon(p: &egui::Painter, r: Rect, which: &str) {
+    let base = if which == "sparkle" { Tokens::accent() } else { theme::c(0x4a4a4e) };
+    p.rect_filled(r.translate(vec2(0.0, 3.0)), radius(14), Color32::from_black_alpha(60));
+    p.rect_filled(r, radius(14), base);
+    let top = Rect::from_min_max(r.min, pos2(r.max.x, r.center().y));
+    p.rect_filled(top, egui::CornerRadius { nw: 14, ne: 14, sw: 0, se: 0 }, Color32::from_white_alpha(18));
+    let icon = match which {
+        "sparkle" => crate::icons::Icon::CameraSparkle,
+        "image" => crate::icons::Icon::Screenshot,
+        _ => crate::icons::Icon::Insert,
+    };
+    crate::icons::paint(p, r.shrink(r.width() * 0.22), icon, Color32::WHITE);
+}
+
+/// Centred text wrapped to `w`; returns its height.
+fn centred(p: &egui::Painter, top: egui::Pos2, w: f32, text: &str, font: egui::FontId, color: Color32) -> f32 {
+    let mut job = egui::text::LayoutJob::simple(text.to_string(), font, color, w);
+    job.halign = egui::Align::Center;
+    let g = p.layout_job(job);
+    let h = g.size().y;
+    // A centred layout is laid out around x = 0: paint it from the middle.
+    p.galley(pos2(top.x + w / 2.0, top.y), g, color);
+    h
+}
+
+/// Rows in a rounded group (as the Export dialog's switches): a badge, a bold line and a dim one under it, each
+/// wrapped to the width. Draws at `top`, `w` wide; returns the height.
+fn feature_rows(p: &egui::Painter, top: egui::Pos2, w: f32, rows: &[(&str, &str)], badge: Color32) -> f32 {
+    let text_w = w - 46.0 - 14.0;
+    let laid: Vec<(std::sync::Arc<egui::Galley>, Option<std::sync::Arc<egui::Galley>>)> = rows
+        .iter()
+        .map(|(title, detail)| {
+            let font = if detail.is_empty() { theme::body(13.0) } else { theme::strong(13.0) };
+            let t = p.layout(title.to_string(), font, Tokens::text_strong(), text_w);
+            let d = (!detail.is_empty()).then(|| p.layout(detail.to_string(), theme::body(11.5), Tokens::text_dim(), text_w));
+            (t, d)
+        })
+        .collect();
+    let heights: Vec<f32> =
+        laid.iter().map(|(t, d)| (t.size().y + d.as_ref().map_or(0.0, |d| d.size().y + 2.0) + 22.0).max(42.0)).collect();
+    let total: f32 = heights.iter().sum();
+    let rect = Rect::from_min_size(top, vec2(w, total));
+    p.rect_filled(rect, radius(10), Tokens::chip());
+    p.rect_stroke(rect, radius(10), Stroke::new(1.0, Tokens::chip_border()), StrokeKind::Inside);
+    let mut y = top.y;
+    for (k, ((t, d), h)) in laid.into_iter().zip(&heights).enumerate() {
+        let r = Rect::from_min_size(pos2(rect.left(), y), vec2(w, *h));
+        if k > 0 {
+            p.hline((r.left() + 46.0)..=(r.right() - 14.0), r.top(), Stroke::new(1.0, Tokens::chip_border()));
+        }
+        tick_badge(p, pos2(r.left() + 24.0, r.center().y), 9.0, badge);
+        let block = t.size().y + d.as_ref().map_or(0.0, |d| d.size().y + 2.0);
+        let ty = r.center().y - block / 2.0;
+        let th = t.size().y;
+        p.galley(pos2(r.left() + 46.0, ty), t, Tokens::text_strong());
+        if let Some(d) = d {
+            p.galley(pos2(r.left() + 46.0, ty + th + 2.0), d, Tokens::text_dim());
+        }
+        y += h;
+    }
+    total
+}
+
 /// The card the Generative Render button shows before the plugin is added.
 fn offer_card(p: &mut Plugins, ui: &mut Ui) {
     let ctx = ui.ctx().clone();
@@ -1243,43 +1391,76 @@ fn offer_card(p: &mut Plugins, ui: &mut Ui) {
         p.index.as_ref().and_then(|r| r.as_ref().ok()).and_then(|i| i.plugins.iter().find(|e| e.manifest.id == GENERATIVE).cloned());
     let failed = p.index.as_ref().and_then(|r| r.as_ref().err()).cloned();
     let mut add = false;
-    dim_and_card(ui, egui::Id::NULL.with("plugin-offer"), 460.0, 330.0, |ui, card| {
+    let mut retry = false;
+    dim_and_card(ui, egui::Id::NULL.with("plugin-offer"), 480.0, 446.0, |ui, card| {
         let painter = ui.painter().clone();
-        plugin_icon(&painter, Rect::from_center_size(pos2(card.center().x, card.top() + 48.0), vec2(44.0, 44.0)), "sparkle");
+        let pad = 28.0;
+        let mut y = card.top() + 32.0;
+        hero_icon(&painter, Rect::from_center_size(pos2(card.center().x, y + 28.0), vec2(56.0, 56.0)), "sparkle");
+        y += 56.0 + 20.0;
         painter.text(
-            pos2(card.center().x, card.top() + 92.0),
+            pos2(card.center().x, y + 11.0),
             Align2::CENTER_CENTER,
             "Generative Render",
-            theme::strong(16.0),
+            theme::strong(19.0),
             Tokens::text_strong(),
         );
-        let text = "Describe a scene and get a picture of your model in it. It's a plugin: add it if you want it, \
-                    and connect the AI you already use (OpenRouter, OpenAI, Google Gemini) or one on your own computer. \
-                    No limits but your provider's.";
-        let g = painter.layout(text.to_string(), theme::body(12.5), Tokens::text_dim(), card.width() - 60.0);
-        painter.galley(pos2(card.left() + 30.0, card.top() + 112.0), g, Tokens::text_dim());
-        let y = card.bottom() - 32.0;
+        y += 32.0;
+        y += centred(
+            &painter,
+            pos2(card.left() + pad, y),
+            card.width() - 2.0 * pad,
+            "Describe a scene and get a picture of your model in it.",
+            theme::body(13.5),
+            Tokens::text_dim(),
+        );
+        y += 20.0;
+        let rows = [
+            ("Your own AI", "OpenRouter, OpenAI or Google Gemini, or free on your computer"),
+            ("Your model stays exact", "Only the scene around it is made up"),
+            ("No limits of ours", "Make as many as your provider allows"),
+        ];
+        y += feature_rows(&painter, pos2(card.left() + pad, y), card.width() - 2.0 * pad, &rows, Tokens::accent()) + 16.0;
+        centred(
+            &painter,
+            pos2(card.left() + pad, y),
+            card.width() - 2.0 * pad,
+            "It's a plugin, so ShapeCraft stays lean for everyone who doesn't use it.",
+            theme::body(11.5),
+            Tokens::text_faint(),
+        );
+        let by = card.bottom() - 34.0;
+        painter.hline(card.x_range(), by - 26.0, Stroke::new(1.0, Tokens::divider()));
         match (&entry, &failed) {
             (Some(_), _) => {
-                if button(ui, card.right() - 18.0, y, "Add Plugin…", Style::Primary, p.adding.is_none()).0 {
+                if button(ui, card.right() - pad + 8.0, by, "Add Plugin…", Style::Primary, p.adding.is_none()).0 {
                     add = true;
                 }
             }
             (None, Some(e)) => {
-                let g = painter.layout(
-                    format!("The plugin list couldn't be loaded: {e}"),
-                    theme::body(11.0),
-                    Tokens::danger(),
-                    card.width() - 60.0,
-                );
-                painter.galley(pos2(card.left() + 30.0, card.bottom() - 80.0), g, Tokens::danger());
+                painter.text(pos2(card.left() + pad, by), Align2::LEFT_CENTER, short(e, 46), theme::body(11.5), Tokens::danger());
+                if button(ui, card.right() - pad + 8.0, by, "Try Again", Style::Primary, true).0 {
+                    retry = true;
+                }
             }
-            (None, None) => spinner(&painter, pos2(card.right() - 40.0, y), now),
+            (None, None) => {
+                spinner(&painter, pos2(card.left() + pad + 8.0, by), now);
+                painter.text(
+                    pos2(card.left() + pad + 24.0, by),
+                    Align2::LEFT_CENTER,
+                    "Looking it up…",
+                    theme::body(12.0),
+                    Tokens::text_dim(),
+                );
+            }
         }
-        if button(ui, card.right() - 140.0, y, "Not Now", Style::Plain, true).0 {
+        if button(ui, card.right() - pad - 112.0, by, "Not Now", Style::Plain, true).0 {
             close = true;
         }
     });
+    if retry {
+        p.fetch_index();
+    }
     if add && let Some(e) = entry {
         p.start_add(&e);
         p.offer = false;
@@ -1289,10 +1470,15 @@ fn offer_card(p: &mut Plugins, ui: &mut Ui) {
     }
 }
 
+fn short(s: &str, n: usize) -> String {
+    if s.chars().count() <= n { s.to_string() } else { format!("{}…", s.chars().take(n).collect::<String>()) }
+}
+
 /// "Add <plugin>?" with what it asks for.
 fn confirm_card(p: &mut Plugins, ui: &mut Ui) {
     let Some(c) = &p.confirm else { return };
     let ctx = ui.ctx().clone();
+    let now = ctx.input(|i| i.time);
     let m = c.manifest.clone();
     let from_file = matches!(c.source, Source::File(_));
     let lines = m.permission_lines();
@@ -1300,63 +1486,213 @@ fn confirm_card(p: &mut Plugins, ui: &mut Ui) {
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
         answer = Some(false);
     }
-    let h = 230.0 + 18.0 * lines.len() as f32 + if from_file { 40.0 } else { 0.0 };
-    dim_and_card(ui, egui::Id::NULL.with("plugin-confirm"), 440.0, h, |ui, card| {
+    // Hosts read better as a list under the line than as one long sentence.
+    let split: Vec<(String, String)> = lines
+        .iter()
+        .map(|l| match l.strip_prefix("Talk to ").filter(|rest| rest.contains('.') && !rest.contains(" on ")) {
+            Some(hosts) => ("Talk to these services".to_string(), hosts.to_string()),
+            None => (l.clone(), String::new()),
+        })
+        .collect();
+    let rows_h: f32 = split.iter().map(|(_, d)| if d.is_empty() { 42.0 } else { 58.0 }).sum();
+    let h = 250.0 + rows_h + if from_file { 52.0 } else { 0.0 };
+    dim_and_card(ui, egui::Id::NULL.with("plugin-confirm"), 480.0, h, |ui, card| {
         let painter = ui.painter().clone();
-        let x0 = card.left() + 24.0;
-        plugin_icon(&painter, Rect::from_min_size(pos2(x0, card.top() + 22.0), vec2(36.0, 36.0)), &m.icon);
+        let pad = 28.0;
+        let x0 = card.left() + pad;
+        hero_icon(&painter, Rect::from_min_size(pos2(x0, card.top() + 28.0), vec2(48.0, 48.0)), &m.icon);
         painter.text(
-            pos2(x0 + 50.0, card.top() + 32.0),
+            pos2(x0 + 64.0, card.top() + 42.0),
             Align2::LEFT_CENTER,
             format!("Add {}?", m.name),
-            theme::strong(15.0),
+            theme::strong(17.0),
             Tokens::text_strong(),
         );
-        let by = if m.authors.is_empty() { String::new() } else { format!("by {} · ", m.authors.join(", ")) };
+        let by = if m.authors.is_empty() { String::new() } else { format!("By {} · ", m.authors.join(", ")) };
         painter.text(
-            pos2(x0 + 50.0, card.top() + 50.0),
+            pos2(x0 + 64.0, card.top() + 63.0),
             Align2::LEFT_CENTER,
             format!("{by}version {}", m.version),
-            theme::body(11.0),
+            theme::body(12.0),
             Tokens::text_dim(),
         );
-        let mut y = card.top() + 84.0;
-        painter.text(pos2(x0, y), Align2::LEFT_CENTER, "It will be able to:", theme::strong(12.0), Tokens::text_strong());
-        y += 22.0;
-        for l in &lines {
-            painter.text(pos2(x0 + 8.0, y), Align2::LEFT_CENTER, format!("• {l}"), theme::body(12.0), Tokens::text_strong());
-            y += 18.0;
-        }
-        y += 8.0;
+        let mut y = card.top() + 100.0;
+        painter.text(pos2(x0, y), Align2::LEFT_CENTER, "It will be able to", theme::strong(12.0), Tokens::text_dim());
+        y += 14.0;
+        let rows: Vec<(&str, &str)> = split.iter().map(|(t, d)| (t.as_str(), d.as_str())).collect();
+        y += feature_rows(&painter, pos2(x0, y), card.width() - 2.0 * pad, &rows, theme::fixed(0x3d9a50)) + 14.0;
         let g = painter.layout(
-            "Nothing else: no files, no other plugins, nothing on your computer it didn't ask for. You can remove it any time in Preferences ▸ Plugins.".into(),
-            theme::body(11.0),
+            "Nothing else: not your files, not other plugins. You can switch it off or remove it any time in Preferences ▸ Plugins.".into(),
+            theme::body(11.5),
             Tokens::text_dim(),
-            card.width() - 48.0,
+            card.width() - 2.0 * pad,
         );
+        let gh = g.size().y;
         painter.galley(pos2(x0, y), g, Tokens::text_dim());
+        y += gh + 12.0;
         if from_file {
             let g = painter.layout(
-                "This plugin comes from a file, not ShapeCraft's reviewed list. Only add it if you trust where it came from.".into(),
-                theme::body(11.0),
+                "This one comes from a file, not ShapeCraft's reviewed list. Only add it if you trust where it came from.".into(),
+                theme::body(11.5),
                 tone_color(Tone::Warning),
-                card.width() - 48.0,
+                card.width() - 2.0 * pad,
             );
-            painter.galley(pos2(x0, card.bottom() - 84.0), g, tone_color(Tone::Warning));
+            painter.galley(pos2(x0, y), g, tone_color(Tone::Warning));
         }
-        let by = card.bottom() - 30.0;
-        if button(ui, card.right() - 18.0, by, "Add Plugin", Style::Primary, true).0 {
+        let by = card.bottom() - 34.0;
+        painter.hline(card.x_range(), by - 26.0, Stroke::new(1.0, Tokens::divider()));
+        if button(ui, card.right() - pad + 8.0, by, "Add Plugin", Style::Primary, true).0 {
             answer = Some(true);
         }
-        if button(ui, card.right() - 130.0, by, "Cancel", Style::Plain, true).0 {
+        if button(ui, card.right() - pad - 108.0, by, "Cancel", Style::Plain, true).0 {
             answer = Some(false);
         }
     });
     match answer {
-        Some(true) => p.accept(),
+        Some(true) => p.accept(now),
         Some(false) => p.confirm = None,
         None => {}
     }
+}
+
+/// Adding a plugin, start to finish: working (with what it's doing), then ready (with what to do next) or what went
+/// wrong (with Try Again).
+fn add_card(p: &mut Plugins, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    let now = ctx.input(|i| i.time);
+    // Started without a clock (the control channel): it starts now.
+    if let Some(AddCard::Working { since, .. }) = &mut p.add_card
+        && *since < 0.0
+    {
+        *since = now;
+    }
+    let Some(card_state) = &p.add_card else { return };
+    let mut out: Option<&'static str> = None;
+    let (name, icon) = match card_state {
+        AddCard::Working { name, icon, .. } | AddCard::Done { name, icon, .. } | AddCard::Failed { name, icon, .. } => {
+            (name.clone(), icon.clone())
+        }
+    };
+    if matches!(card_state, AddCard::Working { .. }) {
+        ctx.request_repaint();
+    } else if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        out = Some("close");
+    }
+    let state = match card_state {
+        AddCard::Working { size, since, .. } => (0u8, String::new(), *size, now - *since),
+        AddCard::Done { .. } => (1u8, String::new(), 0, 0.0),
+        AddCard::Failed { error, .. } => (2u8, error.clone(), 0, 0.0),
+    };
+    let card_h = if state.0 == 0 { 250.0 } else { 270.0 };
+    dim_and_card(ui, egui::Id::NULL.with("plugin-adding"), 440.0, card_h, |ui, card| {
+        let painter = ui.painter().clone();
+        let pad = 28.0;
+        let c = card.center().x;
+        let icon_r = Rect::from_center_size(pos2(c, card.top() + 62.0), vec2(56.0, 56.0));
+        hero_icon(&painter, icon_r, &icon);
+        let by = card.bottom() - 34.0;
+        match state.0 {
+            0 => {
+                // Working: a bar that fills as it goes (downloads are small; the checking takes a moment).
+                let t = ((state.3 / 1.6) as f32).clamp(0.0, 0.92);
+                let step =
+                    if t < 0.45 { format!("Downloading {}…", size_text(state.2)) } else { "Checking and installing…".to_string() };
+                painter.text(
+                    pos2(c, card.top() + 118.0),
+                    Align2::CENTER_CENTER,
+                    format!("Adding {name}"),
+                    theme::strong(17.0),
+                    Tokens::text_strong(),
+                );
+                painter.text(pos2(c, card.top() + 144.0), Align2::CENTER_CENTER, step, theme::body(12.5), Tokens::text_dim());
+                let bar = Rect::from_center_size(pos2(c, card.top() + 178.0), vec2(card.width() - 2.0 * pad - 40.0, 6.0));
+                painter.rect_filled(bar, radius(3), theme::c(0x3a3a3c));
+                let fill = Rect::from_min_size(bar.min, vec2(bar.width() * (0.08 + 0.92 * t), bar.height()));
+                painter.rect_filled(fill, radius(3), Tokens::accent());
+                painter.text(
+                    pos2(c, by),
+                    Align2::CENTER_CENTER,
+                    "It runs sealed off, with only the permissions you just saw.",
+                    theme::body(11.5),
+                    Tokens::text_faint(),
+                );
+            }
+            1 => {
+                tick_badge(&painter, icon_r.right_bottom() - vec2(4.0, 4.0), 13.0, theme::fixed(0x3d9a50));
+                painter.text(
+                    pos2(c, card.top() + 118.0),
+                    Align2::CENTER_CENTER,
+                    format!("{name} is ready"),
+                    theme::strong(17.0),
+                    Tokens::text_strong(),
+                );
+                centred(
+                    &painter,
+                    pos2(card.left() + pad, card.top() + 136.0),
+                    card.width() - 2.0 * pad,
+                    "Connect the AI you'd like to use, then press Generative Render in Visualization. You'll find it any time in Preferences ▸ Plugins.",
+                    theme::body(12.5),
+                    Tokens::text_dim(),
+                );
+                painter.hline(card.x_range(), by - 26.0, Stroke::new(1.0, Tokens::divider()));
+                if button(ui, card.right() - pad + 8.0, by, "Set Up Connections…", Style::Primary, true).0 {
+                    out = Some("setup");
+                }
+                if button(ui, card.right() - pad - 172.0, by, "Later", Style::Plain, true).0 {
+                    out = Some("close");
+                }
+            }
+            _ => {
+                painter.text(
+                    pos2(c, card.top() + 118.0),
+                    Align2::CENTER_CENTER,
+                    format!("{name} couldn't be added"),
+                    theme::strong(17.0),
+                    Tokens::text_strong(),
+                );
+                centred(
+                    &painter,
+                    pos2(card.left() + pad, card.top() + 136.0),
+                    card.width() - 2.0 * pad,
+                    &short(&state.1, 180),
+                    theme::body(12.0),
+                    Tokens::danger(),
+                );
+                painter.hline(card.x_range(), by - 26.0, Stroke::new(1.0, Tokens::divider()));
+                if button(ui, card.right() - pad + 8.0, by, "Try Again", Style::Primary, true).0 {
+                    out = Some("retry");
+                }
+                if button(ui, card.right() - pad - 104.0, by, "Close", Style::Plain, true).0 {
+                    out = Some("close");
+                }
+            }
+        }
+    });
+    match out {
+        Some("setup") => {
+            if let Some(AddCard::Done { id, .. }) = &p.add_card {
+                p.selected = Some(id.clone());
+            }
+            p.browsing = false;
+            p.requests.push(Request::OpenPlugins);
+            p.add_card = None;
+        }
+        Some("retry") => {
+            let retry = match p.add_card.take() {
+                Some(AddCard::Failed { retry, .. }) => retry,
+                _ => None,
+            };
+            if let Some(e) = retry {
+                p.start_add(&e);
+            }
+        }
+        Some(_) => p.add_card = None,
+        None => {}
+    }
+}
+
+fn size_text(bytes: u64) -> String {
+    if bytes >= 1 << 20 { format!("{:.1} MB", bytes as f64 / (1u64 << 20) as f64) } else { format!("{} KB", (bytes / 1024).max(1)) }
 }
 
 // ——— Control channel ———
@@ -1444,10 +1780,23 @@ pub(crate) fn control_call(method: &str, params: &Value, capture: impl FnOnce() 
             p.browsing = false;
             Ok(Value::Null)
         }),
+        // Presses the confirmation card's Add Plugin (to look at the add cards offscreen).
+        "plugins.accept" => with(|p| {
+            p.accept(-1.0);
+            Ok(Value::Null)
+        }),
+        "plugins.add" => with(|p| {
+            let e =
+                p.index.as_ref().and_then(|r| r.as_ref().ok()).and_then(|i| i.plugins.iter().find(|e| e.manifest.id == s("id")).cloned());
+            let e = e.ok_or("not in the list (plugins.browse first)")?;
+            p.start_add(&e);
+            Ok(Value::Null)
+        }),
         "plugins.close" => with(|p| {
             p.sheet = None;
             p.offer = false;
             p.confirm = None;
+            p.add_card = None;
             Ok(Value::Null)
         }),
         "plugins.browse" => with(|p| {

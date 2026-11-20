@@ -7,7 +7,10 @@ use crate::{Job, Made, Model, http_error};
 const API: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 pub fn defaults() -> Vec<Model> {
-    vec![Model { id: "gemini-2.5-flash-image".into(), name: "Gemini 2.5 Flash Image (Nano Banana)".into(), detail: String::new() }]
+    vec![
+        Model { id: "gemini-3.1-flash-image".into(), name: "Gemini 3.1 Flash Image".into(), detail: String::new() },
+        Model { id: "gemini-2.5-flash-image".into(), name: "Gemini 2.5 Flash Image".into(), detail: String::new() },
+    ]
 }
 
 fn key() -> Result<String, String> {
@@ -54,7 +57,8 @@ pub fn generate(job: &Job) -> Result<Made, String> {
             { "text": job.prompt },
             { "inline_data": { "mime_type": "image/png", "data": host::base64_encode(&job.png) } }
         ]}],
-        "generationConfig": { "responseModalities": ["TEXT", "IMAGE"] },
+        // The view's shape, so the scene is framed like the view (and the model stays where it was).
+        "generationConfig": { "responseModalities": ["TEXT", "IMAGE"], "imageConfig": { "aspectRatio": crate::openrouter::aspect(job.width, job.height) } },
     });
     let url = format!("{API}/models/{}:generateContent", job.model);
     let mut pictures = Vec::new();

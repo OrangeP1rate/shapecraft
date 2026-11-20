@@ -7,7 +7,7 @@ use crate::{Job, Made, Model, http_error};
 const API: &str = "https://api.openai.com/v1";
 
 pub fn defaults() -> Vec<Model> {
-    vec![Model { id: "gpt-image-1".into(), name: "GPT Image 1".into(), detail: String::new() }]
+    vec![Model { id: "gpt-image-2".into(), name: "GPT Image 2".into(), detail: String::new() }]
 }
 
 fn key() -> Result<String, String> {
@@ -60,13 +60,17 @@ pub fn generate(job: &Job) -> Result<Made, String> {
     } else {
         "1024x1024"
     };
-    let parts = [
+    let mut parts = vec![
         http::Part { name: "model", filename: None, content_type: None, data: job.model.as_bytes() },
         http::Part { name: "prompt", filename: None, content_type: None, data: job.prompt.as_bytes() },
         http::Part { name: "n", filename: None, content_type: None, data: n.as_bytes() },
         http::Part { name: "size", filename: None, content_type: None, data: size.as_bytes() },
         http::Part { name: "image", filename: Some("view.png"), content_type: Some("image/png"), data: &job.png },
     ];
+    // Keep My Model Exact: only the see-through part (the scene) is repainted.
+    if let Some(m) = &job.mask_png {
+        parts.push(http::Part { name: "mask", filename: Some("mask.png"), content_type: Some("image/png"), data: m });
+    }
     let r = http::post_multipart(&format!("{API}/images/edits"), &[("Authorization", &auth)], &parts, 300)?;
     if r.status != 200 {
         return Err(http_error("OpenAI", &r));

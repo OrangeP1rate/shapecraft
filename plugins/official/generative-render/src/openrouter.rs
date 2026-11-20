@@ -10,7 +10,7 @@ const API: &str = "https://openrouter.ai/api/v1";
 pub fn defaults() -> Vec<Model> {
     [
         ("google/gemini-2.5-flash-image", "Gemini 2.5 Flash Image (Nano Banana)"),
-        ("openai/gpt-image-1", "GPT Image 1"),
+        ("openai/gpt-image-2", "GPT Image 2"),
         ("black-forest-labs/flux.2-pro", "FLUX.2 Pro"),
         ("bytedance-seed/seedream-4.5", "Seedream 4.5"),
     ]

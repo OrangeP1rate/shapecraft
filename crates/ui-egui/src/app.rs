@@ -2696,6 +2696,17 @@ impl eframe::App for ShapeCraftApp {
             }
         }
         crate::plugins::frame(ui);
+        for r in crate::plugins::take_requests() {
+            match r {
+                crate::plugins::Request::OpenPlugins => match self.ws.as_deref_mut() {
+                    Some(ws) => {
+                        ws.prefs_open = true;
+                        ws.prefs_tab = 3;
+                    }
+                    None => self.home_prefs = Some(3),
+                },
+            }
+        }
         if let Some(url) = crate::landing::take_tablet_link() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }

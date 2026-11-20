@@ -35,6 +35,9 @@ pub struct Job<'a> {
     pub width: u32,
     pub height: u32,
     pub count: u32,
+    /// With Keep My Model Exact: a PNG the view's size, see-through where the scene may change and solid on the model
+    /// (OpenAI's edit mask). Services without masks get the instruction alone.
+    pub mask_png: Option<Vec<u8>>,
 }
 
 /// What a service made: encoded pictures (PNG/JPEG/WebP) and a note (cost, seed).
@@ -205,6 +208,15 @@ impl Guest for GenerativeRender {
                 shapecraft_plugin::message("Signed out. The key is removed from this computer (revoke it at openrouter.ai/settings/keys).")
             }
             "comfy_test" => comfy::test(&v),
+            // The app runs this after a key is saved: the new service's models are ready right away.
+            "secret-saved" => {
+                let id = v.str("id");
+                let service = id.trim_end_matches("_key");
+                match refresh(service) {
+                    Ok(n) => shapecraft_plugin::message(&format!("Saved. {n} models are ready.")),
+                    Err(e) => Err(format!("Saved, but the model list couldn't be loaded: {e}")),
+                }
+            }
             "refresh_models" => {
                 let mut lines = Vec::new();
                 for (sid, sname) in SERVICES {
@@ -247,8 +259,9 @@ fn instruction(mode: &str, prompt: &str) -> String {
             format!(
                 "Place the object from this picture in a new scene: {scene}. Keep the object exactly as it is: the same \
                  shape, proportions, parts, colors, materials and camera angle; don't add, remove or reshape anything \
-                 on it. Replace only the background and surroundings, and make the lighting, reflections and shadows \
-                 fit the new scene. Photorealistic."
+                 on it. It must stay at exactly the same position and size in the frame: don't move, resize, crop, \
+                 duplicate or redraw it, don't add another copy of it anywhere, and keep the picture's framing. Replace only the background and surroundings \
+                 around it, and make the lighting and the shadows it casts fit the new scene. Photorealistic."
             )
         }
         "Selected Faces" => format!(
@@ -300,7 +313,15 @@ fn generate(v: &Values) -> Result<String, String> {
     };
     let small = scaled(&sent, 1536)?;
     let png = host::encode_png(&small)?;
-    let job = Job { model, prompt: instruction(&mode, &prompt), png, width: small.width, height: small.height, count };
+    let mask_png = if exact {
+        // The model mask as alpha (solid = keep), scaled like the picture.
+        let alpha: Vec<u8> = cap.model.values.iter().flat_map(|a| [0, 0, 0, *a]).collect();
+        let m = host::Image { width: cap.model.width, height: cap.model.height, pixels: alpha };
+        Some(host::encode_png(&host::fit(&m, small.width, small.height)?)?)
+    } else {
+        None
+    };
+    let job = Job { model, prompt: instruction(&mode, &prompt), png, width: small.width, height: small.height, count, mask_png };
     let made = match service {
         "openrouter" => openrouter::generate(&job)?,
         "openai" => openai::generate(&job)?,

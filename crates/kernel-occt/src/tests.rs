@@ -1328,7 +1328,9 @@ fn mass_props_within_a_budget_falls_back_to_triangles() {
     let (m, mesh) = k().mass_props_within(&part, 30.0).unwrap();
     assert!(!mesh);
     assert!((m.volume - exact.volume).abs() < 1e-9);
-    let (m, mesh) = k().mass_props_within(&part, 1e-9).unwrap();
+    // A nanosecond's budget gives the triangles, unless the helper beat the clock (a busy runner can schedule it
+    // first, and then the exact value is right to return): try again until the budget runs out first.
+    let (m, mesh) = (0..20).map(|_| k().mass_props_within(&part, 1e-9).unwrap()).find(|r| r.1).unwrap_or((exact, false));
     assert!(mesh, "no time for the exact one");
     assert!((m.volume - exact.volume).abs() < 0.01 * exact.volume, "{} vs {}", m.volume, exact.volume);
     let again = k().mass_props_mesh(&part).unwrap();

@@ -323,6 +323,17 @@ impl wit::Host for State {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
     }
 
+    fn wait(&mut self, ms: u32) -> bool {
+        let end = Instant::now() + Duration::from_millis(u64::from(ms.min(5000)));
+        while Instant::now() < end {
+            if self.cancelled() {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20).min(end.saturating_duration_since(Instant::now())));
+        }
+        !self.cancelled()
+    }
+
     fn add_result(&mut self, picture: wit::Image, title: String, details: String) {
         match results::save(&self.dir, &to_picture(picture), &title, &details) {
             Ok(e) => {

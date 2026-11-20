@@ -1,0 +1,22 @@
+id = "generative-render"
+name = "Generative Render"
+version = "0.1.0"
+api = "0.1"
+description = "Put your model in any scene from a sentence, with your own AI account (OpenRouter, OpenAI, Google Gemini) or an AI on your own computer (ComfyUI). No limits but your provider's."
+authors = ["ShapeCraft"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jackharvest/shapecraft"
+icon = "sparkle"
+
+[permissions]
+network = ["openrouter.ai", "api.openai.com", "generativelanguage.googleapis.com"]
+local-network = true
+capture = true
+sign-in = true
+
+[[commands]]
+id = "open"
+label = "Generative Render"
+help = "Puts your model in a scene you describe, using your own AI account or an AI on your computer"
+panel = "main"
+place = "visualization"

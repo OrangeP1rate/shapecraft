@@ -73,12 +73,20 @@ impl Values {
 #[derive(Clone, Debug, Default)]
 pub struct Panel {
     title: String,
+    style: String,
     controls: Vec<Value>,
 }
 
 impl Panel {
     pub fn new(title: &str) -> Self {
-        Self { title: title.to_string(), controls: Vec::new() }
+        Self { title: title.to_string(), style: String::new(), controls: Vec::new() }
+    }
+
+    /// "sheet": a card in the middle of the window with a picture (the [`ui::stage`]), the first text box and the
+    /// blue button as a bar over its bottom edge, and the other controls in a row under it.
+    pub fn style(mut self, style: &str) -> Self {
+        self.style = style.to_string();
+        self
     }
 
     pub fn with(mut self, control: Value) -> Self {
@@ -91,7 +99,7 @@ impl Panel {
     }
 
     pub fn json(&self) -> String {
-        json!({ "title": self.title, "controls": self.controls }).to_string()
+        json!({ "title": self.title, "style": self.style, "controls": self.controls }).to_string()
     }
 }
 
@@ -148,6 +156,11 @@ pub mod ui {
 
     pub fn link(label: &str, url: &str) -> Value {
         json!({ "kind": "link", "label": label, "url": url })
+    }
+
+    /// The picture area of a sheet: the captured view, replaced by the newest result.
+    pub fn stage() -> Value {
+        json!({ "kind": "stage" })
     }
 
     pub fn results() -> Value {

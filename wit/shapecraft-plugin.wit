@@ -113,6 +113,9 @@ interface host {
     random: func(len: u32) -> list<u8>;
     /// Milliseconds since 1970-01-01 UTC.
     now: func() -> u64;
+    /// Waits up to `ms` milliseconds (at most 5000), for polling a server. Returns false when the person has
+    /// pressed Cancel (it then returns at once).
+    wait: func(ms: u32) -> bool;
 
     /// Adds a picture to the results under the panel, where the person can save, copy or remove it.
     add-result: func(picture: image, title: string, details: string);

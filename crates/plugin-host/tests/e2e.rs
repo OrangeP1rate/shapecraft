@@ -113,3 +113,126 @@ fn installs_from_the_index() -> Result<(), String> {
     assert!(index::download("0.0.0", &bad).is_err());
     Ok(())
 }
+
+/// A stand-in for ComfyUI: answers the calls Generative Render makes, with a solid blue "generated" picture.
+fn fake_comfy(seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> u16 {
+    let Ok(l) = TcpListener::bind(("127.0.0.1", 0)) else { return 0 };
+    let port = l.local_addr().map(|a| a.port()).unwrap_or(0);
+    let scene = Picture { width: 20, height: 20, pixels: [0u8, 0, 255, 255].repeat(400) };
+    let png = shapecraft_plugin_host::images::encode_png(&scene).unwrap_or_default();
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let mut s = s;
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 65536];
+            // Headers, then as much body as Content-Length says.
+            loop {
+                let Ok(n) = s.read(&mut chunk) else { break };
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..end]).to_lowercase();
+                    let len = head.lines().find_map(|l| l.strip_prefix("content-length:")?.trim().parse::<usize>().ok()).unwrap_or(0);
+                    if buf.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let text = String::from_utf8_lossy(&buf).to_string();
+            let line = text.lines().next().unwrap_or("").to_string();
+            if let Ok(mut v) = seen.lock() {
+                v.push(if line.starts_with("POST /prompt") { text.clone() } else { line.clone() });
+            }
+            let path = line.split_whitespace().nth(1).unwrap_or("");
+            let loader =
+                |node: &str, input: &str, files: &[&str]| json!({ node: { "input": { "required": { input: [files] } } } }).to_string();
+            let (ctype, body): (&str, Vec<u8>) = if path.starts_with("/object_info/UNETLoader") {
+                ("application/json", loader("UNETLoader", "unet_name", &["flux1-dev-kontext_fp8_scaled.safetensors"]).into_bytes())
+            } else if path.starts_with("/object_info/DualCLIPLoader") {
+                (
+                    "application/json",
+                    loader("DualCLIPLoader", "clip_name1", &["clip_l.safetensors", "t5xxl_fp8_e4m3fn_scaled.safetensors"]).into_bytes(),
+                )
+            } else if path.starts_with("/object_info/VAELoader") {
+                ("application/json", loader("VAELoader", "vae_name", &["ae.safetensors"]).into_bytes())
+            } else if let Some(node) = path.strip_prefix("/object_info/") {
+                ("application/json", json!({ node: {} }).to_string().into_bytes())
+            } else if path.starts_with("/upload/image") {
+                ("application/json", br#"{"name":"view.png","subfolder":"","type":"input"}"#.to_vec())
+            } else if path.starts_with("/prompt") {
+                ("application/json", br#"{"prompt_id":"p1"}"#.to_vec())
+            } else if path.starts_with("/history/p1") {
+                ("application/json", br#"{"p1":{"status":{"status_str":"success"},"outputs":{"13":{"images":[{"filename":"out.png","subfolder":"","type":"output"}]}}}}"#.to_vec())
+            } else if path.starts_with("/view") {
+                ("image/png", png.clone())
+            } else {
+                ("text/plain", b"?".to_vec())
+            };
+            let _ = s.write_all(
+                format!("HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len())
+                    .as_bytes(),
+            );
+            let _ = s.write_all(&body);
+        }
+    });
+    port
+}
+
+#[test]
+fn generative_render_with_a_local_comfyui() -> Result<(), Error> {
+    let Some(pkgs) = packages() else { return Ok(()) };
+    let lib = Library::new(scratch("genrender"));
+    let installed = lib.install(&library::read_package(&pkgs.join("generative-render-0.1.0.scplugin"))?, false)?;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let port = fake_comfy(seen.clone());
+    let settings = json!({ "comfy_on": true, "comfy_url": format!("http://127.0.0.1:{port}") }).to_string();
+    shapecraft_plugin_host::store::KeyFile::settings(&installed.dir).set("panel.settings", Some(&settings)).map_err(Error::Io)?;
+    let p = lib.start(&installed)?;
+
+    // The sheet: the picture, the prompt bar, the model menu offering the local model.
+    let panel = Panel::parse(&p.panel("main", &json!({})).wait()?).map_err(Error::Plugin)?;
+    assert_eq!(panel.style, "sheet");
+    assert!(panel.controls.iter().any(|c| matches!(c, shapecraft_plugin_host::Control::Stage {})));
+    let menu = panel.find("model").ok_or(Error::Plugin("no model menu".into()))?;
+    assert!(matches!(menu, shapecraft_plugin_host::Control::Menu { options, .. } if options.iter().any(|o| o.value == "comfy:kontext")));
+    assert!(Panel::parse(&p.panel("settings", &json!({"comfy_on": true})).wait()?).is_ok());
+
+    // Test Connection reports what it found (this fake has no /system_stats, so it says so plainly).
+    let _ = p.run("comfy_test", &json!({ "comfy_url": format!("http://127.0.0.1:{port}") }), None).wait();
+
+    // Generate: red model on the left half of a 10×10 view; the fake "AI" paints everything blue.
+    let view = Picture { width: 10, height: 10, pixels: [255u8, 0, 0, 255].repeat(100) };
+    let model = Mask { width: 10, height: 10, values: (0..100).map(|i| if i % 10 < 5 { 255 } else { 0 }).collect() };
+    let values = json!({ "model": "comfy:kontext", "mode": "Surroundings", "exact": true, "prompt": "on an oak desk", "count": "1" });
+    let out = p.run("generate", &values, Some(Capture { view, model, selection: None })).wait()?;
+    assert!(out.contains("Done"), "{out}");
+    let results = p.activity.take_results();
+    assert_eq!(results.len(), 1);
+    let pic = shapecraft_plugin_host::images::decode(&std::fs::read(&results[0].path).map_err(|e| Error::Io(e.to_string()))?)
+        .map_err(Error::Plugin)?;
+    // Kept exact: the model's own red on the left, the new scene's blue on the right, at the view's size.
+    assert_eq!((pic.width, pic.height), (10, 10));
+    assert_eq!(&pic.pixels[0..4], &[255, 0, 0, 255]);
+    assert_eq!(&pic.pixels[9 * 4..10 * 4], &[0, 0, 255, 255]);
+    assert!(results[0].details.contains("model kept exact"), "{}", results[0].details);
+    // The workflow carried the person's words and the uploaded picture.
+    let log = seen.lock().map(|v| v.join("\n")).unwrap_or_default();
+    assert!(log.contains("on an oak desk") && log.contains("view.png") && log.contains("flux1-dev-kontext"), "{log}");
+
+    // Selected Faces without a selection says what to do.
+    let err = p
+        .run(
+            "generate",
+            &json!({ "model": "comfy:kontext", "mode": "Selected Faces" }),
+            Some(Capture {
+                view: Picture { width: 4, height: 4, pixels: vec![9; 64] },
+                model: Mask { width: 4, height: 4, values: vec![0; 16] },
+                selection: None,
+            }),
+        )
+        .wait();
+    assert!(matches!(&err, Err(Error::Plugin(m)) if m.contains("Pick the faces")), "{err:?}");
+    Ok(())
+}

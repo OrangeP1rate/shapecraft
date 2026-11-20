@@ -17,6 +17,10 @@ use serde_json::Value;
 pub struct Panel {
     #[serde(default)]
     pub title: String,
+    /// "" (a column of controls) or "sheet" (a card in the middle of the window: the [`Control::Stage`] picture,
+    /// the first text box and the blue button as a bar over its bottom edge, the rest in a row under it).
+    #[serde(default)]
+    pub style: String,
     #[serde(default)]
     pub controls: Vec<Control>,
 }
@@ -131,6 +135,8 @@ pub enum Control {
     },
     /// Where the pictures this plugin made show up (one per panel; at the end when left out).
     Results {},
+    /// A sheet's picture: the view when the panel opened, replaced by the newest result.
+    Stage {},
     /// A thin line between sections.
     Separator {},
 }
@@ -174,6 +180,7 @@ impl Panel {
     pub fn parse(text: &str) -> Result<Self, String> {
         let v: Value = serde_json::from_str(text).map_err(|e| format!("the panel isn't valid JSON ({e})"))?;
         let title = v.get("title").and_then(Value::as_str).unwrap_or("").chars().take(80).collect();
+        let style = v.get("style").and_then(Value::as_str).filter(|s| *s == "sheet").unwrap_or("").to_string();
         let mut controls = Vec::new();
         for c in v.get("controls").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default() {
             if controls.len() == MAX_CONTROLS {
@@ -183,7 +190,7 @@ impl Panel {
                 controls.push(c);
             }
         }
-        Ok(Panel { title, controls })
+        Ok(Panel { title, style, controls })
     }
 
     pub fn find(&self, id: &str) -> Option<&Control> {

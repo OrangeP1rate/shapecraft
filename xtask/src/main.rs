@@ -26,6 +26,7 @@
 //!   cargo xtask site-shot URL OUT W H STEPS.json   drives headless Chromium to look at a page
 //!   cargo xtask assets              every file asset has its ATTRIBUTION.md row
 //!   cargo xtask layers              the crates depend on each other only downwards
+//!   cargo xtask plugin build|index|test  plugins/ into .scplugin packages, the Browse list, end-to-end tests
 
 mod android;
 mod bench;
@@ -34,6 +35,7 @@ mod icons;
 mod ios;
 mod linux;
 mod mac;
+mod plugins;
 mod site;
 mod util;
 mod windows;
@@ -68,6 +70,7 @@ fn main() -> std::process::ExitCode {
         Some("site-shot") => site::shot(rest),
         Some("assets") => checks::assets(),
         Some("layers") => checks::layers(),
+        Some("plugin") => plugins::main(rest),
         _ => {
             eprintln!(
                 "{}",

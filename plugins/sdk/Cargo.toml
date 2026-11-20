@@ -1,0 +1,11 @@
+[package]
+name = "shapecraft-plugin"
+version = "0.1.0"
+description = "Write ShapeCraft plugins in Rust: the host API, panels and HTTP helpers"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wit-bindgen = { version = "0.63", default-features = false, features = ["macros", "realloc"] }
+serde.workspace = true
+serde_json.workspace = true

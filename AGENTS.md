@@ -46,12 +46,15 @@ The GUI and UX feeling extremely close to the reference is the most important fe
 - **The kernel is replaceable.** All geometry goes through the `shapecraft-kernel` traits. OCCT lives only in
   `kernel-occt` (C++ shim + dynamic link). Nothing else may include OCCT headers or types.
 - **Layering:** geom → kernel → doc → engine → ui-egui / mcp → apps. Nothing below the UI depends on egui/wgpu.
+- **Plugins are sandboxed WebAssembly** (`wit/`, `crates/plugin-host`, `plugins/`, docs/plugins.md): no AI or
+  provider code in the core crates; optional features like Generative Render ship as plugins.
 - **Agent control from day one:** `--control PORT` JSON-lines channel and an MCP server (headless or bridged to the
   running app).
 
 ## Never crash
 - No `unwrap`/`expect`/`panic!`/`todo!`/`unreachable!` in non-test code. Errors are `Result` with `?`.
-- `unsafe` only inside `kernel-occt`'s FFI boundary. Every OCCT call is wrapped in C++ `try/catch` (including
+- `unsafe` only inside `kernel-occt`'s FFI boundary, plus the one documented call in `plugin-host` that loads a
+  precompiled plugin whose checksum was verified (`runtime::load`). Every OCCT call is wrapped in C++ `try/catch` (including
   `Standard_Failure`) and returns an error code, so C++ exceptions never cross into Rust.
 - Command execution runs under `catch_unwind`, and a failure restores the document.
 - Input-derived numbers (files, MCP params, typed values) are hostile: validate, check for NaN, cap sizes.

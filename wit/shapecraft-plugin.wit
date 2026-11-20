@@ -1,0 +1,142 @@
+/// The ShapeCraft plugin API.
+///
+/// A plugin is a WebAssembly component built against this world. It runs sandboxed: it can't see files, sockets,
+/// the clock or other plugins. Everything it does goes through `host`, and ShapeCraft checks each call against the
+/// permissions in the plugin's `plugin.toml` (shown to the person before they add it).
+///
+/// Panels and results are described as JSON (see docs/plugins.md), so ShapeCraft draws every control itself, in its
+/// own style, with mouse, touch, pen and keyboard handled the same way as the rest of the app.
+package shapecraft:plugin@0.1.0;
+
+interface host {
+    enum level {
+        debug,
+        info,
+        warn,
+        error,
+    }
+
+    record header {
+        name: string,
+        value: string,
+    }
+
+    /// An HTTP request. Only to the hosts the plugin's permissions name (and the computer itself or the local network
+    /// with `local-network`). HTTPS everywhere except the local network.
+    record request {
+        method: string,
+        url: string,
+        headers: list<header>,
+        body: list<u8>,
+        /// Seconds to wait for the whole answer. 0 = 60; at most 600.
+        timeout: u32,
+    }
+
+    record response {
+        status: u16,
+        headers: list<header>,
+        body: list<u8>,
+    }
+
+    /// An 8-bit RGBA picture, rows top to bottom, not premultiplied: width × height × 4 bytes.
+    record image {
+        width: u32,
+        height: u32,
+        pixels: list<u8>,
+    }
+
+    /// One byte per pixel (0..=255), rows top to bottom: width × height bytes.
+    record mask {
+        width: u32,
+        height: u32,
+        values: list<u8>,
+    }
+
+    /// The view when the action started (for actions whose button asks for it).
+    record view-capture {
+        /// The view as it looks, backdrop included.
+        view: image,
+        /// Where the model is: 255 on the model, 0 on the backdrop, in between at soft edges and shadows.
+        model: mask,
+        /// The faces picked when the action started (255 on them), when anything was picked.
+        selection: option<mask>,
+    }
+
+    /// What came back from signing in through the browser.
+    record sign-in-result {
+        /// The address the browser was sent back to (to pass on to a token exchange that asks for it).
+        redirect: string,
+        /// The query string the browser came back with (`code=…&state=…`).
+        query: string,
+    }
+
+    /// A line in ShapeCraft's log (Help ▸ Show Log).
+    log: func(level: level, message: string);
+
+    /// Sends an HTTP request and waits for the answer.
+    fetch: func(req: request) -> result<response, string>;
+
+    /// A secret saved for this plugin (an API key, a token), or none. Secrets are kept apart from settings and
+    /// projects and never shown again in full.
+    secret: func(name: string) -> option<string>;
+    /// Saves a secret, or forgets it (none).
+    set-secret: func(name: string, value: option<string>) -> result<_, string>;
+
+    /// A setting saved for this plugin, as JSON text, or none.
+    setting: func(name: string) -> option<string>;
+    /// Saves a setting (JSON text), or removes it (none).
+    set-setting: func(name: string, value: option<string>) -> result<_, string>;
+
+    /// Reports progress (0.0..=1.0, or a negative number when it can't be told) with a short line of text. Returns
+    /// false once the person has pressed Cancel: stop and return an error soon after.
+    progress: func(fraction: f32, message: string) -> bool;
+
+    /// The view captured for this action, when its button asked for one.
+    capture: func() -> option<view-capture>;
+
+    /// Reads a PNG, JPEG or WebP file.
+    decode-image: func(bytes: list<u8>) -> result<image, string>;
+    /// Writes a PNG file.
+    encode-png: func(picture: image) -> result<list<u8>, string>;
+    /// Writes a JPEG file (quality 1..=100). The alpha channel is dropped.
+    encode-jpeg: func(picture: image, quality: u8) -> result<list<u8>, string>;
+    /// Scales `picture` to cover width × height and crops what spills over, keeping the middle (never stretches).
+    fit: func(picture: image, width: u32, height: u32) -> result<image, string>;
+    /// `top` laid over `base` where `amount` says (255 = all `top`), each fitted to `top`'s size first.
+    composite: func(base: image, top: image, amount: mask) -> result<image, string>;
+
+    /// Base64 (standard alphabet, with padding).
+    base64-encode: func(bytes: list<u8>) -> string;
+    base64-decode: func(text: string) -> result<list<u8>, string>;
+    sha256: func(bytes: list<u8>) -> list<u8>;
+    /// Random bytes from the operating system.
+    random: func(len: u32) -> list<u8>;
+    /// Milliseconds since 1970-01-01 UTC.
+    now: func() -> u64;
+
+    /// Adds a picture to the results under the panel, where the person can save, copy or remove it.
+    add-result: func(picture: image, title: string, details: string);
+
+    /// Signs in through the person's browser. `url` is the provider's authorize address; ShapeCraft replaces the
+    /// text `{redirect}` in it with a local address it listens on, opens the browser, and waits (up to 5 minutes)
+    /// for the provider to send the browser back. Needs the `sign-in` permission and the URL's host in `network`.
+    sign-in: func(url: string) -> result<sign-in-result, string>;
+
+    /// Opens an https:// address in the person's browser (a pricing page, a key page).
+    open-url: func(url: string) -> result<_, string>;
+}
+
+world plugin {
+    import host;
+
+    /// Called once, after the plugin is loaded.
+    export start: func() -> result<_, string>;
+
+    /// Describes panel `id` ("main", "settings", …) for the values the person has set so far (a JSON object of
+    /// control id → value). Returns the panel as JSON (docs/plugins.md, "Panels").
+    export panel: func(id: string, values: string) -> result<string, string>;
+
+    /// Runs `action` (from a button or a command) with the panel's values (JSON). Returns JSON:
+    /// `{}` or `{"message": "…"}`; an error is shown to the person as it is.
+    export run: func(action: string, values: string) -> result<string, string>;
+}

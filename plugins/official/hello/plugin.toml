@@ -1,0 +1,20 @@
+# The smallest useful plugin: a panel, an action, a picture and a request. Start here when writing your own.
+id = "hello"
+name = "Hello"
+version = "0.1.0"
+api = "0.1"
+description = "An example: a panel with a greeting, a picture of the view, and a request to a server on this computer."
+authors = ["ShapeCraft"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jackharvest/shapecraft"
+icon = "plugin"
+
+[permissions]
+local-network = true
+capture = true
+
+[[commands]]
+id = "open"
+label = "Hello Plugin"
+help = "Opens the example plugin's panel"
+panel = "main"

@@ -1,0 +1,31 @@
+[package]
+name = "shapecraft-plugin-host"
+description = "ShapeCraft plugins: sandboxed WebAssembly components, their permissions, panels and registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# The app runs plugins with wasmtime's portable interpreter (Pulley) and no compiler: plugins arrive precompiled
+# (CI, or `cargo xtask plugin` for authors), which keeps the app ~0.7 MB bigger instead of ~11 MB and works on iOS.
+wasmtime = { version = "51", default-features = false, features = ["runtime", "pulley", "component-model", "std"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+toml = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+base64 = "0.22"
+sha2 = "0.10"
+getrandom = "0.3"
+dirs = "6"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+log = "0.4"
+# Only for building plugins (xtask, tests): the compiler that turns a component into Pulley bytecode.
+wit-component = { version = "0.263", optional = true }
+
+[features]
+compile = ["wasmtime/cranelift", "dep:wit-component"]
+
+[lints]
+workspace = true

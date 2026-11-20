@@ -2,7 +2,7 @@
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 # Patched dependencies (see each folder's PATCH.md); not workspace members.
-exclude = ["third_party/*"]
+exclude = ["third_party/*", "plugins"]
 
 [workspace.package]
 version = "0.10.5"
@@ -23,6 +23,7 @@ shapecraft-shapr = { path = "crates/shapr" }
 shapecraft-dwg = { path = "crates/dwg" }
 shapecraft-update = { path = "crates/update" }
 shapecraft-report = { path = "crates/report" }
+shapecraft-plugin-host = { path = "crates/plugin-host" }
 glam = { version = "0.30", features = ["serde"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

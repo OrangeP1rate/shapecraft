@@ -10,7 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 # The app runs plugins with wasmtime's portable interpreter (Pulley) and no compiler: plugins arrive precompiled
-# (CI, or `cargo xtask plugin` for authors), which keeps the app ~0.7 MB bigger instead of ~11 MB and works on iOS.
+# (CI, or `cargo xtask plugin` for authors), which keeps the app a few MB bigger instead of ~11 MB more and works on iOS.
 wasmtime = { version = "51", default-features = false, features = ["runtime", "pulley", "component-model", "std"] }
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 toml = "1"

@@ -2,6 +2,13 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.10.4-alpha
+**The Android download that 0.10.3 was missing, with that version's Android fixes.**
+### Fixed
+- **The Android .apk is back.** 0.10.3 went out without it. This one has 0.10.3's Android fixes: ShapeCraft starts
+  on Android 8 to 12 and HarmonyOS again (thanks [@bootNoob](https://github.com/bootNoob), #78), and the numpad
+  comes up for every value you tap on a touch screen (thanks [@Capdan83](https://github.com/Capdan83), #84).
+
 ## 0.10.3-alpha
 **Android fixes from your reports: the app starts on Android 8 to 12 again, and the numpad comes up for every value
 you tap.**

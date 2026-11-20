@@ -2,6 +2,20 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## Next
+**Plugins, and the first one: Generative Render, with your own AI and no limits of ours.**
+### New
+- **Generative Render.** In Visualization, describe a scene and get a picture of your model in it. Use the AI you
+  already have: sign in with OpenRouter (one account, many image models), paste an OpenAI or Google Gemini key, or
+  run it free on your own computer with ComfyUI. **Keep My Model Exact** keeps your model's own pixels, so the AI
+  can't change its shape. Make 1, 2 or 4 at a time, and save the ones you like. ShapeCraft sets no quota. See
+  [docs/generative-render.md](docs/generative-render.md).
+- **Plugins.** Preferences ▸ Plugins lists what you've added (switch each on or off, change its settings, remove
+  it) and what you can add. Each plugin shows what it may do before you add it, and runs sealed off from your files
+  and computer.
+- **Write your own plugin** in Rust against a small, documented API, and share it through a pull request. CI
+  builds it for every release. See [docs/plugins.md](docs/plugins.md).
+
 ## 0.10.5-alpha
 **Report a problem or suggest an idea without leaving ShapeCraft.**
 ### New

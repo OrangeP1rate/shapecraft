@@ -1,7 +1,8 @@
 # Pushing a tag like v0.4.0-alpha builds every download and publishes them as a GitHub release:
 #   a universal macOS DMG (Apple silicon and Intel), a Windows installer, MSI and portable zip, a Linux AppImage, .deb, .rpm and
 #   tar.gz, an Android APK
-#   (arm64, signed with the release key from the repository's secrets), an iPhone .ipa for sideloading, SHA256SUMS.txt.
+#   (arm64, signed with the release key from the repository's secrets), an iPhone .ipa for sideloading, the plugins
+#   (.scplugin + plugins-index.json), SHA256SUMS.txt.
 # File names follow the Craft App Suite's (shapecraft-<version>-<os>-<arch>[-portable].<ext>); the app's updater and
 # the website pick their files by those names. OCCT comes from conda-forge on every platform and goes inside each
 # download. Builds are unsigned for now. SHAPECRAFT_RELEASE=1 marks these builds as releases, which check for updates.
@@ -113,6 +114,7 @@ jobs:
       - uses: mamba-org/setup-micromamba@v2
         with: { environment-name: occt, create-args: occt=7.9 }
       - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
       - name: Window libraries, patchelf
         run: sudo apt-get update && sudo apt-get install -y patchelf libfuse2 libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
       - name: Point the build at OCCT
@@ -134,8 +136,12 @@ jobs:
           echo "787af76e172dd5fc7cedf4d7c5a090a2f62be9001557a4db1103e270f90ddefd  $RUNNER_TEMP/nfpm.deb" | sha256sum -c -
           sudo dpkg -i "$RUNNER_TEMP/nfpm.deb"
           cargo xtask linux-packages
+      # Plugins (plugins/official and /community), precompiled for this version's runtime, and the list the app's
+      # Browse reads. They're release files like the rest, so SHA256SUMS.txt covers them too.
+      - name: Plugins
+        run: cargo xtask plugin build && cargo xtask plugin index && rm -f target/plugins/hello-*.scplugin
       - uses: actions/upload-artifact@v4
-        with: { name: linux, path: "target/*.tar.gz\ntarget/*.AppImage\ntarget/*.deb\ntarget/*.rpm", if-no-files-found: error }
+        with: { name: linux, path: "target/*.tar.gz\ntarget/*.AppImage\ntarget/*.deb\ntarget/*.rpm\ntarget/plugins/*.scplugin\ntarget/plugins/plugins-index.json", if-no-files-found: error }
 
   android:
     # Release-signed (#8): the same key every time, so each APK installs over the last one. OCCT for Android comes

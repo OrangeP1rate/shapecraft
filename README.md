@@ -108,6 +108,10 @@ It's an **alpha**, so keep backups of anything precious, and tell us when someth
 - **Files:** projects are folders (`project.json` plus STEP). Open and save STEP, IGES, Parasolid XT, STL, 3MF, OBJ
   and `.shapr`; export glTF, and 2D drawings to PDF, SVG, DXF and DWG.
 - **Visualize:** materials you drag onto bodies, HDR panoramas, display modes, section views.
+- **Plugins:** add only what you want from Preferences ▸ Plugins. **Generative Render** puts your model in any
+  scene you describe, using your own OpenRouter, OpenAI or Gemini account or a ComfyUI on your computer, with no
+  limits of ours ([docs/generative-render.md](docs/generative-render.md)). Plugins run sealed off, and anyone can
+  write one ([docs/plugins.md](docs/plugins.md)).
 - **Navigation presets** for twelve apps' mouse conventions, plus trackpad gestures; orbit and pan can be flipped
   per axis.
 - **Twelve interface languages**, light and dark themes, Vulkan, Metal, DirectX 12 and OpenGL, with a software

@@ -18,6 +18,7 @@ jobs:
           environment-name: occt
           create-args: occt=7.9
       - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32-unknown-unknown }
       - name: Window libraries (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
@@ -39,3 +40,7 @@ jobs:
         run: cargo xtask assets && cargo xtask layers
       - run: cargo build --workspace
       - run: cargo test --workspace
+      # The plugins (plugins/): built for WebAssembly, packaged, and run end to end in the plugin host.
+      - name: Plugins
+        if: runner.os == 'Linux'
+        run: (cd plugins && cargo fmt --all --check && cargo clippy --release -- -D warnings) && cargo xtask plugin test

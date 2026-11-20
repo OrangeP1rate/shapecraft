@@ -119,3 +119,18 @@ The running app records itself: call `ui.capture {path}` (the 3D view) or `ui.sc
 window) after each step, numbering the files, then join them with ffmpeg
 (`ffmpeg -framerate 4 -i step-%03d.png -pix_fmt yuv420p build.mp4`). Set the camera with `ui.camera` and use
 `"look": false` on sketches so every frame is framed the same.
+
+## Plugins
+
+The control channel reaches plugins too (`shapecraft --control PORT`, or MCP with `--connect`):
+
+| Method | Params | |
+|---|---|---|
+| `plugins.list` | | installed plugins, on/off, permissions |
+| `plugins.install` | `path` (a `.scplugin`), `sideloaded` | adds it without the confirmation card |
+| `plugins.remove` | `id` | |
+| `plugins.panel` | `id`, `panel` (default `main`), `values` | sets values, returns the panel JSON |
+| `plugins.secret` | `id`, `name`, `value` (null forgets) | |
+| `plugins.run` | `id`, `panel`, `action`, `capture` (bool), `wait` (default true) | runs an action with the panel's values; returns its answer and the pictures it made |
+| `plugins.open` | | presses Visualization's Generative Render button |
+| `plugins.browse`, `plugins.select`, `plugins.offer`, `plugins.close` | | Preferences ▸ Plugins states and the cards, for looking at them offscreen |

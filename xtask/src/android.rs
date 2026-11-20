@@ -201,7 +201,8 @@ fn check_symbols(bin: &Path, abi: &Abi, file: &Path) -> Result<usize> {
     let mut known = std::collections::HashSet::new();
     for entry in std::fs::read_dir(&stubs).with_context(|| format!("no API {API} stubs at {}", stubs.display()))? {
         let path = entry?.path();
-        if path.extension().is_some_and(|e| e == "so") {
+        // Some are linker scripts, not libraries (libc++.so says "INPUT(-lc++_static …)"): only ELF files count.
+        if path.extension().is_some_and(|e| e == "so") && is_elf(&path) {
             known.extend(nm_names(&output(s(&nm), &["-D", "--defined-only", s(&path)])?, false));
         }
     }
@@ -215,6 +216,13 @@ fn check_symbols(bin: &Path, abi: &Abi, file: &Path) -> Result<usize> {
         bail!("{} needs symbols newer than Android API {API} (it would not start there): {}", file.display(), list.join(", "));
     }
     Ok(needed.len())
+}
+
+/// Whether a file starts like an ELF object.
+fn is_elf(path: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && magic == *b"\x7fELF"
 }
 
 /// The symbol names in `llvm-nm -D` output, without their version (`memcpy@LIBC`). With `strong_only`, weak ones
@@ -672,6 +680,19 @@ pub fn smoke(rest: &[String]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn linker_scripts_are_not_libraries() {
+        let dir = std::env::temp_dir().join(format!("sc-stubs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("libc++.so"), "INPUT(-lc++_static -lc++abi)\n").unwrap();
+        std::fs::write(dir.join("libc.so"), b"\x7fELF\x02\x01\x01").unwrap();
+        std::fs::write(dir.join("empty.so"), b"").unwrap();
+        assert!(!super::is_elf(&dir.join("libc++.so")));
+        assert!(super::is_elf(&dir.join("libc.so")));
+        assert!(!super::is_elf(&dir.join("empty.so")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn nm_names_drop_versions_and_weak_ones() {
         let undefined = "                 U AMotionEvent_getAction\n                 U memcpy@LIBC\n                 w __cxa_thread_atexit_impl@LIBC_N\n";

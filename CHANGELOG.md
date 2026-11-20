@@ -2,6 +2,20 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.10.5-alpha
+**Report a problem or suggest an idea without leaving ShapeCraft.**
+### New
+- **Report a Problem and Suggest an Idea, inside the app.** Help ▸ Report a Problem… opens a short form that becomes
+  an issue on ShapeCraft's GitHub under your own name: sign in once with a code you approve on github.com, from any
+  phone or computer. You choose what goes along (what failed, version and system, the recent log, a screenshot) and
+  Preview shows the exact text first. Help ▸ Your Reports… shows what you've sent and whether it's been answered.
+  See [docs/reporting.md](docs/reporting.md).
+- **Report… on a failed step.** When a tool can't do something, its message offers Report…, with what the tool was
+  asked to do already filled in. After ShapeCraft closes unexpectedly, the next start offers to report it.
+### Fixed
+- **Copy reaches other apps on Mac, Windows and Linux.** Show Log's Copy All and other copies stayed inside
+  ShapeCraft.
+
 ## 0.10.4-alpha
 **The Android download that 0.10.3 was missing, with that version's Android fixes.**
 ### Fixed

@@ -39,6 +39,8 @@ pub struct Working {
     label: String,
     started: Instant,
     rx: Receiver<Done>,
+    /// What the step was asked (for a report if it fails).
+    params: Value,
 }
 
 /// A live preview being worked out in the background: its key and where the document comes back.
@@ -52,6 +54,7 @@ impl Workspace {
     /// moment (the session already holds it), None while it goes on in the background.
     pub(crate) fn run_heavy(&mut self, id: &'static str, params: Value, amend: bool) -> Option<Result<Outcome, EngineError>> {
         let mut fork = self.session.fork();
+        let asked = params.clone();
         let (tx, rx) = channel();
         self.session.kernel.cancel(false);
         // SHAPECRAFT_HEAVY_DELAY_MS (debug builds): the step waits first, to see the card on a quick part.
@@ -83,7 +86,7 @@ impl Workspace {
                     shapecraft_engine::cmd::find(id).map_or(id, |c| c.label).to_string()
                 };
                 log::info!("{label}: working on it in the background");
-                self.working = Some(Working { id, live: HEAVY.contains(&id), label, started: Instant::now(), rx });
+                self.working = Some(Working { id, live: HEAVY.contains(&id), label, started: Instant::now(), rx, params: asked });
                 None
             }
             Err(RecvTimeoutError::Disconnected) => Some(Err(EngineError::Panicked(id.to_string()))),
@@ -116,8 +119,8 @@ impl Workspace {
                         }
                         self.preview = None;
                     }
-                    Err(EngineError::NotAvailable(m) | EngineError::BadParams(m)) => self.toast(m),
-                    Err(e) => self.toast(e.to_string()),
+                    Err(EngineError::NotAvailable(m) | EngineError::BadParams(m)) => self.fail_toast(w.id, &w.params, m),
+                    Err(e) => self.fail_toast(w.id, &w.params, e.to_string()),
                 }
                 false
             }

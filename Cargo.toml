@@ -22,6 +22,7 @@ shapecraft-xt = { path = "crates/xt" }
 shapecraft-shapr = { path = "crates/shapr" }
 shapecraft-dwg = { path = "crates/dwg" }
 shapecraft-update = { path = "crates/update" }
+shapecraft-report = { path = "crates/report" }
 glam = { version = "0.30", features = ["serde"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

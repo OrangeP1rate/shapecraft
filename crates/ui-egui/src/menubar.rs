@@ -34,6 +34,10 @@ pub enum AppAction {
     OpenPage(&'static str),
     /// Help ▸ Show Log…: this run's log in a card.
     ShowLog,
+    /// Help ▸ Report a Problem… / Suggest an Idea… / Your Reports…: the in-app report sheet.
+    ReportProblem,
+    SuggestIdea,
+    YourReports,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -531,7 +535,9 @@ pub fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 item("Tutorials", None, App(Tutorials), Always),
                 item("ShapeCraft Website", None, App(OpenPage(WEBSITE)), Always),
                 sep(),
-                item("Report a Problem or Idea…", None, App(OpenPage(ISSUES)), Always),
+                item("Report a Problem…", None, App(ReportProblem), Always),
+                item("Suggest an Idea…", None, App(SuggestIdea), Always),
+                item("Your Reports…", None, App(YourReports), Always),
                 item("Show Log…", None, App(ShowLog), Always),
                 sep(),
                 item("Release Notes", None, App(OpenPage(RELEASES)), Always),

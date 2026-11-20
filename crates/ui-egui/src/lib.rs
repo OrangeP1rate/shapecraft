@@ -18,6 +18,7 @@ pub mod icons;
 mod landing;
 pub mod menubar;
 pub(crate) mod onboarding;
+pub mod report;
 pub mod settings;
 pub mod setup;
 pub mod system_theme;

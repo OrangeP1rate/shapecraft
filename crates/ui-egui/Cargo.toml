@@ -11,6 +11,7 @@ shapecraft-doc.workspace = true
 shapecraft-engine.workspace = true
 shapecraft-render.workspace = true
 shapecraft-update.workspace = true
+shapecraft-report.workspace = true
 glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -37,7 +38,7 @@ workspace = true
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 rfd = "0.17"
 # Screen readers and the Linux window systems. On Android accesskit needs GameActivity; the APK is a NativeActivity.
-eframe = { version = "0.37", default-features = false, features = ["wayland", "x11", "accesskit"] }
+eframe = { version = "0.37", default-features = false, features = ["wayland", "x11", "accesskit", "clipboard"] }
 
 
 [target.'cfg(target_os = "macos")'.dependencies]

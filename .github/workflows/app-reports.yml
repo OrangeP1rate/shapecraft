@@ -1,0 +1,51 @@
+# Issues sent from inside ShapeCraft (Help ▸ Report a Problem… / Suggest an Idea…) carry a hidden marker. People
+# without push access can't label their own issues, so this does it: bug or enhancement, from-app, the platform, and
+# needs-screenshot when one was copied for pasting but none arrived. It never edits the text and never comments twice.
+name: App reports
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    if: contains(github.event.issue.body, '<!-- shapecraft-report')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = issue.body || '';
+            const marker = body.match(/<!-- shapecraft-report v1 ([^>]*)-->/);
+            if (!marker) return;
+            const fields = marker[1];
+            const owner = context.repo.owner, repo = context.repo.repo, issue_number = issue.number;
+            const hasImage = (t) => /!\[[^\]]*\]\(|<img\s/i.test(t || '');
+
+            if (context.eventName === 'issues') {
+              const labels = ['from-app', 'needs-triage'];
+              labels.push(/kind=idea/.test(fields) ? 'enhancement' : 'bug');
+              const system = (body.match(/^- System: (.*)$/m) || [])[1] || '';
+              const input = (body.match(/^- Input: (.*)$/m) || [])[1] || '';
+              if (/macOS/.test(system)) labels.push('platform:macos');
+              if (/Windows/.test(system)) labels.push('platform:windows');
+              if (/android/i.test(system)) labels.push('platform:android');
+              if (/tablet's browser/.test(input)) labels.push('platform:ipad');
+              if (/linux|ubuntu|fedora|debian|arch|mint|pop!_os/i.test(system) && !/android/i.test(system)) labels.push('platform:linux');
+              if (/screenshot=true/.test(fields) && !hasImage(body)) labels.push('needs-screenshot');
+              await github.rest.issues.addLabels({ owner, repo, issue_number, labels });
+              return;
+            }
+
+            // A comment with a picture from the reporter answers needs-screenshot.
+            const comment = context.payload.comment;
+            const waiting = (issue.labels || []).some((l) => l.name === 'needs-screenshot');
+            if (waiting && comment.user.login === issue.user.login && hasImage(comment.body)) {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number, name: 'needs-screenshot' }).catch(() => {});
+            }

@@ -532,13 +532,41 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
 
     // Toasts, bottom center above the pill.
     let mut y = crate::tablet::above_home_strip(ui.ctx(), vp.bottom()) - 64.0;
-    for t in ws.toasts.iter().rev() {
+    let mut report = None;
+    let mut hold = false;
+    for (k, t) in ws.toasts.iter().enumerate().rev() {
         let g = p.layout_no_wrap(t.text.clone(), theme::body(12.0), Tokens::text());
-        let r = Rect::from_center_size(pos2(vp.center().x, y), vec2(g.size().x + 24.0, 30.0));
+        // A failed step's message ends with Report…, set off by a hairline.
+        let extra = if t.failure.is_some() { 74.0 } else { 0.0 };
+        let r = Rect::from_center_size(pos2(vp.center().x, y), vec2(g.size().x + 24.0 + extra, 30.0));
         p.rect_filled(r, radius(8), Tokens::banner());
         p.rect_stroke(r, radius(8), Stroke::new(1.0, Tokens::chip_border()), StrokeKind::Inside);
-        p.text(r.center(), Align2::CENTER_CENTER, &t.text, theme::body(12.0), Tokens::text());
+        p.text(pos2(r.left() + 12.0 + g.size().x / 2.0, r.center().y), Align2::CENTER_CENTER, &t.text, theme::body(12.0), Tokens::text());
+        if let Some(f) = &t.failure {
+            let b = Rect::from_min_max(pos2(r.right() - extra, r.top()), r.max);
+            p.vline(b.left(), (b.top() + 7.0)..=(b.bottom() - 7.0), Stroke::new(1.0, Tokens::chip_border()));
+            let resp = ui.interact(b, ui.scope_id().with(("toast-report", k)), Sense::click());
+            if resp.hovered() {
+                hold = true;
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            p.text(b.center(), Align2::CENTER_CENTER, "Report…", theme::strong(12.0), Tokens::icon_blue());
+            if resp.clicked() {
+                report = Some((k, f.clone()));
+            }
+        }
         y -= 36.0;
+    }
+    // A message under the pointer stays until the pointer leaves it.
+    if hold {
+        let until = ws.now + 1.0;
+        for t in ws.toasts.iter_mut().filter(|t| t.failure.is_some()) {
+            t.until = t.until.max(until);
+        }
+    }
+    if let Some((k, f)) = report {
+        ws.toasts.remove(k);
+        ws.report_request = Some(f);
     }
 }
 

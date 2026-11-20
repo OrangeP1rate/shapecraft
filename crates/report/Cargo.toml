@@ -1,0 +1,16 @@
+[package]
+name = "shapecraft-report"
+description = "ShapeCraft problem reports and ideas: GitHub sign-in on any device, and issues filed under the person's own name"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+dirs = "6"
+# The same HTTPS stack as updates: the platform's own certificate store.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+
+[lints]
+workspace = true

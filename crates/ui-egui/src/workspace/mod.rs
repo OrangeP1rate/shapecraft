@@ -73,6 +73,8 @@ pub(crate) struct Anim {
 pub struct Toast {
     pub text: String,
     pub until: f64,
+    /// A failed step's message carries what failed, and a Report… button.
+    pub failure: Option<shapecraft_report::draft::Failure>,
 }
 
 /// The small prompt that makes a variable the value box used before it existed: its name, the value typed for
@@ -453,6 +455,8 @@ pub struct Workspace {
     /// A cascade opened from the flyout (Construct ▸ Plane / Axis).
     flyout_sub: Option<(Category, Pos2)>,
     pub toasts: Vec<Toast>,
+    /// A failed step's Report… was pressed: the app opens the report sheet about it.
+    pub report_request: Option<shapecraft_report::draft::Failure>,
     /// A tool's refusal shown in place of the hint banner for a while (Split Body, s12-004): text and until when.
     pub notice: Option<(String, f64)>,
     pub gpu: ViewportGpu,
@@ -813,6 +817,7 @@ impl Workspace {
             search: None,
             flyout: None,
             toasts: Vec::new(),
+            report_request: None,
             notice: None,
             gpu: ViewportGpu::default(),
             viewport_rect: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),
@@ -873,7 +878,20 @@ impl Workspace {
     pub fn toast(&mut self, text: impl Into<String>) {
         let text = text.into();
         log::info!("shown: {text}");
-        self.toasts.push(Toast { text, until: self.now + 3.0 });
+        self.toasts.push(Toast { text, until: self.now + 3.0, failure: None });
+    }
+
+    /// A failed step's message: it stays a little longer and offers Report…, which opens a report about it.
+    pub fn fail_toast(&mut self, command: &str, params: &Value, text: impl Into<String>) {
+        let text = text.into();
+        log::info!("shown: {text}");
+        let failure = shapecraft_report::draft::Failure {
+            command: command.to_string(),
+            params: serde_json::to_string_pretty(params).unwrap_or_default().chars().take(4000).collect(),
+            error: text.clone(),
+        };
+        self.toasts.retain(|t| t.text != text);
+        self.toasts.push(Toast { text, until: self.now + 6.0, failure: Some(failure) });
     }
 
     /// Move/Rotate's Auto-orientation (on unless switched off; remembered like a variant).

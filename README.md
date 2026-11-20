@@ -81,8 +81,9 @@ It's an **alpha**, so keep backups of anything precious, and tell us when someth
 
 ## Say hi
 
-- 🐛 Something broke or felt wrong? [Open an issue](https://github.com/jackharvest/shapecraft/issues/new/choose) with
-  the steps, and the project folder if you can. Every report makes the next version better.
+- 🐛 Something broke or felt wrong? **Help ▸ Report a Problem…** sends it from inside the app, under your GitHub
+  name ([how it works](docs/reporting.md)), or [open an issue](https://github.com/jackharvest/shapecraft/issues/new/choose)
+  with the steps, and the project folder if you can. Every report makes the next version better.
 - 💬 Questions, tips, or a part to show off? Come say hi on [Discord](https://discord.gg/qHW22aC8Rn). Bugs still go to GitHub Issues so
   nothing gets lost.
 - ☕ Want to help keep it going? [Buy a coffee](https://www.buymeacoffee.com/jackharvest). It pays for tools and

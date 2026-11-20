@@ -28,6 +28,7 @@ impl Workspace {
             if self.importing.is_some() || self.working.is_some() {
                 return false;
             }
+            let params_copy = params.clone();
             return match self.run_heavy(id, params, self.is_live()) {
                 Some(Ok(_)) => {
                     self.remember(id);
@@ -35,10 +36,14 @@ impl Workspace {
                     true
                 }
                 Some(Err(e)) => {
-                    self.toast(match e {
-                        EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
-                        other => other.to_string(),
-                    });
+                    self.fail_toast(
+                        id,
+                        &params_copy,
+                        match e {
+                            EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
+                            other => other.to_string(),
+                        },
+                    );
                     false
                 }
                 None => true,
@@ -48,10 +53,14 @@ impl Workspace {
             match self.session.amend(id, &params) {
                 Ok(_) => true,
                 Err(e) => {
-                    self.toast(match e {
-                        EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
-                        other => other.to_string(),
-                    });
+                    self.fail_toast(
+                        id,
+                        &params,
+                        match e {
+                            EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
+                            other => other.to_string(),
+                        },
+                    );
                     false
                 }
             }
@@ -96,10 +105,14 @@ impl Workspace {
                 Some(out.value)
             }
             Err(e) => {
-                self.toast(match e {
-                    EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
-                    other => other.to_string(),
-                });
+                self.fail_toast(
+                    id,
+                    &params,
+                    match e {
+                        EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
+                        other => other.to_string(),
+                    },
+                );
                 None
             }
         }
@@ -116,6 +129,7 @@ impl Workspace {
             self.toast(crate::tablet::VIEW_ONLY_NOTE);
             return None;
         }
+        let params_copy = params.clone();
         match self.run_heavy(id, params, false) {
             Some(Ok(out)) => {
                 self.remember(id);
@@ -123,10 +137,14 @@ impl Workspace {
                 Some(out.value)
             }
             Some(Err(e)) => {
-                self.toast(match e {
-                    EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
-                    other => other.to_string(),
-                });
+                self.fail_toast(
+                    id,
+                    &params_copy,
+                    match e {
+                        EngineError::NotAvailable(m) | EngineError::BadParams(m) => m,
+                        other => other.to_string(),
+                    },
+                );
                 None
             }
             None => None,

@@ -157,6 +157,12 @@ pub struct ShapeCraftApp {
     egui: egui::Context,
     /// Help ▸ Show Log is open.
     show_log: bool,
+    /// Help ▸ Report a Problem… and friends: the in-app report sheet.
+    report: crate::report::Report,
+    /// "ShapeCraft closed unexpectedly": the last crash record, offered for a report at the next start.
+    crash_offer: Option<String>,
+    /// The GPU and graphics API, as a report names them.
+    gpu_text: String,
     /// The desktop app checks for updates and shows them (snapshots and tests don't).
     updating: bool,
     updates: crate::updates::UpdateUi,
@@ -263,6 +269,9 @@ impl ShapeCraftApp {
             welcome_nav: None,
             egui: ctx.clone(),
             show_log: false,
+            report: Default::default(),
+            crash_offer: if updating { crate::report::take_crash_offer() } else { None },
+            gpu_text: String::new(),
             updating,
             updates: Default::default(),
             kernel,
@@ -1654,6 +1663,39 @@ impl ShapeCraftApp {
                 self.home_prefs = Some(params.get("tab").and_then(Value::as_u64).unwrap_or(0).min(4) as usize);
                 Ok(Value::Null)
             }
+            // Help ▸ Report a Problem… / Suggest an Idea… / Your Reports…, or a failed step's Report… (`error`,
+            // `command`) or the crash prompt's (`crash`). `show` puts the sheet in one of its later states with made-up
+            // answers (a sign-in code, a sent issue, a list), to look at offscreen; nothing goes to GitHub then.
+            "ui.report" => {
+                let ctx = self.egui.clone();
+                let s = |k: &str| params.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                let seed = match s("kind").as_str() {
+                    "idea" => crate::report::Seed::Idea,
+                    "mine" => {
+                        self.report.begin_mine();
+                        crate::report::Seed::Problem
+                    }
+                    _ if !s("error").is_empty() => crate::report::Seed::Failure(shapecraft_report::draft::Failure {
+                        command: if s("command").is_empty() { "fillet".into() } else { s("command") },
+                        params: params.get("params").map(|p| serde_json::to_string_pretty(p).unwrap_or_default()).unwrap_or_default(),
+                        error: s("error"),
+                    }),
+                    _ if !s("crash").is_empty() => crate::report::Seed::Crash(s("crash")),
+                    _ => crate::report::Seed::Problem,
+                };
+                let fresh = !s("kind").is_empty() || !s("error").is_empty() || !s("crash").is_empty() || !self.report.open;
+                if s("kind") != "mine" && fresh {
+                    self.open_report(&ctx, seed);
+                }
+                self.report.fill(&s("title"), &s("text"));
+                if !s("show").is_empty() {
+                    self.report.show_state(&s("show"), &s("login"))?;
+                }
+                if params.get("close").and_then(Value::as_bool) == Some(true) {
+                    self.report.open = false;
+                }
+                Ok(json!({ "open": self.report.open }))
+            }
             // Help ▸ Show Log, on either screen.
             "ui.toggle" if params.get("panel").and_then(Value::as_str) == Some("log") => {
                 self.show_log = !self.show_log;
@@ -1791,6 +1833,12 @@ impl ShapeCraftApp {
             self.frame_gaps.push((began - last).as_secs_f32() * 1000.0);
         }
         let ctx = ui.ctx().clone();
+        if self.gpu_text.is_empty()
+            && let Some(state) = render_state
+        {
+            let info = state.adapter.get_info();
+            self.gpu_text = format!("{} ({:?})", info.name, info.backend);
+        }
         self.view_size = (ctx.content_rect().size(), ctx.pixels_per_point());
         self.keep_backups(&ctx);
         let settings = self.ws.as_deref().map_or(&self.settings, |ws| &ws.settings);
@@ -1832,11 +1880,13 @@ impl ShapeCraftApp {
         self.global_keys(&ctx);
 
         let first_run_open = self.first_run_open();
+        let mut report_failure = None;
         match self.ws.as_deref_mut() {
             Some(ws) => {
                 // The first-run windows sit over the workspace: its keys wait until they're answered.
-                ws.keys_blocked = first_run_open || self.show_log;
+                ws.keys_blocked = first_run_open || self.show_log || self.report.takes_keys();
                 ws.ui(ui, render_state);
+                report_failure = ws.report_request.take();
                 // Tutorials run on the default tool types and leave the remembered ones alone.
                 if ws.tutorial.is_none() {
                     ws.keep_variants();
@@ -1922,6 +1972,9 @@ impl ShapeCraftApp {
                 self.home_preferences(ui);
                 self.ask_open_dialog(ui);
             }
+        }
+        if let Some(f) = report_failure {
+            self.open_report(&ctx, crate::report::Seed::Failure(f));
         }
         // Folded with a project open: the front screen is too small to model on.
         if crate::tablet::waits_to_unfold() && self.ws.is_some() && unfold_prompt(ui, None, None) {
@@ -2149,9 +2202,38 @@ impl ShapeCraftApp {
                     if a == AppAction::Tutorials { crate::landing::Section::Tutorials } else { crate::landing::Section::GetStarted };
             }
             AppAction::ShowLog => self.show_log = true,
+            AppAction::ReportProblem => self.open_report(ctx, crate::report::Seed::Problem),
+            AppAction::SuggestIdea => self.open_report(ctx, crate::report::Seed::Idea),
+            AppAction::YourReports => self.report.begin_mine(),
             AppAction::OpenPage(url) if self.hosted => self.egui.open_url(egui::OpenUrl::new_tab(url)),
             AppAction::OpenPage(url) => open_page(url),
         }
+    }
+
+    /// Opens the report sheet with what's known about this computer and this run.
+    fn open_report(&mut self, ctx: &egui::Context, seed: crate::report::Seed) {
+        let size = ctx.content_rect().size();
+        let touch = crate::tablet::touch_ui();
+        let lines = crate::app_log::lines();
+        let start = lines.len().saturating_sub(shapecraft_report::draft::LOG_LINES);
+        let context = shapecraft_report::draft::Context {
+            version: shapecraft_update::current_text(),
+            system: crate::report::system_text(),
+            graphics: self.gpu_text.clone(),
+            input: if self.hosted {
+                "a tablet's browser".into()
+            } else if touch {
+                "touch and pen".into()
+            } else {
+                "mouse or trackpad".into()
+            },
+            window: format!("{:.0} × {:.0} pt at {:.1}×", size.x, size.y, ctx.pixels_per_point()),
+            log: lines[start..].to_vec(),
+            failure: None,
+            crash: None,
+        };
+        let shot = crate::report::can_copy_images(self.hosted);
+        self.report.begin(ctx, seed, context, shot);
     }
 
     /// A phone's menu page row, done as the home screen's menu bar does it.
@@ -2586,12 +2668,33 @@ impl eframe::App for ShapeCraftApp {
         if self.show_log {
             crate::app_log::window(ui, &mut self.show_log);
         }
+        if self.crash_offer.is_some() && !self.report.open {
+            match crate::report::crash_prompt(ui) {
+                Some(true) => {
+                    let record = self.crash_offer.take().unwrap_or_default();
+                    let ctx = ui.ctx().clone();
+                    self.open_report(&ctx, crate::report::Seed::Crash(record));
+                }
+                Some(false) => self.crash_offer = None,
+                None => {}
+            }
+        }
+        if let Some(crate::report::Out::Open(url)) = self.report.window(ui) {
+            if self.hosted {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+            } else {
+                open_page(&url);
+            }
+        }
         if let Some(url) = crate::landing::take_tablet_link() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }
     }
 
     fn on_exit(&mut self) {
+        if self.updating {
+            crate::report::clean_exit();
+        }
         self.finish_saving(true);
         if self.ws.as_ref().is_some_and(|w| w.session.dirty) {
             self.save();

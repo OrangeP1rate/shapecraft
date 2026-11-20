@@ -8,9 +8,6 @@ use serde::{Deserialize, Serialize};
 use crate::images::{self, Picture};
 use crate::store::write_file;
 
-/// The newest results kept per plugin; older ones are removed as new ones arrive.
-pub const KEEP: usize = 200;
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
     /// The PNG.
@@ -43,7 +40,7 @@ pub fn save(dir: &Path, picture: &Picture, title: &str, details: &str) -> Result
     };
     let entry = Entry {
         path: path.clone(),
-        title: title.chars().take(200).collect(),
+        title: title.chars().take(2000).collect(),
         details: details.chars().take(4000).collect(),
         time,
         width: picture.width,
@@ -52,7 +49,7 @@ pub fn save(dir: &Path, picture: &Picture, title: &str, details: &str) -> Result
     write_file(&path, &png, false)?;
     let meta = serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())?;
     write_file(&path.with_extension("json"), meta.as_bytes(), false)?;
-    prune(dir);
+    // Nothing is removed on its own: these may have cost money. People delete them in History.
     Ok(entry)
 }
 
@@ -76,12 +73,6 @@ pub fn list(dir: &Path) -> Vec<Entry> {
 pub fn remove(entry: &Entry) {
     let _ = std::fs::remove_file(&entry.path);
     let _ = std::fs::remove_file(entry.path.with_extension("json"));
-}
-
-fn prune(dir: &Path) {
-    for old in list(dir).iter().skip(KEEP) {
-        remove(old);
-    }
 }
 
 #[cfg(test)]

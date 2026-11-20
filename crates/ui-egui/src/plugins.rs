@@ -54,6 +54,14 @@ struct Sheet {
     snapshot: Option<TextureHandle>,
     /// The newest result since then (shown in place of the snapshot).
     shown: Option<results::Entry>,
+    /// Writing the description (the prompt bar open); folds away once a result is on show.
+    editing: bool,
+    /// History instead of the picture.
+    history: bool,
+    /// A Delete waiting for its second press.
+    pending_delete: Option<PathBuf>,
+    /// Out of the way while Preferences is open over it.
+    hidden: bool,
 }
 
 /// Adding a plugin: what it is and what it asks for, waiting for the person's OK.
@@ -221,6 +229,8 @@ impl Plugins {
                     && let Some(newest) = new_results.last()
                 {
                     s.shown = Some(newest.clone());
+                    s.editing = false;
+                    s.history = false;
                 }
             }
             let Some(st) = self.panels.get_mut(&st_key) else { continue };
@@ -484,7 +494,17 @@ pub(crate) fn open_sheet(plugin: &str, panel: &str, capture: Option<Capture>) {
         }
         p.state(plugin, panel).dirty = true;
         p.offer = false;
-        p.sheet = Some(Sheet { plugin: plugin.into(), panel: panel.into(), capture, snapshot: None, shown: None });
+        p.sheet = Some(Sheet {
+            plugin: plugin.into(),
+            panel: panel.into(),
+            capture,
+            snapshot: None,
+            shown: None,
+            editing: true,
+            history: false,
+            pending_delete: None,
+            hidden: false,
+        });
     });
 }
 
@@ -500,7 +520,28 @@ pub(crate) fn offer_generative() {
 
 /// Whether a plugin sheet or card has the keyboard (the workspace leaves keys alone then).
 pub(crate) fn takes_keys() -> bool {
-    with(|p| p.sheet.is_some() || p.offer || p.confirm.is_some() || p.add_card.is_some())
+    with(|p| p.sheet.as_ref().is_some_and(|s| !s.hidden) || p.offer || p.confirm.is_some() || p.add_card.is_some())
+}
+
+/// Brings back a sheet put aside for Preferences (its Connections button), once Preferences closes.
+pub(crate) fn show_sheet_again() {
+    with(|p| {
+        let Some(key) = p.sheet.as_mut().filter(|s| s.hidden).map(|s| {
+            s.hidden = false;
+            (s.plugin.clone(), s.panel.clone())
+        }) else {
+            return;
+        };
+        // New connections change the model list.
+        if let Some(st) = p.panels.get_mut(&key) {
+            st.dirty = true;
+        }
+    });
+}
+
+/// Whether a sheet is waiting for Preferences to close.
+pub(crate) fn sheet_waiting() -> bool {
+    with(|p| p.sheet.as_ref().is_some_and(|s| s.hidden))
 }
 
 /// What the plugin cards asked the rest of the app for since the last frame.
@@ -1066,8 +1107,116 @@ fn dim_and_card(ui: &mut Ui, id: egui::Id, w: f32, h: f32, f: impl FnOnce(&mut U
     ctx.move_to_top(egui::LayerId::new(egui::Order::Foreground, id));
 }
 
+/// A small rounded label over a picture: what made it.
+fn pill(p: &egui::Painter, left_top: egui::Pos2, text: &str, size: f32, accent: bool) -> f32 {
+    let g = p.layout_no_wrap(text.to_string(), theme::body(size), Color32::WHITE);
+    let r = Rect::from_min_size(left_top, vec2(g.size().x + size * 1.3, g.size().y + size * 0.55));
+    p.rect_filled(
+        r,
+        radius(((r.height() / 2.0) as u8).max(4)),
+        if accent { Tokens::accent().gamma_multiply(0.92) } else { Color32::from_black_alpha(165) },
+    );
+    p.galley(pos2(r.left() + size * 0.65, r.top() + size * 0.27), g, Color32::WHITE);
+    r.width()
+}
+
+/// The facts a plugin gave a result (`details`, "A · B · C").
+fn tags(e: &results::Entry) -> Vec<String> {
+    let mut v: Vec<String> = e.details.split(" · ").map(str::trim).filter(|t| !t.is_empty()).map(pretty_tag).collect();
+    // Pictures from before the service came first: put the mode last.
+    if v.len() > 1 && ["Surroundings", "Whole Picture", "Selected Faces"].contains(&v[0].as_str()) {
+        let mode = v.remove(0);
+        v.push(mode);
+    }
+    v
+}
+
+/// "gemini-3.1-flash-image" → "Gemini 3.1 Flash Image"; "model kept exact" → "Model kept exact".
+fn pretty_tag(t: &str) -> String {
+    let id_like = !t.contains(' ') && t.contains('-') && t.chars().all(|c| !c.is_uppercase());
+    if id_like {
+        return t
+            .split('-')
+            .map(|w| {
+                let mut c = w.chars();
+                c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace("Gpt", "GPT");
+    }
+    let mut c = t.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
+/// "Today 14:05", "Nov 18, 09:12".
+fn when(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(secs);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let (h, m) = (rem / 3600, rem % 3600 / 60);
+    if days == now.div_euclid(86_400) {
+        return format!("Today {h:02}:{m:02}");
+    }
+    // Civil date from days since 1970 (UTC).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    format!("{} {d}, {h:02}:{m:02}", names[(month - 1).clamp(0, 11) as usize])
+}
+
+/// A square icon button with a hover fill; true when pressed.
+fn icon_button(ui: &Ui, r: Rect, id: &str, tip: &str, glyph: impl FnOnce(&egui::Painter, egui::Pos2, Color32)) -> bool {
+    let resp = ui.interact(r, ui.scope_id().with(id), Sense::click()).on_hover_text(tip);
+    if resp.hovered() {
+        ui.painter().rect_filled(r, radius(6), Tokens::button_hover());
+    }
+    glyph(ui.painter(), r.center(), Tokens::text_strong());
+    resp.clicked()
+}
+
+fn gear_glyph(p: &egui::Painter, c: egui::Pos2, col: Color32) {
+    for k in 0..8 {
+        let a = k as f32 / 8.0 * std::f32::consts::TAU;
+        let d = vec2(a.cos(), a.sin());
+        p.line_segment([c + d * 5.0, c + d * 8.0], Stroke::new(2.4, col));
+    }
+    p.circle_stroke(c, 5.2, Stroke::new(1.8, col));
+}
+
+fn clock_glyph(p: &egui::Painter, c: egui::Pos2, col: Color32) {
+    p.circle_stroke(c, 7.5, Stroke::new(1.6, col));
+    p.line_segment([c, c + vec2(0.0, -4.5)], Stroke::new(1.6, col));
+    p.line_segment([c, c + vec2(3.5, 1.5)], Stroke::new(1.6, col));
+}
+
+fn back_glyph(p: &egui::Painter, c: egui::Pos2, col: Color32) {
+    p.line_segment([c + vec2(3.0, -6.0), c + vec2(-3.0, 0.0)], Stroke::new(2.0, col));
+    p.line_segment([c + vec2(-3.0, 0.0), c + vec2(3.0, 6.0)], Stroke::new(2.0, col));
+}
+
+/// What happened in the sheet this frame beyond panel values.
+#[derive(Default)]
+struct SheetOut {
+    close: bool,
+    show: Option<results::Entry>,
+    save: Option<PathBuf>,
+    copy: Option<PathBuf>,
+    delete: Option<results::Entry>,
+    reuse: Option<String>,
+    edit: bool,
+    history: Option<bool>,
+    connect: bool,
+}
+
 fn sheet(p: &mut Plugins, ui: &mut Ui) {
-    let Some((plugin, panel_id)) = p.sheet.as_ref().map(|s| (s.plugin.clone(), s.panel.clone())) else { return };
+    let Some((plugin, panel_id)) = p.sheet.as_ref().filter(|s| !s.hidden).map(|s| (s.plugin.clone(), s.panel.clone())) else { return };
     let Some(dir) = p.installed(&plugin).map(|i| i.dir.clone()) else {
         p.sheet = None;
         return;
@@ -1079,7 +1228,6 @@ fn sheet(p: &mut Plugins, ui: &mut Ui) {
         (st.panel.clone(), st.values.clone(), st.run.as_ref().map(|r| r.0.clone()), st.message.clone())
     };
     let progress = p.loaded.get(&plugin).map(|l| l.activity.progress()).unwrap_or_default();
-    let shown_tex = p.sheet.as_ref().and_then(|s| s.shown.clone()).and_then(|e| p.texture(&ctx, &e.path));
     if let Some(s) = p.sheet.as_mut()
         && s.snapshot.is_none()
         && let Some(c) = &s.capture
@@ -1087,190 +1235,517 @@ fn sheet(p: &mut Plugins, ui: &mut Ui) {
         let img = egui::ColorImage::from_rgba_unmultiplied([c.view.width as usize, c.view.height as usize], &c.view.pixels);
         s.snapshot = Some(ctx.load_texture("plugin-sheet-snapshot", img, egui::TextureOptions::LINEAR));
     }
-    let snapshot = p.sheet.as_ref().and_then(|s| s.snapshot.clone());
-    let capture = p.sheet.as_ref().and_then(|s| s.capture.clone());
-    let shown_entry = p.sheet.as_ref().and_then(|s| s.shown.clone());
-    let results: Vec<results::Entry> = p.results_of(&plugin).iter().take(12).cloned().collect();
-    let thumbs: Vec<Option<TextureHandle>> = results.iter().map(|e| p.texture(&ctx, &e.path)).collect();
-    let drafts = std::mem::take(p.drafts_mut(&plugin, &panel_id));
-    let mut acts = Vec::new();
-    let mut close = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && running.is_none();
-    let mut save: Option<PathBuf> = None;
-    let mut show: Option<results::Entry> = None;
-    let title = panel.as_ref().map(|p| p.title.clone()).unwrap_or_default();
+    let (snapshot, capture, shown_entry, editing, history, pending_delete) = match p.sheet.as_ref() {
+        Some(s) => (s.snapshot.clone(), s.capture.clone(), s.shown.clone(), s.editing, s.history, s.pending_delete.clone()),
+        None => return,
+    };
+    let shown_tex = shown_entry.as_ref().and_then(|e| p.texture(&ctx, &e.path));
+    let all: Vec<results::Entry> = p.results_of(&plugin).clone();
+    let full = ctx.content_rect();
     let touch = crate::tablet::touch_ui();
-    let w = if touch { 640.0 } else { 600.0 };
-    let msg_h = message
-        .as_ref()
-        .filter(|(t, s)| !s.is_empty() && *t != Tone::Good)
-        .map_or(0.0, |(_, s)| 30.0 + 16.0 * (s.len() as f32 / 80.0).ceil());
-    let h = (w - 36.0) * 0.6 + if results.is_empty() { 190.0 } else { 250.0 } + msg_h;
+    let max_thumbs = if history { 60 } else { 10 };
+    let thumbs: Vec<Option<TextureHandle>> = all.iter().take(max_thumbs).map(|e| p.texture(&ctx, &e.path)).collect();
+
+    // The panel's parts: the prompt, the blue button, and rows of the rest (a separator starts a row).
+    let controls = panel.as_ref().map(|p| p.controls.clone()).unwrap_or_default();
+    let prompt = controls.iter().find(|c| matches!(c, Control::Text { .. })).cloned();
+    let go = controls.iter().find(|c| matches!(c, Control::Button { primary: true, .. })).cloned();
+    let mut rows: Vec<Vec<Control>> = vec![Vec::new()];
+    for c in &controls {
+        match c {
+            Control::Separator {} => rows.push(Vec::new()),
+            Control::Stage {} | Control::Results {} | Control::Note { .. } | Control::Heading { .. } | Control::Link { .. } => {}
+            Control::Text { .. } if prompt.as_ref() == Some(c) => {}
+            Control::Button { .. } if go.as_ref() == Some(c) => {}
+            other => {
+                if let Some(r) = rows.last_mut() {
+                    r.push(other.clone());
+                }
+            }
+        }
+    }
+    rows.retain(|r| !r.is_empty());
+    let connected = !matches!(&go, Some(Control::Button { enabled: Some(false), .. }));
+    let notes: Vec<(String, Tone)> =
+        controls.iter().filter_map(|c| if let Control::Note { text, tone } = c { Some((text.clone(), *tone)) } else { None }).collect();
+
+    // Sizes: the reference's proportions on a desktop, everything shrinking to fit a phone held sideways.
+    let w = (full.width() - 24.0).min(if touch { 680.0 } else { 640.0 });
+    let pad = if w < 560.0 { 12.0 } else { 18.0 };
+    let header_h = 50.0;
+    let footer_h = 54.0;
+    let row_h = if touch { 36.0 } else { 30.0 };
+    let options_h = 14.0 + rows.len() as f32 * (row_h + 10.0);
+    let show_strip = !all.is_empty() && full.height() >= 600.0;
+    let strip_h = if show_strip { 64.0 } else { 0.0 };
+    let msg = message.clone().filter(|(t, s)| !s.is_empty() && *t != Tone::Good);
+    let msg_h = msg.as_ref().map_or(0.0, |(_, s)| 20.0 + 16.0 * (s.len() as f32 * 6.4 / (w - 2.0 * pad)).ceil());
+    let notes_h: f32 = notes.iter().map(|(t, _)| 8.0 + 16.0 * (t.len() as f32 * 6.4 / (w - 2.0 * pad)).ceil()).sum();
+    let stage_w = w - 2.0 * pad;
+    let room = full.height() - 24.0 - header_h - footer_h - options_h - strip_h - msg_h - notes_h;
+    let stage_h = (stage_w * 0.62).min(room).max(150.0);
+    let h = header_h + stage_h + options_h + strip_h + msg_h + notes_h + footer_h;
     if running.is_some() {
         ctx.request_repaint();
     }
+    let mut acts = Vec::new();
+    let mut out =
+        SheetOut { close: ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && running.is_none(), ..Default::default() };
     dim_and_card(ui, egui::Id::NULL.with("plugin-sheet"), w, h, |ui, card| {
         let painter = ui.painter().clone();
-        let x0 = card.left() + 18.0;
-        let x1 = card.right() - 18.0;
-        painter.text(pos2(x0, card.top() + 24.0), Align2::LEFT_CENTER, &title, theme::strong(15.0), Tokens::text_strong());
-        // The picture: the view, or the newest result, keeping its shape.
-        let stage = Rect::from_min_max(pos2(x0, card.top() + 44.0), pos2(x1, card.top() + 44.0 + (x1 - x0) * 0.6));
-        painter.rect_filled(stage, radius(8), theme::c(0x141414));
-        let tex = shown_tex.clone().or(snapshot.clone());
-        if let Some(t) = &tex {
-            let size = t.size_vec2();
-            let k = (stage.width() / size.x).min(stage.height() / size.y);
-            let r = Rect::from_center_size(stage.center(), size * k);
-            painter.image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-        }
-        if running.is_some() {
-            // While it works: the picture dims, a soft glow breathes around it, and a line says what's going on.
-            painter.rect_filled(stage, radius(8), Color32::from_black_alpha(150));
-            let pulse = (0.5 + 0.5 * (now * 2.4).sin()) as f32;
-            let glow = Tokens::accent().gamma_multiply(0.35 + 0.45 * pulse);
-            painter.rect_stroke(stage, radius(8), Stroke::new(3.0, glow), StrokeKind::Inside);
-            spinner(&painter, stage.center() - vec2(0.0, 26.0), now);
-            let text = if progress.1.is_empty() { "Generating scene…".to_string() } else { progress.1.clone() };
-            painter.text(stage.center() + vec2(0.0, 2.0), Align2::CENTER_CENTER, text, theme::strong(13.5), Color32::WHITE);
-        }
-        // The prompt bar over the picture's bottom edge: the words, Generate, Save.
-        let panel_ref = panel.as_ref();
-        let prompt = panel_ref.and_then(|p| p.controls.iter().find(|c| matches!(c, Control::Text { .. })));
-        let go = panel_ref.and_then(|p| p.controls.iter().find(|c| matches!(c, Control::Button { primary: true, .. })));
-        let bar = Rect::from_min_max(pos2(stage.left() + 12.0, stage.bottom() - 62.0), pos2(stage.right() - 12.0, stage.bottom() - 10.0));
-        painter.rect_filled(bar.translate(vec2(0.0, 3.0)), radius(12), Color32::from_black_alpha(70));
-        painter.rect_filled(bar, radius(12), Tokens::panel());
-        painter.rect_stroke(bar, radius(12), Stroke::new(1.0, Tokens::panel_border()), StrokeKind::Inside);
-        let go_w = 96.0;
-        let field = Rect::from_min_max(pos2(bar.left() + 6.0, bar.top() + 6.0), pos2(bar.right() - go_w - 46.0, bar.bottom() - 6.0));
-        if let Some(Control::Text { id, placeholder, .. }) = prompt {
-            let mut text = values.get(id).and_then(Value::as_str).unwrap_or("").to_string();
-            let before = text.clone();
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
-            // A long prompt scrolls inside its box instead of spilling under the bar.
-            child.set_clip_rect(field.expand(1.0));
-            text_box(&mut child, &format!("sheet-{id}"), &mut text, field.height(), placeholder, false, false);
-            if text != before {
-                acts.push(Act::Set(id.clone(), Value::from(text)));
+        let x0 = card.left() + pad;
+        let x1 = card.right() - pad;
+        // Header: the title (or History with a way back), and Connections / History.
+        let hy = card.top() + header_h / 2.0 + 2.0;
+        if history {
+            if icon_button(ui, Rect::from_center_size(pos2(x0 + 12.0, hy), vec2(28.0, 28.0)), "sheet-back", "Back", back_glyph) {
+                out.history = Some(false);
             }
-        }
-        if let Some(Control::Button { label, action, capture: wants, enabled, .. }) = go {
-            let ok = enabled.unwrap_or(true) && running.is_none();
-            let enter = ok && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
-            if button(ui, bar.right() - 44.0, bar.center().y, label, Style::Primary, ok).0 || enter {
-                acts.push(Act::Press(action.clone(), *wants));
-            }
-        }
-        // Save: the shown result (dim until there is one).
-        let save_r = Rect::from_center_size(pos2(bar.right() - 22.0, bar.center().y), vec2(30.0, 30.0));
-        let can_save = shown_entry.is_some() && running.is_none();
-        let resp = ui.interact(save_r, ui.scope_id().with("sheet-save"), if can_save { Sense::click() } else { Sense::hover() });
-        if can_save && resp.hovered() {
-            painter.rect_filled(save_r, radius(6), Tokens::button_hover());
-        }
-        save_glyph(&painter, save_r.center(), if can_save { Tokens::text_strong() } else { Tokens::text_ghost() });
-        if can_save && resp.clicked() {
-            save = shown_entry.as_ref().map(|e| e.path.clone());
-        }
-        // Under the picture: the other controls in a row (mode, keep exact, how many, model).
-        let mut row_ui = ui.new_child(
-            egui::UiBuilder::new().max_rect(Rect::from_min_max(pos2(x0, stage.bottom() + 12.0), pos2(x1, card.bottom() - 50.0))),
-        );
-        row_ui.spacing_mut().item_spacing = vec2(10.0, 8.0);
-        if let Some(panel) = panel_ref {
-            row_ui.horizontal_wrapped(|ui| {
-                for (k, c) in panel.controls.iter().enumerate() {
-                    let skip = matches!(c, Control::Stage {} | Control::Results {} | Control::Note { .. } | Control::Menu { .. })
-                        || std::ptr::eq(c, prompt.map_or(std::ptr::null(), |x| x as *const _))
-                        || std::ptr::eq(c, go.map_or(std::ptr::null(), |x| x as *const _));
-                    if skip {
-                        continue;
-                    }
-                    ui.push_id(("sheet-ctl", k), |ui| inline_control(ui, c, &values, &mut acts));
-                }
-            });
-            // Menus (the model) get a line of their own: their names are long.
-            for (k, c) in panel.controls.iter().enumerate() {
-                if let Control::Menu { label, .. } = c {
-                    row_ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(label).font(theme::body(12.0)).color(Tokens::text_dim()));
-                        ui.push_id(("sheet-menu", k), |ui| inline_control(ui, c, &values, &mut acts));
-                    });
-                }
-            }
-            for c in &panel.controls {
-                if let Control::Note { text, tone } = c {
-                    note(&mut row_ui, text, *tone);
-                }
-            }
+            painter.text(pos2(x0 + 34.0, hy), Align2::LEFT_CENTER, "History", theme::strong(15.0), Tokens::text_strong());
+            painter.text(
+                pos2(x0 + 104.0, hy),
+                Align2::LEFT_CENTER,
+                format!("{} pictures, kept on this computer", all.len()),
+                theme::body(11.5),
+                Tokens::text_dim(),
+            );
         } else {
-            let (r, _) = row_ui.allocate_exact_size(vec2(40.0, 30.0), Sense::hover());
-            spinner(row_ui.painter(), r.center(), now);
+            let title = panel.as_ref().map(|p| p.title.clone()).unwrap_or_default();
+            painter.text(pos2(x0, hy), Align2::LEFT_CENTER, &title, theme::strong(15.0), Tokens::text_strong());
+            if !all.is_empty()
+                && icon_button(ui, Rect::from_center_size(pos2(x1 - 50.0, hy), vec2(30.0, 30.0)), "sheet-history", "History", clock_glyph)
+            {
+                out.history = Some(true);
+            }
         }
-        if let Some((tone, text)) = message.clone().filter(|(t, s)| !s.is_empty() && *t != Tone::Good) {
-            note(&mut row_ui, &text, tone);
+        if icon_button(
+            ui,
+            Rect::from_center_size(pos2(x1 - 14.0, hy), vec2(30.0, 30.0)),
+            "sheet-gear",
+            "Connections and settings",
+            gear_glyph,
+        ) {
+            out.connect = true;
         }
-        // Earlier pictures: click one to look at it again.
-        if !results.is_empty() {
-            row_ui.add_space(4.0);
-            row_ui.horizontal(|ui| {
-                for (e, t) in results.iter().zip(&thumbs) {
+        let body_top = card.top() + header_h;
+        if history {
+            let area = Rect::from_min_max(pos2(x0, body_top), pos2(x1, card.bottom() - footer_h - 6.0));
+            history_grid(ui, area, &all, &thumbs, pending_delete.as_ref(), touch, &mut out);
+        } else {
+            let stage = Rect::from_min_size(pos2(x0, body_top), vec2(stage_w, stage_h));
+            painter.rect_filled(stage, radius(8), theme::c(0x141414));
+            if let Some(t) = shown_tex.as_ref().or(snapshot.as_ref()) {
+                let size = t.size_vec2();
+                let k = (stage.width() / size.x).min(stage.height() / size.y);
+                let r = Rect::from_center_size(stage.center(), size * k);
+                painter.image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            // What this picture is: pills in the top corner (they never cover the model's middle).
+            let mut px = stage.left() + 10.0;
+            match &shown_entry {
+                Some(e) => {
+                    for (k, t) in tags(e).iter().enumerate() {
+                        px += pill(&painter, pos2(px, stage.top() + 10.0), t, 11.5, k == 0) + 6.0;
+                    }
+                }
+                None => {
+                    pill(&painter, pos2(px, stage.top() + 10.0), "Your view", 11.5, false);
+                }
+            }
+            if running.is_some() {
+                painter.rect_filled(stage, radius(8), Color32::from_black_alpha(150));
+                let pulse = (0.5 + 0.5 * (now * 2.4).sin()) as f32;
+                painter.rect_stroke(
+                    stage,
+                    radius(8),
+                    Stroke::new(3.0, Tokens::accent().gamma_multiply(0.35 + 0.45 * pulse)),
+                    StrokeKind::Inside,
+                );
+                spinner(&painter, stage.center() - vec2(0.0, 26.0), now);
+                let text = if progress.1.is_empty() { "Generating scene…".to_string() } else { progress.1.clone() };
+                painter.text(stage.center() + vec2(0.0, 2.0), Align2::CENTER_CENTER, text, theme::strong(13.5), Color32::WHITE);
+            }
+            composer(
+                ui,
+                stage,
+                &prompt,
+                &go,
+                &values,
+                running.is_some(),
+                editing,
+                connected,
+                shown_entry.as_ref(),
+                touch,
+                &mut acts,
+                &mut out,
+            );
+            // How and who: labelled rows under the picture.
+            let mut y = stage.bottom() + 14.0;
+            for (k, row) in rows.iter().enumerate() {
+                let r = Rect::from_min_size(pos2(x0, y), vec2(stage_w, row_h));
+                let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                row_ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
+                for (j, c) in row.iter().enumerate() {
+                    if j > 0 {
+                        row_ui.add_space(12.0);
+                    }
+                    row_ui.push_id(("sheet-row", k, j), |ui| inline_control(ui, c, &values, row_h, &mut acts));
+                }
+                y += row_h + 10.0;
+            }
+            for (text, tone) in &notes {
+                let g = painter.layout(text.clone(), theme::body(12.0), tone_color(*tone), stage_w);
+                let gh = g.size().y;
+                painter.galley(pos2(x0, y), g, tone_color(*tone));
+                y += gh + 8.0;
+            }
+            if let Some((tone, text)) = &msg {
+                let g = painter.layout(text.clone(), theme::body(12.0), Tokens::text_strong(), stage_w - 20.0);
+                let r = Rect::from_min_size(pos2(x0, y), vec2(stage_w, g.size().y + 14.0));
+                painter.rect_filled(r, radius(7), if *tone == Tone::Error { theme::c(0x58302f) } else { theme::c(0x2c2c2e) });
+                painter.galley(pos2(x0 + 10.0, y + 7.0), g, Tokens::text_strong());
+                y = r.bottom() + 8.0;
+            }
+            // Recent pictures: what made each one on a small pill.
+            if show_strip {
+                let th = 50.0;
+                let mut x = x0;
+                for (e, t) in all.iter().zip(&thumbs) {
                     let Some(t) = t else { continue };
                     let size = t.size_vec2();
-                    let th = 46.0;
-                    let r = ui.allocate_exact_size(vec2(th * size.x / size.y.max(1.0), th), Sense::click());
-                    ui.painter().image(t.id(), r.0, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                    let on = shown_entry.as_ref().is_some_and(|s| s.path == e.path);
-                    let edge = if on { Tokens::accent() } else { Tokens::chip_border() };
-                    ui.painter().rect_stroke(r.0, radius(4), Stroke::new(if on { 2.0 } else { 1.0 }, edge), StrokeKind::Inside);
-                    let resp = r.1.on_hover_text(format!("{}\n{}", e.title, e.details));
-                    if resp.clicked() {
-                        show = Some(e.clone());
+                    let tw = (th * size.x / size.y.max(1.0)).min(110.0);
+                    if x + tw > x1 - 70.0 {
+                        break;
                     }
+                    let r = Rect::from_min_size(pos2(x, y), vec2(tw, th));
+                    let resp = ui.interact(r, ui.scope_id().with(("thumb", &e.path)), Sense::click());
+                    painter.image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                    let on = shown_entry.as_ref().is_some_and(|s| s.path == e.path);
+                    let edge = if on {
+                        Tokens::accent()
+                    } else if resp.hovered() {
+                        Tokens::text_dim()
+                    } else {
+                        Tokens::chip_border()
+                    };
+                    painter.rect_stroke(r, radius(5), Stroke::new(if on { 2.0 } else { 1.0 }, edge), StrokeKind::Inside);
+                    if let Some(first) = tags(e).first() {
+                        pill(&painter, pos2(r.left() + 3.0, r.bottom() - 17.0), first, 9.5, false);
+                    }
+                    if resp.on_hover_text(format!("{}\n{}", e.details, when(e.time))).clicked() {
+                        out.show = Some(e.clone());
+                    }
+                    x += tw + 8.0;
                 }
-            });
+                let more = link(ui, pos2(x1 - 56.0, y + th / 2.0), "History", "sheet-more");
+                if ui.interact(more, ui.scope_id().with("sheet-more-btn"), Sense::click()).clicked() {
+                    out.history = Some(true);
+                }
+            }
+        }
+        // Footer.
+        let fy = card.bottom() - footer_h / 2.0;
+        painter.hline(card.x_range(), card.bottom() - footer_h, Stroke::new(1.0, Tokens::divider()));
+        if w >= 560.0 {
+            painter.text(
+                pos2(x0, fy),
+                Align2::LEFT_CENTER,
+                "Made by the service you picked, on your own account or computer.",
+                theme::body(11.0),
+                Tokens::text_faint(),
+            );
         }
         let close_label = if running.is_some() { "Cancel" } else { "Close" };
-        if button(ui, x1, card.bottom() - 26.0, close_label, Style::Plain, true).0 {
+        if button(ui, x1, fy, close_label, Style::Plain, true).0 {
             if running.is_some() {
                 acts.push(Act::Cancel);
             } else {
-                close = true;
+                out.close = true;
             }
         }
-        painter.text(
-            pos2(x0, card.bottom() - 26.0),
-            Align2::LEFT_CENTER,
-            "Made by the service you picked, on your own account or computer.",
-            theme::body(10.5),
-            Tokens::text_faint(),
-        );
     });
-    *p.drafts_mut(&plugin, &panel_id) = drafts;
     apply(p, &plugin, &panel_id, acts, capture, &dir);
-    if let Some(e) = show
-        && let Some(s) = p.sheet.as_mut()
-    {
-        s.shown = Some(e);
+    let pressed_generate =
+        p.panels.get(&(plugin.clone(), panel_id.clone())).is_some_and(|s| s.run.as_ref().is_some_and(|r| r.0 == "generate"));
+    if let Some(s) = p.sheet.as_mut() {
+        if let Some(e) = out.show {
+            s.shown = Some(e);
+            s.editing = false;
+            s.history = false;
+        }
+        if out.edit {
+            s.editing = true;
+        }
+        if let Some(hv) = out.history {
+            s.history = hv;
+            s.pending_delete = None;
+        }
+        if pressed_generate {
+            s.editing = false;
+        }
     }
-    if let Some(src) = save {
+    if let Some(prompt_text) = out.reuse {
+        if let Some(Control::Text { id, .. }) = &prompt {
+            p.set_value(&plugin, &panel_id, id, Value::from(prompt_text));
+        }
+        if let Some(s) = p.sheet.as_mut() {
+            s.history = false;
+            s.editing = true;
+        }
+    }
+    if let Some(e) = out.delete {
+        let confirmed = p.sheet.as_ref().and_then(|s| s.pending_delete.clone()).is_some_and(|d| d == e.path);
+        if confirmed {
+            results::remove(&e);
+            p.results_of(&plugin).retain(|r| r.path != e.path);
+            p.textures.remove(&e.path);
+            if let Some(s) = p.sheet.as_mut() {
+                s.pending_delete = None;
+                if s.shown.as_ref().is_some_and(|x| x.path == e.path) {
+                    s.shown = None;
+                }
+            }
+        } else if let Some(s) = p.sheet.as_mut() {
+            s.pending_delete = Some(e.path.clone());
+        }
+    }
+    if let Some(path) = out.copy
+        && let Ok(bytes) = std::fs::read(&path)
+        && let Ok(pic) = shapecraft_plugin_host::images::decode(&bytes)
+    {
+        ctx.copy_image(egui::ColorImage::from_rgba_unmultiplied([pic.width as usize, pic.height as usize], &pic.pixels));
+        p.notice = Some((Tone::Good, "Copied.".into()));
+    }
+    if let Some(src) = out.save {
         let mut pick = crate::dialogs::Pick::default();
         pick.start(|| crate::dialogs::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("Generative Render.png").save_file());
         p.save_pick = Some((src, pick));
     }
-    if close {
+    if out.connect {
+        p.selected = Some(plugin.clone());
+        p.browsing = false;
+        if let Some(s) = p.sheet.as_mut() {
+            s.hidden = true;
+        }
+        p.requests.push(Request::OpenPlugins);
+    }
+    if out.close {
         p.sheet = None;
     }
 }
 
-/// A small control in the sheet's row.
-fn inline_control(ui: &mut Ui, c: &Control, values: &Map<String, Value>, acts: &mut Vec<Act>) {
+/// The prompt capsule over the picture's bottom edge. Writing: the words (growing upward to six lines), Generate and
+/// Save. With a result on show: the words in one line, Edit, Try Again and Save. Nothing connected: Connect….
+#[allow(clippy::too_many_arguments)]
+fn composer(
+    ui: &mut Ui,
+    stage: Rect,
+    prompt: &Option<Control>,
+    go: &Option<Control>,
+    values: &Map<String, Value>,
+    running: bool,
+    editing: bool,
+    connected: bool,
+    shown: Option<&results::Entry>,
+    touch: bool,
+    acts: &mut Vec<Act>,
+    out: &mut SheetOut,
+) {
+    let painter = ui.painter().clone();
+    let cap_w = (stage.width() * 0.8).min(560.0).max(stage.width().min(320.0));
+    let (prompt_id, placeholder) = match prompt {
+        Some(Control::Text { id, placeholder, .. }) => (id.clone(), placeholder.clone()),
+        _ => (String::new(), String::new()),
+    };
+    let text = values.get(&prompt_id).and_then(Value::as_str).unwrap_or("").to_string();
+    let (go_label, go_action, wants) = match go {
+        Some(Control::Button { label, action, capture, .. }) => (label.clone(), action.clone(), *capture),
+        _ => ("Generate".to_string(), String::new(), false),
+    };
+    let btn_h = if touch { 34.0 } else { 28.0 };
+    let save_w = 34.0;
+    let folded = !editing && !running && shown.is_some();
+    let buttons_w = if !connected {
+        110.0
+    } else if folded {
+        g_w(&painter, "Edit") + g_w(&painter, "Try Again") + 18.0
+    } else {
+        g_w(&painter, &go_label)
+    };
+    let field_w = cap_w - 16.0 - buttons_w - save_w - 16.0;
+    let line_h = 17.0;
+    let lines = if folded || !connected {
+        1.0
+    } else {
+        let g = painter.layout(
+            if text.is_empty() { placeholder.clone() } else { text.clone() },
+            theme::body(13.0),
+            Color32::WHITE,
+            field_w - 18.0,
+        );
+        (g.rows.len() as f32).clamp(1.0, 6.0)
+    };
+    let field_h = (lines * line_h + 14.0).max(btn_h);
+    let cap = Rect::from_min_max(
+        pos2(stage.center().x - cap_w / 2.0, stage.bottom() - 12.0 - field_h - 12.0),
+        pos2(stage.center().x + cap_w / 2.0, stage.bottom() - 12.0),
+    );
+    painter.rect_filled(cap.translate(vec2(0.0, 3.0)), radius(14), Color32::from_black_alpha(70));
+    painter.rect_filled(cap, radius(14), Tokens::panel().gamma_multiply(0.97));
+    painter.rect_stroke(cap, radius(14), Stroke::new(1.0, Tokens::panel_border()), StrokeKind::Inside);
+    let field = Rect::from_min_size(pos2(cap.left() + 8.0, cap.top() + 6.0), vec2(field_w, field_h));
+    let by = cap.bottom() - 6.0 - btn_h / 2.0;
+    let mut right = cap.right() - 8.0 - save_w;
+    // Save: the picture on show (dim until there is one).
+    let save_r = Rect::from_center_size(pos2(cap.right() - 8.0 - save_w / 2.0, by), vec2(save_w - 4.0, btn_h));
+    let can_save = shown.is_some() && !running;
+    let resp = ui.interact(save_r, ui.scope_id().with("sheet-save"), if can_save { Sense::click() } else { Sense::hover() });
+    if can_save && resp.hovered() {
+        painter.rect_filled(save_r, radius(6), Tokens::button_hover());
+    }
+    save_glyph(&painter, save_r.center(), if can_save { Tokens::text_strong() } else { Tokens::text_ghost() });
+    if can_save && resp.on_hover_text("Save Image…").clicked() {
+        out.save = shown.map(|e| e.path.clone());
+    }
+    if !connected {
+        painter.text(pos2(field.left() + 6.0, by), Align2::LEFT_CENTER, "Connect an AI to start", theme::body(13.0), Tokens::text_dim());
+        if button(ui, right - 6.0, by, "Connect…", Style::Primary, true).0 {
+            out.connect = true;
+        }
+        return;
+    }
+    if folded {
+        let one = text.lines().next().unwrap_or("").to_string();
+        let g = painter.layout_no_wrap(if one.is_empty() { "(no description)".into() } else { one }, theme::body(13.0), Tokens::text_dim());
+        let clip = Rect::from_min_max(field.min, pos2(field.right() - 4.0, field.max.y));
+        painter.with_clip_rect(clip).galley(pos2(field.left() + 8.0, by - g.size().y / 2.0), g, Tokens::text_dim());
+        if ui.interact(field, ui.scope_id().with("sheet-fold"), Sense::click()).on_hover_text("Edit the description").clicked() {
+            out.edit = true;
+        }
+        let (again, r) = button(ui, right - 6.0, by, "Try Again", Style::Primary, true);
+        if again {
+            acts.push(Act::Press(go_action.clone(), wants));
+        }
+        right = r.left() - 8.0;
+        if button(ui, right, by, "Edit", Style::Plain, true).0 {
+            out.edit = true;
+        }
+        return;
+    }
+    let mut edited = text.clone();
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field));
+    child.set_clip_rect(field.expand(1.0));
+    text_box(&mut child, &format!("sheet-{prompt_id}"), &mut edited, field.height(), &placeholder, false, false);
+    if edited != text {
+        acts.push(Act::Set(prompt_id.clone(), Value::from(edited)));
+    }
+    let ok = !running && matches!(go, Some(Control::Button { enabled, .. }) if enabled.unwrap_or(true));
+    let enter = ok && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::Enter));
+    if button(ui, right - 6.0, by, &go_label, Style::Primary, ok).0 || enter {
+        acts.push(Act::Press(go_action, wants));
+    }
+}
+
+/// A push button's width for `label`.
+fn g_w(p: &egui::Painter, label: &str) -> f32 {
+    p.layout_no_wrap(label.to_string(), theme::body(13.0), Color32::WHITE).size().x + 26.0
+}
+
+/// Every picture kept, newest first: the picture with what made it, when, the words, and Save / Copy / Use Prompt /
+/// Delete.
+fn history_grid(
+    ui: &mut Ui,
+    area: Rect,
+    all: &[results::Entry],
+    thumbs: &[Option<TextureHandle>],
+    pending_delete: Option<&PathBuf>,
+    touch: bool,
+    out: &mut SheetOut,
+) {
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
+    child.set_clip_rect(area);
+    let cols = if area.width() < 520.0 { 2 } else { 3 };
+    let gap = 14.0;
+    let cw = (area.width() - gap * (cols as f32 - 1.0) - 10.0) / cols as f32;
+    let img_h = cw * 0.62;
+    let card_h = img_h + if touch { 92.0 } else { 84.0 };
+    egui::ScrollArea::vertical().id_salt("gr-history").auto_shrink([false, false]).show(&mut child, |ui| {
+        let rows = all.len().div_ceil(cols);
+        let (block, _) = ui.allocate_exact_size(vec2(area.width() - 10.0, rows as f32 * (card_h + gap)), Sense::hover());
+        let p = ui.painter().clone();
+        for (i, e) in all.iter().enumerate() {
+            let (r, c) = (i / cols, i % cols);
+            let cell =
+                Rect::from_min_size(pos2(block.left() + c as f32 * (cw + gap), block.top() + r as f32 * (card_h + gap)), vec2(cw, card_h));
+            if !ui.is_rect_visible(cell) {
+                continue;
+            }
+            let img = Rect::from_min_size(cell.min, vec2(cw, img_h));
+            p.rect_filled(img, radius(7), theme::c(0x141414));
+            if let Some(Some(t)) = thumbs.get(i) {
+                let size = t.size_vec2();
+                let k = (img.width() / size.x).max(img.height() / size.y);
+                // Fill the tile, cropping the middle.
+                let uv_w = (img.width() / (size.x * k)).min(1.0);
+                let uv_h = (img.height() / (size.y * k)).min(1.0);
+                let uv = Rect::from_center_size(pos2(0.5, 0.5), vec2(uv_w, uv_h));
+                p.image(t.id(), img, uv, Color32::WHITE);
+            }
+            let resp = ui.interact(img, ui.scope_id().with(("hist", i)), Sense::click());
+            if resp.hovered() {
+                p.rect_stroke(img, radius(7), Stroke::new(2.0, Tokens::accent()), StrokeKind::Inside);
+            }
+            if resp.on_hover_text("Show it in the sheet").clicked() {
+                out.show = Some(e.clone());
+            }
+            let mut px = img.left() + 6.0;
+            for (k, t) in tags(e).iter().take(3).enumerate() {
+                if px > img.right() - 40.0 {
+                    break;
+                }
+                px += pill(&p.with_clip_rect(img), pos2(px, img.top() + 6.0), t, 9.5, k == 0) + 4.0;
+            }
+            p.text(pos2(cell.left(), img.bottom() + 12.0), Align2::LEFT_CENTER, when(e.time), theme::strong(11.0), Tokens::text_dim());
+            let g = p.layout(e.title.clone(), theme::body(11.5), Tokens::text_strong(), cw);
+            let clip = Rect::from_min_size(pos2(cell.left(), img.bottom() + 20.0), vec2(cw, 30.0));
+            p.with_clip_rect(clip).galley(clip.min, g, Tokens::text_strong());
+            let ly = cell.bottom() - 10.0;
+            let mut lx = cell.left();
+            let deleting = pending_delete.is_some_and(|d| *d == e.path);
+            let labels: [(&str, u8); 4] =
+                [("Save", 0), ("Copy", 1), ("Use Prompt", 2), (if deleting { "Really Delete" } else { "Delete" }, 3)];
+            for (label, what) in labels {
+                let lr = link(ui, pos2(lx, ly), label, "hist-link");
+                if ui.interact(lr, ui.scope_id().with(("hist-act", i, what)), Sense::click()).clicked() {
+                    match what {
+                        0 => out.save = Some(e.path.clone()),
+                        1 => out.copy = Some(e.path.clone()),
+                        2 => out.reuse = Some(e.title.clone()),
+                        _ => out.delete = Some(e.clone()),
+                    }
+                }
+                lx = lr.right() + 12.0;
+            }
+        }
+    });
+}
+
+/// A control in one of the sheet's rows, with its label in front.
+fn inline_control(ui: &mut Ui, c: &Control, values: &Map<String, Value>, h: f32, acts: &mut Vec<Act>) {
+    let label_of = |l: &str| -> Option<String> { (!l.is_empty()).then(|| l.to_string()) };
+    let lead = match c {
+        Control::Segmented { label, .. } | Control::Menu { label, .. } => label_of(label),
+        _ => None,
+    };
+    if let Some(l) = lead {
+        ui.label(egui::RichText::new(l).font(theme::body(12.0)).color(Tokens::text_dim()));
+    }
     match c {
         Control::Segmented { id, options, .. } => {
             let cur = values.get(id).and_then(Value::as_str).unwrap_or("");
             let k = options.iter().position(|o| o == cur).unwrap_or(0);
-            let w: f32 = options.iter().map(|o| o.len() as f32 * 7.0 + 22.0).sum();
-            let (r, _) = ui.allocate_exact_size(vec2(w, 26.0), Sense::hover());
+            let w: f32 = options.iter().map(|o| g_w(ui.painter(), o).max(40.0) - 4.0).sum();
+            let (r, _) = ui.allocate_exact_size(vec2(w, h - 4.0), Sense::hover());
             let refs: Vec<&str> = options.iter().map(String::as_str).collect();
             if let Some(n) = segmented_at(ui, r, &format!("sh-seg-{id}"), &refs, k) {
                 acts.push(Act::Set(id.clone(), Value::from(options[n].clone())));
@@ -1278,8 +1753,8 @@ fn inline_control(ui: &mut Ui, c: &Control, values: &Map<String, Value>, acts: &
         }
         Control::Toggle { id, label, .. } => {
             let mut on = values.get(id).and_then(Value::as_bool).unwrap_or(false);
-            let g = ui.painter().layout_no_wrap(label.clone(), theme::body(12.0), Tokens::text_strong());
-            let (r, _) = ui.allocate_exact_size(vec2(g.size().x + 52.0, 26.0), Sense::hover());
+            let g = ui.painter().layout_no_wrap(label.clone(), theme::body(12.5), Tokens::text_strong());
+            let (r, _) = ui.allocate_exact_size(vec2(g.size().x + 54.0, h), Sense::hover());
             ui.painter().galley(pos2(r.left(), r.center().y - g.size().y / 2.0), g, Tokens::text_strong());
             let before = on;
             switch(ui, r.right(), r.center().y, ("sh-toggle", hash(id)), &mut on);
@@ -1289,7 +1764,7 @@ fn inline_control(ui: &mut Ui, c: &Control, values: &Map<String, Value>, acts: &
         }
         Control::Menu { id, options, empty, .. } => {
             let cur = values.get(id).and_then(Value::as_str).unwrap_or("").to_string();
-            let w = (ui.available_width() - 30.0).clamp(150.0, 340.0);
+            let w = (ui.available_width() - 200.0).clamp(160.0, 300.0);
             if let Some(v) = menu(ui, id, options, &cur, empty, w) {
                 acts.push(Act::Set(id.clone(), Value::from(v)));
             }
@@ -1780,6 +2255,23 @@ pub(crate) fn control_call(method: &str, params: &Value, capture: impl FnOnce() 
         "plugins.select" => with(|p| {
             p.selected = Some(s("id")).filter(|i| !i.is_empty());
             p.browsing = false;
+            Ok(Value::Null)
+        }),
+        // The open sheet's state, to look at it offscreen: `show` (a History index), `history`, `editing`.
+        "plugins.sheet" => with(|p| {
+            let Some(plugin) = p.sheet.as_ref().map(|s| s.plugin.clone()) else { return Err("no sheet open".into()) };
+            let entry = params.get("show").and_then(Value::as_u64).and_then(|i| p.results_of(&plugin).get(i as usize).cloned());
+            let s = p.sheet.as_mut().ok_or("no sheet open")?;
+            if let Some(e) = entry {
+                s.shown = Some(e);
+                s.editing = false;
+            }
+            if let Some(h) = params.get("history").and_then(Value::as_bool) {
+                s.history = h;
+            }
+            if let Some(e) = params.get("editing").and_then(Value::as_bool) {
+                s.editing = e;
+            }
             Ok(Value::Null)
         }),
         // Presses the confirmation card's Add Plugin (to look at the add cards offscreen).

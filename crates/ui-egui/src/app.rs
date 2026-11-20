@@ -2696,6 +2696,10 @@ impl eframe::App for ShapeCraftApp {
             }
         }
         crate::plugins::frame(ui);
+        // A plugin sheet set aside for Preferences comes back when Preferences closes.
+        if crate::plugins::sheet_waiting() && !self.ws.as_deref().is_some_and(|w| w.prefs_open) && self.home_prefs.is_none() {
+            crate::plugins::show_sheet_again();
+        }
         for r in crate::plugins::take_requests() {
             match r {
                 crate::plugins::Request::OpenPlugins => match self.ws.as_deref_mut() {

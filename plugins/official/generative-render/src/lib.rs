@@ -110,12 +110,16 @@ fn main_panel(v: &Values) -> Panel {
     let choices = model_choices();
     let default_model = settings().str("default_model");
     let mode = if v.str("mode").is_empty() { MODES[0].to_string() } else { v.str("mode") };
-    let mut model_menu = ui::menu("model", "Model", choices.clone(), &default_model, "Connect a service in Settings");
+    let exact = v.get("exact").and_then(Value::as_bool).unwrap_or(true);
+    let mut model_menu = ui::menu("model", "Model", choices.clone(), &default_model, "Connect a service first");
     if v.str("model").is_empty() && !default_model.is_empty() {
         model_menu["value"] = Value::from(default_model);
     }
-    let mut p = Panel::new("Generative Render");
-    p = p
+    let mut count = ui::segmented("count", &["1", "2", "4"], "1");
+    count["label"] = Value::from("Pictures");
+    // The sheet: the picture, the prompt bar, then a row of how (mode, exact, move) and a row of who (model, how many).
+    // A separator starts a new row; an empty model list makes the app offer "Connect…" instead of Generate.
+    Panel::new("Generative Render")
         .style("sheet")
         .with(ui::stage())
         .with(ui::text_box("prompt", "Describe the scene, the light and the mood…"))
@@ -123,15 +127,11 @@ fn main_panel(v: &Values) -> Panel {
                       "capture": true, "enabled": !choices.is_empty() }))
         .with(ui::segmented("mode", &MODES, &mode))
         .with_if(mode == MODES[0], ui::toggle("exact", "Keep My Model Exact", true))
-        .with(ui::segmented("count", &["1", "2", "4"], "1"))
-        .with(model_menu);
-    if choices.is_empty() {
-        p = p.with(ui::note(
-            "Connect OpenRouter, OpenAI, Google Gemini or a ComfyUI on your computer in Preferences ▸ Plugins ▸ Generative Render.",
-            "warning",
-        ));
-    }
-    p.with(ui::results())
+        .with_if(mode == MODES[0] && !exact, ui::toggle("move", "Let It Move and Resize", false))
+        .with(ui::separator())
+        .with(model_menu)
+        .with(count)
+        .with(ui::results())
 }
 
 fn settings_panel(v: &Values) -> Panel {
@@ -250,19 +250,27 @@ fn refresh(service: &str) -> Result<usize, String> {
     Ok(list.len())
 }
 
-/// How the person's words become the instruction for each mode.
-fn instruction(mode: &str, prompt: &str) -> String {
+/// How the person's words become the instruction for each mode. `exact`: the model's pixels go back on top (so it
+/// mustn't move); `free`: it may be moved, resized and tilted to suit the scene (a coin floating in the air).
+fn instruction(mode: &str, prompt: &str, exact: bool, free: bool) -> String {
     let p = prompt.trim();
     match mode {
         "Surroundings" => {
             let scene = if p.is_empty() { "a clean, softly lit product photo setting" } else { p };
-            format!(
-                "Place the object from this picture in a new scene: {scene}. Keep the object exactly as it is: the same \
-                 shape, proportions, parts, colors, materials and camera angle; don't add, remove or reshape anything \
-                 on it. It must stay at exactly the same position and size in the frame: don't move, resize, crop, \
-                 duplicate or redraw it, don't add another copy of it anywhere, and keep the picture's framing. Replace only the background and surroundings \
-                 around it, and make the lighting and the shadows it casts fit the new scene. Photorealistic."
-            )
+            let keep = "Keep the object itself exactly as it is: the same shape, proportions, parts, colors, materials and \
+                        details; don't add, remove or reshape anything on it, and don't add another copy of it anywhere.";
+            let place = if exact {
+                "It must stay at exactly the same position, size and angle in the frame: don't move, resize, crop or \
+                 redraw it, and keep the picture's framing. Replace only the background and surroundings around it, and \
+                 make the shadows it casts fit the new scene."
+            } else if free {
+                "You may move it, make it bigger or smaller, tilt it, or have it float in the air, wherever it looks best \
+                 in the scene, and reframe the picture around it. Light it like the scene."
+            } else {
+                "Keep it where it is and at the same size and angle, but light it like the scene: its highlights, \
+                 reflections and shadows should belong there."
+            };
+            format!("Place the object from this picture in a new scene: {scene}. {keep} {place} Photorealistic.")
         }
         "Selected Faces" => format!(
             "Change only the highlighted part of the object: {p}. Keep everything else, the camera angle and the \
@@ -303,6 +311,7 @@ fn generate(v: &Values) -> Result<String, String> {
     }
     let count = v.str("count").parse::<u32>().unwrap_or(1).clamp(1, 4);
     let exact = mode == "Surroundings" && v.get("exact").and_then(Value::as_bool).unwrap_or(true);
+    let free = mode == "Surroundings" && !exact && v.bool("move");
     let prompt = v.str("prompt");
 
     host::progress(-1.0, "Generating scene…");
@@ -321,7 +330,8 @@ fn generate(v: &Values) -> Result<String, String> {
     } else {
         None
     };
-    let job = Job { model, prompt: instruction(&mode, &prompt), png, width: small.width, height: small.height, count, mask_png };
+    let job =
+        Job { model, prompt: instruction(&mode, &prompt, exact, free), png, width: small.width, height: small.height, count, mask_png };
     let made = match service {
         "openrouter" => openrouter::generate(&job)?,
         "openai" => openai::generate(&job)?,
@@ -332,7 +342,13 @@ fn generate(v: &Values) -> Result<String, String> {
     if made.pictures.is_empty() {
         return Err("The service answered without a picture (it may have declined the prompt). Try different words.".into());
     }
-    let service_name = SERVICES.iter().find(|(s, _)| *s == service).map(|(_, n)| *n).unwrap_or(service);
+    let service_name = match service {
+        "comfy" => "ComfyUI",
+        "gemini" => "Gemini",
+        other => SERVICES.iter().find(|(s, _)| *s == other).map(|(_, n)| *n).unwrap_or(other),
+    };
+    let model_name =
+        models(service).into_iter().find(|m| m.id == model).map(|m| m.name).filter(|n| !n.is_empty()).unwrap_or_else(|| model.to_string());
     let mut kept = 0;
     for bytes in &made.pictures {
         let pic = host::decode_image(bytes)?;
@@ -346,11 +362,16 @@ fn generate(v: &Values) -> Result<String, String> {
             }
             _ => pic,
         };
-        let title = if prompt.trim().is_empty() { mode.clone() } else { prompt.trim().chars().take(80).collect() };
-        let mut details = format!("{mode} · {service_name} · {model}");
-        if exact {
-            details.push_str(" · model kept exact");
-        }
+        // The whole prompt as the title (History shows it), and short facts as details: the app shows them as pills,
+        // the first one on thumbnails.
+        let title = if prompt.trim().is_empty() { "(no description)".to_string() } else { prompt.trim().to_string() };
+        let how = match (&mode[..], exact, free) {
+            ("Surroundings", true, _) => "Model exact",
+            ("Surroundings", false, true) => "Moved freely",
+            ("Surroundings", false, false) => "Relit",
+            _ => "Whole picture",
+        };
+        let mut details = format!("{service_name} · {model_name} · {how}");
         if !made.note.is_empty() {
             details.push_str(&format!(" · {}", made.note));
         }

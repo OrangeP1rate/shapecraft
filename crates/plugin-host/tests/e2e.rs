@@ -235,6 +235,8 @@ fn generative_render_with_a_local_comfyui() -> Result<(), Error> {
     // The workflow carried the person's words and the uploaded picture.
     let log = seen.lock().map(|v| v.join("\n")).unwrap_or_default();
     assert!(log.contains("on an oak desk") && log.contains("view.png") && log.contains("flux1-dev-kontext"), "{log}");
+    // Keep My Model Exact: only the scene around the model is repainted (a repaint mask on the view's latent).
+    assert!(log.contains("SetLatentNoiseMask") && log.contains("ImageToMask"), "{log}");
 
     // Selected Faces without a selection says what to do.
     let err = p

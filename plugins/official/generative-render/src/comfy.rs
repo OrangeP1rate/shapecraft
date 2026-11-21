@@ -149,11 +149,12 @@ fn klein_files(b: &str) -> Result<KleinFiles, String> {
 }
 
 /// FLUX.2 klein editing the view (as ComfyUI's own "Image Edit (FLUX.2 Klein 4B Distilled)" template): the view as
-/// a reference, 4 steps, no guidance.
-fn klein(f: &KleinFiles, image: &str, prompt: &str, seed: u64) -> Value {
+/// a reference, 4 steps, no guidance. With a repaint `mask` (Keep My Model Exact) it starts from the view itself and
+/// repaints only where the mask is white, so the model stays where it is and can't come back as a second copy.
+fn klein(f: &KleinFiles, image: &str, mask: Option<&str>, prompt: &str, seed: u64) -> Value {
     let steps = if f.unet.contains("base") { 28 } else { 4 };
     let cfg = if f.unet.contains("base") { 4.0 } else { 1.0 };
-    json!({
+    let mut w = json!({
         "1": { "class_type": "UNETLoader", "inputs": { "unet_name": f.unet, "weight_dtype": "default" } },
         "2": { "class_type": "CLIPLoader", "inputs": { "clip_name": f.te, "type": "flux2", "device": "default" } },
         "3": { "class_type": "VAELoader", "inputs": { "vae_name": f.vae } },
@@ -173,7 +174,29 @@ fn klein(f: &KleinFiles, image: &str, prompt: &str, seed: u64) -> Value {
         "17": { "class_type": "SamplerCustomAdvanced", "inputs": { "noise": ["16", 0], "guider": ["12", 0], "sampler": ["13", 0], "sigmas": ["14", 0], "latent_image": ["15", 0] } },
         "18": { "class_type": "VAEDecode", "inputs": { "samples": ["17", 0], "vae": ["3", 0] } },
         "19": { "class_type": "SaveImage", "inputs": { "images": ["18", 0], "filename_prefix": "ShapeCraft" } }
-    })
+    });
+    if let Some(m) = mask {
+        // The mask is scaled by the same node as the view, so the two line up exactly.
+        add_mask(
+            &mut w,
+            m,
+            json!({ "class_type": "ImageScaleToTotalPixels", "inputs": {
+            "image": ["m1", 0], "upscale_method": "lanczos", "megapixels": 1.0, "resolution_steps": 1 } }),
+            "9",
+        );
+        w["17"]["inputs"]["latent_image"] = json!(["m4", 0]);
+    }
+    w
+}
+
+/// Nodes m1..m4: the uploaded repaint mask, scaled by `scale` (reading from m1), made a mask (white = repaint),
+/// grown a little so contact shadows reach the model's edge, and set on the view's latent (`latent` node).
+fn add_mask(w: &mut Value, mask: &str, scale: Value, latent: &str) {
+    w["m1"] = json!({ "class_type": "LoadImage", "inputs": { "image": mask } });
+    w["m2"] = scale;
+    w["m3"] = json!({ "class_type": "ImageToMask", "inputs": { "image": ["m2", 0], "channel": "red" } });
+    w["m5"] = json!({ "class_type": "GrowMask", "inputs": { "mask": ["m3", 0], "expand": 2, "tapered_corners": true } });
+    w["m4"] = json!({ "class_type": "SetLatentNoiseMask", "inputs": { "samples": [latent, 0], "mask": ["m5", 0] } });
 }
 
 /// The options a loader node offers (file names in its models folder).
@@ -233,8 +256,8 @@ fn find_models(b: &str) -> Result<Files, String> {
     }
 }
 
-fn kontext(f: &Files, image: &str, prompt: &str, seed: u64) -> Value {
-    json!({
+fn kontext(f: &Files, image: &str, mask: Option<&str>, prompt: &str, seed: u64) -> Value {
+    let mut w = json!({
         "1": { "class_type": "UNETLoader", "inputs": { "unet_name": f.unet, "weight_dtype": "default" } },
         "2": { "class_type": "DualCLIPLoader", "inputs": { "clip_name1": f.clip_l, "clip_name2": f.t5, "type": "flux", "device": "default" } },
         "3": { "class_type": "VAELoader", "inputs": { "vae_name": f.vae } },
@@ -250,13 +273,20 @@ fn kontext(f: &Files, image: &str, prompt: &str, seed: u64) -> Value {
             "seed": seed, "steps": 20, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0 } },
         "12": { "class_type": "VAEDecode", "inputs": { "samples": ["11", 0], "vae": ["3", 0] } },
         "13": { "class_type": "SaveImage", "inputs": { "images": ["12", 0], "filename_prefix": "ShapeCraft" } }
-    })
+    });
+    if let Some(m) = mask {
+        add_mask(&mut w, m, json!({ "class_type": "FluxKontextImageScale", "inputs": { "image": ["m1", 0] } }), "6");
+        w["11"]["inputs"]["latent_image"] = json!(["m4", 0]);
+    }
+    w
 }
 
-/// The person's own workflow with {{image}}, {{prompt}} and {{seed}} filled in.
-fn custom(text: &str, image: &str, prompt: &str, seed: u64) -> Result<Value, String> {
+/// The person's own workflow with {{image}}, {{prompt}}, {{seed}} and {{mask}} (the repaint mask: white around the
+/// model; the view itself without Keep My Model Exact) filled in.
+fn custom(text: &str, image: &str, mask: Option<&str>, prompt: &str, seed: u64) -> Result<Value, String> {
     let quoted = |s: &str| Value::from(s).to_string();
     let filled = text
+        .replace("\"{{mask}}\"", &quoted(mask.unwrap_or(image)))
         .replace("\"{{seed}}\"", &seed.to_string())
         .replace("{{seed}}", &seed.to_string())
         .replace("\"{{image}}\"", &quoted(image))
@@ -336,6 +366,11 @@ pub fn generate(job: &Job) -> Result<Made, String> {
     let b = base(&v)?;
     host::progress(-1.0, "Sending the view to ComfyUI…");
     let image = upload(&b, &job.png)?;
+    // Keep My Model Exact: repaint only around the model.
+    let mask = match &job.mask_png {
+        Some(m) => Some(upload(&b, &repaint_mask(m)?)?),
+        None => None,
+    };
     enum Flow {
         Klein(KleinFiles),
         Kontext(Files),
@@ -352,12 +387,23 @@ pub fn generate(job: &Job) -> Result<Made, String> {
         let r = host::random(6);
         let seed = r.iter().fold(0u64, |a, x| (a << 8) | u64::from(*x));
         let wf = match &flow {
-            Flow::Klein(f) => klein(f, &image, &job.prompt, seed),
-            Flow::Kontext(f) => kontext(f, &image, &job.prompt, seed),
-            Flow::Custom => custom(&v.str("comfy_workflow"), &image, &job.prompt, seed)?,
+            Flow::Klein(f) => klein(f, &image, mask.as_deref(), &job.prompt, seed),
+            Flow::Kontext(f) => kontext(f, &image, mask.as_deref(), &job.prompt, seed),
+            Flow::Custom => custom(&v.str("comfy_workflow"), &image, mask.as_deref(), &job.prompt, seed)?,
         };
         pictures.push(run_one(&b, wf)?);
         seeds.push(seed.to_string());
     }
     Ok(Made { pictures, note: format!("seed {}", seeds.join(", ")) })
+}
+
+/// The edit mask (solid on the model) turned into a picture ComfyUI can scale like the view: white where the scene is
+/// repainted, black on the model.
+fn repaint_mask(edit_mask_png: &[u8]) -> Result<Vec<u8>, String> {
+    let m = host::decode_image(edit_mask_png)?;
+    let pixels = m.pixels.chunks_exact(4).flat_map(|p| {
+        let v = 255 - p[3];
+        [v, v, v, 255]
+    });
+    host::encode_png(&host::Image { width: m.width, height: m.height, pixels: pixels.collect() })
 }

@@ -2,6 +2,23 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.11.2-alpha
+**Sketches you can shape by dragging, and a fillet's edges you can change afterwards.**
+### New
+- **Drag a sketch's curves straight in the view.** With no tool running, press on a curve and drag: a rectangle's
+  side slides and the rectangle stays square, its corner moves with the opposite corner held, a circle's rim sets
+  its size, a polygon or an ellipse grows or shrinks about its middle, and a loose line slides sideways. The sizes
+  show as you drag, it snaps to the grid, and one undo takes it back. Before, the drag started a selection box.
+  Thanks [@barnabasjohnthomas](https://github.com/barnabasjohnthomas) (#87).
+- **A rectangle has a middle point.** It shows as a dot, and the pointer snaps to it as Center, so a circle or a
+  line can start right in the middle without construction lines. Thanks [@micide0606](https://github.com/micide0606) (#86).
+- **Change a fillet's or chamfer's edges afterwards.** In the step's card, Edge ▸ Edit... rolls the model back to
+  just before the step with its edges picked: click edges to add or remove them, then Done. Escape leaves it as it
+  was. Thanks [@barnabasjohnthomas](https://github.com/barnabasjohnthomas) (#89).
+### Fixed
+- **A value typed into a sketch dimension is kept when you click away.** It's applied as if you'd pressed Return;
+  before, it was thrown away. Thanks [@barnabasjohnthomas](https://github.com/barnabasjohnthomas) (#88).
+
 ## 0.11.1-alpha
 **Plugins and Report a Problem work on Android.**
 ### Fixed

@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 # Everything is Android-only, so the crate is an empty library in desktop workspace builds.
 [target.'cfg(target_os = "android")'.dependencies]
 shapecraft-ui.workspace = true
+shapecraft-plugin-host.workspace = true
 shapecraft-kernel-occt.workspace = true
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "android-native-activity"] }
 egui = "0.37"

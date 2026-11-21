@@ -11,7 +11,10 @@ pub const MAX_BODY: usize = 65_536;
 pub const MAX_TITLE: usize = 256;
 
 fn agent() -> ureq::Agent {
-    let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
+    // The system's own certificate check everywhere but Android, where it needs Java set up that the app doesn't
+    // have; there the roots ship inside (Mozilla's list).
+    let roots = if cfg!(target_os = "android") { ureq::tls::RootCerts::WebPki } else { ureq::tls::RootCerts::PlatformVerifier };
+    let tls = ureq::tls::TlsConfig::builder().root_certs(roots).build();
     ureq::Agent::config_builder()
         .tls_config(tls)
         .user_agent(format!("ShapeCraft/{}", env!("CARGO_PKG_VERSION")))

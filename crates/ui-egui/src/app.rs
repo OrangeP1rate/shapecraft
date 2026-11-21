@@ -2765,7 +2765,7 @@ pub fn set_url_opener(open: fn(&str)) {
     let _ = URL_OPENER.set(open);
 }
 
-fn open_page(url: &str) {
+pub(crate) fn open_page(url: &str) {
     if let Some(open) = URL_OPENER.get() {
         open(url);
         return;

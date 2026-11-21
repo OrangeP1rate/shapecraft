@@ -2,6 +2,15 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.11.1-alpha
+**Plugins and Report a Problem work on Android.**
+### Fixed
+- **Android: plugins can be added and go online.** The app now has Android's network permission and its own
+  plugins folder, and it checks secure connections with the certificates it carries. Before, adding Generative
+  Render, and Report a Problem, failed on Android.
+- **Android and iPhone: links open.** Sign In with OpenRouter, the Free Chat sites and the plugin links now open
+  in the browser.
+
 ## 0.11.0-alpha
 **Plugins: add only what you want, and the first one puts your model in any scene, with your own AI and no limits
 of ours.**

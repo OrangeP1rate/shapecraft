@@ -26,7 +26,7 @@ import java.util.Arrays;
  * Open, Import and Export reach Files, Drive, Dropbox, USB storage and anything else Android offers.
  *
  * The app asks through a mailbox of small files instead of calls into Java: it writes a request into
- * files/.mailbox/to-android ("open", its id, a label; or "save", a file it wrote, the name to offer), this activity
+ * files/.mailbox/to-android ("open", its id, a label; "save", a file it wrote, the name to offer; or "view", a web page to open), this activity
  * shows the picker, copies the picked document into the cache (or the written file to where the user chose) and
  * writes the outcome into files/.mailbox/to-app ("picked", id, path; "saved", name; "cancelled"; "failed", why).
  */
@@ -85,11 +85,28 @@ public class ShapeCraftActivity extends NativeActivity {
         Arrays.sort(files);
         for (File f : files) {
             try {
-                queue.add(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8).split("\n", -1));
+                String[] req = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8).split("\n", -1);
+                if (req.length >= 2 && req[0].equals("view")) {
+                    view(req[1]);
+                } else {
+                    queue.add(req);
+                }
             } catch (IOException e) {
                 // Unreadable: dropped below.
             }
             f.delete();
+        }
+    }
+
+    /** Opens a web page in the browser (links, sign-ins). Only https pages: the app never asks for anything else. */
+    private void view(String url) {
+        if (!url.startsWith("https://")) {
+            return;
+        }
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException e) {
+            // No browser on this device: nothing to open it with.
         }
     }
 

@@ -10,10 +10,21 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+/// Where an app without a config folder (Android) keeps its plugins, set once at start.
+static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Sets the plugins folder for a platform with no config folder (Android: the app's own storage).
+pub fn set_root(dir: PathBuf) {
+    let _ = ROOT.set(dir);
+}
+
 /// The folder all plugins live in (`SHAPECRAFT_PLUGINS` overrides it, for tests and scratch runs).
 pub fn root() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("SHAPECRAFT_PLUGINS") {
         return Some(PathBuf::from(p));
+    }
+    if let Some(p) = ROOT.get() {
+        return Some(p.clone());
     }
     Some(dirs::config_dir()?.join("ShapeCraft").join("plugins"))
 }

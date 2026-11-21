@@ -34,9 +34,14 @@ mod android {
         shapecraft_ui::tablet::set_small_screen(app.config().smallest_screen_width_dp().is_some_and(|w| w < 600));
         // Android has no Documents folder for the app: projects go in its own storage (…/files/ShapeCraft).
         Options::set_documents(data.clone());
+        // No config folder either: plugins live in the app's storage too (…/files/plugins).
+        shapecraft_plugin_host::store::set_root(data.join("plugins"));
         // Saves waiting for the picker in a run that ended are gone with it.
         let _ = std::fs::remove_dir_all(data.join(".outbox"));
         let mailbox = Mailbox::new(&data);
+        // Android has no command for opening a web page: the activity opens it (sign-ins, free chats, help pages).
+        let _ = LINKS.set(mailbox.to_android.clone());
+        shapecraft_ui::set_url_opener(open_link);
         let opts = Options {
             projects_root: Options::default_root(),
             control_port: None,
@@ -69,6 +74,21 @@ mod android {
         match result {
             Ok(()) => log::info!("ShapeCraft closed"),
             Err(e) => graphics::report_failure(&e.to_string()),
+        }
+    }
+
+    /// Where link requests go (the mailbox's to-android folder), for `open_link`.
+    static LINKS: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+    /// Opens a web page in the browser: a "view" request the activity acts on at once (no answer comes back).
+    fn open_link(url: &str) {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let Some(dir) = LINKS.get() else { return };
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let stem = format!("link-{n:014}");
+        let tmp = dir.join(format!("{stem}.tmp"));
+        if !(std::fs::write(&tmp, format!("view\n{url}")).is_ok() && std::fs::rename(&tmp, dir.join(format!("{stem}.req"))).is_ok()) {
+            log::error!("couldn't open {url}");
         }
     }
 

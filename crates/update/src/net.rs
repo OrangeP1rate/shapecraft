@@ -29,7 +29,10 @@ pub const MAX_DOWNLOAD: u64 = 1 << 30;
 const MAX_API_ANSWER: u64 = 4 << 20;
 
 fn agent(quick: bool) -> ureq::Agent {
-    let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
+    // The system's own certificate check everywhere but Android, where it needs Java set up that the app doesn't
+    // have; there the roots ship inside (Mozilla's list).
+    let roots = if cfg!(target_os = "android") { ureq::tls::RootCerts::WebPki } else { ureq::tls::RootCerts::PlatformVerifier };
+    let tls = ureq::tls::TlsConfig::builder().root_certs(roots).build();
     let mut config = ureq::Agent::config_builder()
         .tls_config(tls)
         .user_agent(format!("ShapeCraft/{}", crate::current_text()))

@@ -1383,14 +1383,7 @@ pub(crate) fn open_link(url: &str) {
         TABLET_LINK.with(|l| l.replace(Some(url.to_string())));
         return;
     }
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(target_os = "windows") {
-        "explorer"
-    } else {
-        "xdg-open"
-    };
-    let _ = std::process::Command::new(opener).arg(url).spawn();
+    crate::app::open_page(url);
 }
 
 /// Opens a folder in the system's file manager.

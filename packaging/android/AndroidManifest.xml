@@ -6,6 +6,8 @@
      free from 600 dp (tablets, foldables). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="PACKAGE">
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <!-- Plugins (adding them, and the services they talk to) and Report a Problem go online. Nothing else does. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:label="ShapeCraft"
         android:icon="@mipmap/ic_launcher"

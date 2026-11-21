@@ -401,7 +401,7 @@ pub fn generate(job: &Job) -> Result<Made, String> {
 /// repainted, black on the model.
 fn repaint_mask(edit_mask_png: &[u8]) -> Result<Vec<u8>, String> {
     let m = host::decode_image(edit_mask_png)?;
-    let pixels = m.pixels.chunks_exact(4).flat_map(|p| {
+    let pixels = m.pixels.as_chunks::<4>().0.iter().flat_map(|p| {
         let v = 255 - p[3];
         [v, v, v, 255]
     });

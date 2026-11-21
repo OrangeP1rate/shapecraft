@@ -1329,24 +1329,39 @@ fn dim_and_card(ui: &mut Ui, id: egui::Id, w: f32, h: f32, f: impl FnOnce(&mut U
     });
     if dragged != egui::Vec2::ZERO {
         // Kept within what dim_and_card_at allows, so a long drag past the edge doesn't pile up.
-        let full = ui.ctx().content_rect();
+        let full = card_area(ui.ctx());
         let size = vec2(w.min(full.width() - 24.0), h.min(full.height() - 24.0));
         let room = ((full.size() - size) / 2.0 - vec2(4.0, 4.0)).max(egui::Vec2::ZERO);
         ui.ctx().data_mut(|d| d.insert_temp(key, (offset + dragged).clamp(-room, room)));
     }
 }
 
+/// Where cards and the sheet may sit: the safe area, below a sideways iPhone's status row and clear of a reserved
+/// status corner (the iPhone Duo's clock), so nothing in a card's header sits under the clock.
+fn card_area(ctx: &egui::Context) -> Rect {
+    let mut r = ctx.content_rect();
+    r.min.y += crate::tablet::status_row();
+    if let Some(c) = crate::tablet::reserved_corner()
+        && c.top() <= r.top() + 1.0
+        && c.bottom() > r.top()
+    {
+        r.min.y = c.bottom();
+    }
+    r
+}
+
 /// A card moved by `offset` from the middle (kept on screen).
 fn dim_and_card_at(ui: &mut Ui, id: egui::Id, w: f32, h: f32, offset: egui::Vec2, f: impl FnOnce(&mut Ui, Rect)) {
     let ctx = ui.ctx().clone();
-    let full = ctx.content_rect();
+    let screen = ctx.content_rect();
+    let full = card_area(&ctx);
     let card = Rect::from_center_size(full.center(), vec2(w.min(full.width() - 24.0), h.min(full.height() - 24.0)));
     let room = ((full.size() - card.size()) / 2.0 - vec2(4.0, 4.0)).max(egui::Vec2::ZERO);
     let card = card.translate(offset.clamp(-room, room));
-    egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
-        let _ = ui.allocate_rect(full, Sense::click());
+    egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(screen.min).show(&ctx, |ui| {
+        let _ = ui.allocate_rect(screen, Sense::click());
         let p = ui.painter().clone();
-        p.rect_filled(full, 0.0, Color32::from_black_alpha(110));
+        p.rect_filled(screen, 0.0, Color32::from_black_alpha(110));
         p.rect_filled(card.translate(vec2(0.0, 8.0)), radius(14), Color32::from_black_alpha(90));
         p.rect_filled(card, radius(12), Tokens::panel());
         p.rect_stroke(card, radius(12), Stroke::new(1.0, Tokens::panel_border()), StrokeKind::Inside);
@@ -1490,7 +1505,7 @@ fn sheet(p: &mut Plugins, ui: &mut Ui) {
     };
     let shown_tex = shown_entry.as_ref().and_then(|e| p.texture(&ctx, &e.path));
     let all: Vec<results::Entry> = p.results_of(&plugin).clone();
-    let full = ctx.content_rect();
+    let full = card_area(&ctx);
     let touch = crate::tablet::touch_ui();
     let max_thumbs = if history { 60 } else { 10 };
     let thumbs: Vec<Option<TextureHandle>> = all.iter().take(max_thumbs).map(|e| p.texture(&ctx, &e.path)).collect();

@@ -200,6 +200,19 @@ fn generative_render_with_a_local_comfyui() -> Result<(), Error> {
     assert!(matches!(menu, shapecraft_plugin_host::Control::Menu { options, .. } if options.iter().any(|o| o.value == "comfy:kontext")));
     assert!(Panel::parse(&p.panel("settings", &json!({"comfy_on": true})).wait()?).is_ok());
 
+    // On this computer it's free: Generate says nothing about spending. With a paid service it says whose account
+    // pays and what it makes (so an assistant needs the person's Allow).
+    let free = Panel::parse(&p.panel("main", &json!({ "model": "comfy:kontext" })).wait()?).map_err(Error::Plugin)?;
+    assert_eq!(free.button_for("generate").map(|b| b.1.is_none()), Some(true));
+    shapecraft_plugin_host::store::KeyFile::secrets(&installed.dir).set("openai_key", Some("sk-test")).map_err(Error::Io)?;
+    let paid = Panel::parse(&p.panel("main", &json!({ "model": "openai:gpt-image-2", "count": "2", "prompt": "on a desk" })).wait()?)
+        .map_err(Error::Plugin)?;
+    let spend = paid.button_for("generate").and_then(|b| b.1).ok_or(Error::Plugin("no spend on a paid model".into()))?;
+    assert_eq!(spend.with, "OpenAI");
+    assert_eq!(spend.what, "2 pictures with GPT Image 2");
+    assert_eq!(spend.detail, "on a desk");
+    shapecraft_plugin_host::store::KeyFile::secrets(&installed.dir).set("openai_key", None).map_err(Error::Io)?;
+
     // Test Connection reports what it found (this fake has no /system_stats, so it says so plainly).
     let _ = p.run("comfy_test", &json!({ "comfy_url": format!("http://127.0.0.1:{port}") }), None).wait();
 

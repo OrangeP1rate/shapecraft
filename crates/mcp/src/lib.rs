@@ -94,6 +94,38 @@ fn tools(bridged: bool) -> Vec<Value> {
     ];
     if bridged {
         v.push(tool("screenshot", "A PNG of the whole app window as the user sees it.", json!({ "type": "object", "properties": {} })));
+        v.push(tool(
+            "plugins",
+            "The plugins added to ShapeCraft (id, name, on/off, what they may do), e.g. generative-render.",
+            json!({ "type": "object", "properties": {} }),
+        ));
+        v.push(tool(
+            "plugin_panel",
+            "A plugin's panel: its controls (menus with their choices, toggles, text) and the values set now. Pass \
+             `values` to change them first (e.g. {\"prompt\": \"…\", \"model\": \"openai:gpt-image-2\", \"count\": \"1\"}). \
+             In Generative Render, menu choices are grouped by service; `detail` is the listed price or \"free\" (a \
+             model on the person's own computer). A button with `spends` costs the person money. When several \
+             services or models are connected, ask the person which to use and how many pictures, unless they already \
+             said; never pick a paid one for them.",
+            json!({ "type": "object", "properties": {
+                "plugin": { "type": "string" },
+                "panel": { "type": "string", "description": "default \"main\"" },
+                "values": { "type": "object" } },
+                "required": ["plugin"] }),
+        ));
+        v.push(tool(
+            "plugin_run",
+            "Presses a plugin's button (its `action`, e.g. \"generate\") with the panel's values, and returns the answer \
+             and the pictures it made. Buttons that cost money (`spends` in plugin_panel) don't run until the person \
+             presses Allow in ShapeCraft; this waits up to 5 minutes for that answer, and Don't Allow (or no answer) \
+             means nothing was made or spent. Tell the person what you're about to make, with which service, before \
+             calling it.",
+            json!({ "type": "object", "properties": {
+                "plugin": { "type": "string" },
+                "action": { "type": "string" },
+                "panel": { "type": "string", "description": "default \"main\"" } },
+                "required": ["plugin", "action"] }),
+        ));
     }
     v
 }
@@ -242,6 +274,15 @@ impl Server {
                 self.render(&s("view").unwrap_or_default(), (w, h)).map(|png| image(&png))
             }
             "screenshot" => self.screenshot().map(|png| image(&png)),
+            "plugins" => self.control("plugins.list", json!({})).map(|v| text(serde_json::to_string_pretty(&v).unwrap_or_default())),
+            "plugin_panel" => match s("plugin") {
+                Some(id) => self.plugin_panel(&id, &s("panel").unwrap_or_default(), args.get("values").cloned()),
+                None => Err("'plugin' is required".into()),
+            },
+            "plugin_run" => match (s("plugin"), s("action")) {
+                (Some(id), Some(action)) => self.plugin_run(&id, &s("panel").unwrap_or_default(), &action),
+                _ => Err("'plugin' and 'action' are required".into()),
+            },
             "new_project" => self.new_project(s("name")).map(|_| text("new project")),
             "open_project" => match s("path") {
                 Some(p) => self.open_project(&p).map(|_| text(format!("opened {p}"))),
@@ -357,6 +398,69 @@ impl Server {
                 self.screenshot()
             }
         }
+    }
+
+    fn plugin_panel(&mut self, id: &str, panel: &str, values: Option<Value>) -> Result<Value, String> {
+        let mut p = json!({ "id": id, "panel": if panel.is_empty() { "main" } else { panel } });
+        if let Some(v) = values.filter(Value::is_object) {
+            p["values"] = v;
+        }
+        let out = self.control("plugins.panel", p)?;
+        Ok(text(serde_json::to_string_pretty(&out).unwrap_or_default()))
+    }
+
+    /// Runs a button. A paid one waits for the person's answer on screen (polling `plugins.approval`), then for the
+    /// pictures; a run that's still going when this gives up keeps going in the app.
+    fn plugin_run(&mut self, id: &str, panel: &str, action: &str) -> Result<Value, String> {
+        let panel = if panel.is_empty() { "main" } else { panel };
+        let first = self.control("plugins.run", json!({ "id": id, "panel": panel, "action": action, "wait": true }))?;
+        let Some(ask) = first.get("needs_approval").cloned() else { return Ok(self.run_result(&first)) };
+        let request = ask.get("request").and_then(Value::as_u64).ok_or("no request number")?;
+        let start = std::time::Instant::now();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let st = self.control("plugins.approval", json!({ "request": request }))?;
+            match st.get("state").and_then(Value::as_str).unwrap_or("") {
+                "waiting" if start.elapsed().as_secs() >= 300 => {
+                    let _ = self.control("plugins.approval", json!({ "request": request, "withdraw": true }));
+                    return Err("The person didn't answer in ShapeCraft within 5 minutes, so nothing was made or spent.".into());
+                }
+                "waiting" => {}
+                "running" => {
+                    if start.elapsed().as_secs() >= 900 {
+                        return Ok(text(format!(
+                            "Allowed and still working after 15 minutes; the pictures will appear in ShapeCraft (request {request})."
+                        )));
+                    }
+                }
+                "denied" => {
+                    return Err(st.get("reason").and_then(Value::as_str).unwrap_or("Not allowed; nothing was spent.").to_string());
+                }
+                "failed" => {
+                    return Err(st.get("error").and_then(Value::as_str).unwrap_or("it failed").to_string());
+                }
+                _ => return Ok(self.run_result(&st)),
+            }
+        }
+    }
+
+    /// The plugin's answer, the files it made, and the pictures themselves (up to 4, when small enough to send).
+    fn run_result(&self, out: &Value) -> Value {
+        let results: Vec<String> = out
+            .get("results")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        let message = out.pointer("/answer/message").and_then(Value::as_str).unwrap_or("Done.");
+        let mut content = vec![json!({ "type": "text", "text": format!("{message}\n{}", results.join("\n")) })];
+        for path in results.iter().take(4) {
+            if let Ok(png) = std::fs::read(path)
+                && png.len() <= 8 << 20
+            {
+                content.push(json!({ "type": "image", "data": b64::encode(&png), "mimeType": "image/png" }));
+            }
+        }
+        json!({ "content": content })
     }
 
     fn screenshot(&mut self) -> Result<Vec<u8>, String> {

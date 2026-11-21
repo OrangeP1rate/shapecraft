@@ -13,6 +13,8 @@ review it like code that runs on people's computers, because it does.
   say to whom.
 - **No surprises.** No analytics, tracking, ads, crypto-mining, or calls home beyond the stated service. No
   obfuscated code. No hidden actions.
+- **Paid buttons say so.** Every button that can cost the person money carries `spends` (docs/plugins.md, "Panels"),
+  updated for what's picked (service, model, how many), so an assistant can't spend without the person's Allow.
 - **Secrets stay secrets.** Keys go through `secret`/`set-secret`, never into settings, logs, results or errors.
 - **Plain, accurate text** in the manifest, panels and errors. No claims of being made by ShapeCraft or by the
   service it connects to (unless it is).

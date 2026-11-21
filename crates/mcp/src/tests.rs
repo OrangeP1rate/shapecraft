@@ -55,3 +55,64 @@ fn protocol_errors() {
     let r = tool(&mut s, "execute", json!({}));
     assert_eq!(r["isError"], true);
 }
+
+/// A stand-in for the app's control channel: answers each method from a script, and records what was asked.
+fn fake_app(answers: Vec<(&'static str, Value)>) -> (String, std::sync::mpsc::Receiver<Value>) {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut out = stream.try_clone().unwrap();
+        let mut answers = answers.into_iter();
+        for line in BufReader::new(stream).lines() {
+            let req: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            let (method, result) = answers.next().unwrap_or(("", Value::Null));
+            assert_eq!(req["method"], method, "{req}");
+            tx.send(req.clone()).unwrap();
+            writeln!(out, "{}", json!({ "id": req["id"], "result": result })).unwrap();
+        }
+    });
+    (addr, rx)
+}
+
+#[test]
+fn a_paid_plugin_run_waits_for_the_persons_allow() {
+    let (addr, asked) = fake_app(vec![
+        ("plugins.run", json!({ "needs_approval": { "request": 7, "with": "OpenAI", "what": "1 picture with GPT Image 2" } })),
+        ("plugins.approval", json!({ "state": "waiting" })),
+        ("plugins.approval", json!({ "state": "running", "progress": -1.0 })),
+        ("plugins.approval", json!({ "state": "done", "answer": { "message": "Done." }, "results": ["/nowhere/1.png"] })),
+    ]);
+    let mut s = Server::bridge(Arc::new(OcctKernel::new()), addr);
+    let r = tool(&mut s, "plugin_run", json!({ "plugin": "generative-render", "action": "generate" }));
+    assert!(r.get("isError").is_none(), "{r}");
+    assert!(r["content"][0]["text"].as_str().unwrap().contains("/nowhere/1.png"));
+    let first = asked.recv().unwrap();
+    assert_eq!(first["params"]["action"], "generate");
+    assert_eq!(asked.iter().take(3).filter(|r| r["params"]["request"] == 7).count(), 3);
+}
+
+#[test]
+fn dont_allow_means_nothing_was_made() {
+    let (addr, _asked) = fake_app(vec![
+        ("plugins.run", json!({ "needs_approval": { "request": 1 } })),
+        (
+            "plugins.approval",
+            json!({ "state": "denied", "reason": "The person chose Don't Allow in ShapeCraft. Nothing was made or spent." }),
+        ),
+    ]);
+    let mut s = Server::bridge(Arc::new(OcctKernel::new()), addr);
+    let r = tool(&mut s, "plugin_run", json!({ "plugin": "generative-render", "action": "generate" }));
+    assert_eq!(r["isError"], true);
+    assert!(r["content"][0]["text"].as_str().unwrap().contains("Don't Allow"));
+}
+
+#[test]
+fn a_free_plugin_run_answers_at_once() {
+    let (addr, _asked) = fake_app(vec![("plugins.run", json!({ "answer": { "message": "2 pictures." }, "results": [] }))]);
+    let mut s = Server::bridge(Arc::new(OcctKernel::new()), addr);
+    let r = tool(&mut s, "plugin_run", json!({ "plugin": "generative-render", "action": "generate" }));
+    assert!(r["content"][0]["text"].as_str().unwrap().starts_with("2 pictures."), "{r}");
+}

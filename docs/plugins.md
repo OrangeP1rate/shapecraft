@@ -146,7 +146,7 @@ the rest of the app, and touch, pen, keyboard and the numpad all just work. `"ma
 | `toggle` | `id`, `label`, `value` | true/false |
 | `segmented` | `id`, `label`, `options`, `value` | the picked option |
 | `menu` | `id`, `label`, `options` (`value`, `label`, `group`, `detail`), `value`, `empty` | the picked value |
-| `button` | `id`, `label`, `action`, `primary`, `capture`, `enabled` | — (runs `action`) |
+| `button` | `id`, `label`, `action`, `primary`, `capture`, `enabled`, `spends` | — (runs `action`) |
 | `note` | `text`, `tone` (dim, normal, good, warning, error) | |
 | `heading`, `separator`, `link` (`label`, `url`) | | |
 | `results` | | pictures from `add-result` |
@@ -155,6 +155,13 @@ the rest of the app, and touch, pen, keyboard and the numpad all just work. `"ma
 The app asks for the panel again whenever a value changes and after every action, so a panel can depend on its
 values (show a field only when a toggle is on). Panel calls must answer within 5 seconds: no network in `panel`.
 Fetch in an action and keep the answer in a setting.
+
+A button that costs the person money (a paid service on their account) says so with `spends`: `with` (whose
+account, "OpenAI"), `what` (what it makes, "2 pictures with GPT Image 2"), `estimate` (the service's listed price, or
+empty: never guess one) and `detail` (one more line, like the prompt being sent); `ui::spends(button, …)` in the SDK
+sets it. People pressing it themselves aren't asked again, but an assistant driving ShapeCraft (the control channel
+or MCP) can't press it until the person presses **Allow** on a card in the app. Free buttons (a model on the
+person's own computer, a link) leave it off.
 
 `"style": "sheet"` opens the panel as a card in the middle of the window. The `stage` picture comes first, then the
 first `text` box and the first `primary` button as a bar over its bottom edge, then menus on their own line and the

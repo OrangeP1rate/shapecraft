@@ -21,7 +21,7 @@ pub mod worker;
 
 pub use library::{Installed, Library, Package};
 pub use manifest::Manifest;
-pub use panel::{Control, Panel};
+pub use panel::{Control, Panel, Spend};
 pub use runtime::{Activity, Capture};
 pub use worker::{Loaded, Ticket};
 

@@ -140,6 +140,14 @@ pub mod ui {
         json!({ "kind": "button", "id": id, "label": label, "action": action })
     }
 
+    /// Marks a button as costing the person money on their own account: `with` (whose account), `what` (what it
+    /// makes), `estimate` (the provider's price when known, or ""), `detail` (one more line, like the prompt). An
+    /// assistant driving ShapeCraft can't press it without the person's Allow on screen. Free buttons leave it off.
+    pub fn spends(mut button: Value, with: &str, what: &str, estimate: &str, detail: &str) -> Value {
+        button["spends"] = json!({ "with": with, "what": what, "estimate": estimate, "detail": detail });
+        button
+    }
+
     /// The blue button; `capture` takes a picture of the view first.
     pub fn primary(id: &str, label: &str, action: &str, capture: bool) -> Value {
         json!({ "kind": "button", "id": id, "label": label, "action": action, "primary": true, "capture": capture })

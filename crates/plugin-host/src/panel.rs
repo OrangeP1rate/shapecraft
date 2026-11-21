@@ -44,6 +44,33 @@ impl Choice {
     }
 }
 
+/// What a button would spend, in words the person reads before allowing it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Spend {
+    /// Whose account pays ("OpenAI").
+    #[serde(default)]
+    pub with: String,
+    /// What it makes ("2 pictures with GPT Image 2").
+    #[serde(default)]
+    pub what: String,
+    /// The provider's price when known ("about $0.03 each"), else empty.
+    #[serde(default)]
+    pub estimate: String,
+    /// One more line, like the description being sent.
+    #[serde(default)]
+    pub detail: String,
+}
+
+impl Spend {
+    /// Caps each field so a plugin can't fill the card.
+    pub fn tidy(mut self) -> Self {
+        for (f, n) in [(&mut self.with, 60), (&mut self.what, 160), (&mut self.estimate, 80), (&mut self.detail, 300)] {
+            *f = f.chars().filter(|c| !c.is_control()).take(n).collect();
+        }
+        self
+    }
+}
+
 /// How a note reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -119,6 +146,10 @@ pub enum Control {
         capture: bool,
         #[serde(default)]
         enabled: Option<bool>,
+        /// Pressing it costs the person money (a paid service on their account). An assistant driving the app
+        /// (control channel, MCP) can't press it without the person's Allow in the app.
+        #[serde(default)]
+        spends: Option<Spend>,
     },
     Note {
         text: String,
@@ -196,6 +227,14 @@ impl Panel {
     pub fn find(&self, id: &str) -> Option<&Control> {
         self.controls.iter().find(|c| c.id() == Some(id))
     }
+
+    /// The button that runs `action`: whether it captures the view and what it spends.
+    pub fn button_for(&self, action: &str) -> Option<(bool, Option<Spend>)> {
+        self.controls.iter().find_map(|c| match c {
+            Control::Button { action: a, capture, spends, .. } if a == action => Some((*capture, spends.clone().map(Spend::tidy))),
+            _ => None,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -220,6 +259,21 @@ mod tests {
         assert_eq!(p.find("model").and_then(Control::default_value), Some(Value::from("a")));
         assert!(matches!(p.controls[4], Control::Note { tone: Tone::Warning, .. }));
         assert!(Panel::parse("nope").is_err());
+        assert_eq!(p.button_for("generate"), Some((true, None)));
+        assert_eq!(p.button_for("other"), None);
+        Ok(())
+    }
+
+    #[test]
+    fn a_paid_button_says_what_it_spends() -> Result<(), String> {
+        let p = Panel::parse(
+            r#"{"controls":[{"id":"go","kind":"button","label":"Generate","action":"generate",
+                "spends":{"with":"OpenAI","what":"2 pictures with GPT Image 2","estimate":""}}]}"#,
+        )?;
+        let (capture, spend) = p.button_for("generate").ok_or("no button")?;
+        assert!(!capture);
+        let s = spend.ok_or("no spend")?;
+        assert_eq!((s.with.as_str(), s.what.as_str()), ("OpenAI", "2 pictures with GPT Image 2"));
         Ok(())
     }
 }

@@ -113,9 +113,15 @@ fn main_panel(v: &Values) -> Panel {
     let exact = v.get("exact").and_then(Value::as_bool).unwrap_or(true);
     let mut model_menu = ui::menu("model", "Model", choices.clone(), &default_model, "Connect a service first");
     if v.str("model").is_empty() && !default_model.is_empty() {
-        model_menu["value"] = Value::from(default_model);
+        model_menu["value"] = Value::from(default_model.clone());
     }
     let mut count = ui::segmented("count", &["1", "2", "4"], "1");
+    let go = json!({ "kind": "button", "id": "generate", "label": "Generate", "action": "generate", "primary": true,
+                     "capture": true, "enabled": !choices.is_empty() });
+    let go = match spend(v, &choices, &default_model) {
+        Some((with, what, estimate)) => ui::spends(go, &with, &what, &estimate, v.str("prompt").trim()),
+        None => go,
+    };
     count["label"] = Value::from("Pictures");
     // The sheet: the picture, the prompt bar, then a row of how (mode, exact, move) and a row of who (model, how many).
     // A separator starts a new row; an empty model list makes the app offer "Connect…" instead of Generate.
@@ -123,8 +129,7 @@ fn main_panel(v: &Values) -> Panel {
         .style("sheet")
         .with(ui::stage())
         .with(ui::text_box("prompt", "Describe the scene, the light and the mood…"))
-        .with(json!({ "kind": "button", "id": "generate", "label": "Generate", "action": "generate", "primary": true,
-                      "capture": true, "enabled": !choices.is_empty() }))
+        .with(go)
         .with(ui::segmented("mode", &MODES, &mode))
         .with_if(mode == MODES[0], ui::toggle("exact", "Keep My Model Exact", true))
         .with_if(mode == MODES[0] && !exact, ui::toggle("move", "Let It Move and Resize", false))
@@ -140,6 +145,33 @@ fn main_panel(v: &Values) -> Panel {
         .with(ui::button("free-grok", "Grok", "handoff:grok"))
         .with(ui::button("free-meta", "Meta AI", "handoff:meta"))
         .with(ui::results())
+}
+
+/// What Generate would cost with the picked model: whose account, what it makes, the price when the service lists
+/// one. None for ComfyUI on the person's own computer (free).
+fn spend(v: &Values, choices: &[Value], default_model: &str) -> Option<(String, String, String)> {
+    let pick = v.str("model");
+    let pick = if !pick.is_empty() {
+        pick
+    } else if !default_model.is_empty() {
+        default_model.to_string()
+    } else {
+        choices.first()?.get("value")?.as_str()?.to_string()
+    };
+    let (service, _) = pick.split_once(':')?;
+    if service == "comfy" {
+        return None;
+    }
+    let choice = choices.iter().find(|c| c.get("value").and_then(Value::as_str) == Some(pick.as_str()));
+    let field = |k: &str| choice.and_then(|c| c.get(k)).and_then(Value::as_str).unwrap_or("").to_string();
+    let n = v.str("count").parse::<u32>().unwrap_or(1).clamp(1, 4);
+    let model = field("label");
+    let what =
+        format!("{n} {} with {}", if n == 1 { "picture" } else { "pictures" }, if model.is_empty() { "the picked model" } else { &model });
+    let with = SERVICES.iter().find(|(s, _)| *s == service).map(|(_, n)| n.to_string()).unwrap_or_else(|| service.to_string());
+    let price = field("detail");
+    let estimate = if price.starts_with('$') { format!("{price} a picture on {with}'s list") } else { String::new() };
+    Some((with, what, estimate))
 }
 
 /// The free chats people can take the view to: name and address.

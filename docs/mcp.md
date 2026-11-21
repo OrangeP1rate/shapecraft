@@ -38,6 +38,22 @@ Windows, `~/.local/bin/shapecraft-cli` after the Linux install script.
 | `inspect {body?, sketch?, faces?}` | Bodies (volume, area, bounds, planar faces with normals), sketches (entities, regions), selection, history. `body` or `sketch` narrows it to one; `faces: false` drops the face lists (a model with engraved text can have thousands). |
 | `render {view?, width?, height?}` | A PNG from a standard view, framed to fit. Bridged: the app window. |
 | `screenshot` | Bridged only: the whole window as the user sees it. |
+| `plugins` | Bridged only: the plugins added (id, name, on/off, what they may do). |
+| `plugin_panel {plugin, panel?, values?}` | Bridged only: a plugin's controls and values; `values` sets some first (Generative Render: `prompt`, `model`, `mode`, `exact`, `count`). Menu choices carry their service as `group` and the listed price or "free" as `detail`. |
+| `plugin_run {plugin, action, panel?}` | Bridged only: presses a plugin's button and returns its answer and pictures. **A button that costs money waits for the person's Allow in the app** (see below). |
+
+### Spending money needs the person
+
+Some plugin buttons use a paid service on the person's own account (Generative Render with OpenRouter, OpenAI or
+Gemini). Those buttons say so (`spends` in the panel: whose account, what it makes, the listed price when known).
+When an agent presses one, nothing runs: ShapeCraft shows the person a card, "Allow OpenAI to charge your
+account?", with what would be made and the description being sent. **Allow** runs it in the open sheet (with its
+progress and Cancel); **Don't Allow**, Esc, or no answer within 10 minutes means nothing was sent or spent.
+`plugin_run` waits up to 5 minutes for the answer. There is no way to allow it from the agent's side. Free buttons
+(ComfyUI on the same computer) run at once.
+
+Agents should still ask first: with several services and models connected, say which one, how many pictures, and
+the listed price, and let the person choose.
 | `new_project`, `open_project {path}`, `save_project {path?}`, `export {path}` | Files: projects are folders (`project.json` + a STEP file); export by extension (.step, .stl). |
 
 Resources: `shapecraft://project` (inspect) and `shapecraft://commands`.
@@ -131,6 +147,7 @@ The control channel reaches plugins too (`shapecraft --control PORT`, or MCP wit
 | `plugins.remove` | `id` | |
 | `plugins.panel` | `id`, `panel` (default `main`), `values` | sets values, returns the panel JSON |
 | `plugins.secret` | `id`, `name`, `value` (null forgets) | |
-| `plugins.run` | `id`, `panel`, `action`, `capture` (bool), `wait` (default true) | runs an action with the panel's values; returns its answer and the pictures it made |
+| `plugins.run` | `id`, `panel`, `action`, `capture` (bool, default: what the button says), `wait` (default true) | runs an action with the panel's values; returns its answer and the pictures it made. A paid button answers `{"needs_approval": {"request", "with", "what", "estimate"}}` and asks the person on screen |
+| `plugins.approval` | `request`, `withdraw` | how a paid request is going: `waiting`, `denied` (`reason`), `running` (`progress`, `message`), `done` (`answer`, `results`), `failed` (`error`); `withdraw: true` takes back one still waiting |
 | `plugins.open` | | presses Visualization's Generative Render button |
 | `plugins.browse`, `plugins.select`, `plugins.offer`, `plugins.close` | | Preferences ▸ Plugins states and the cards, for looking at them offscreen |

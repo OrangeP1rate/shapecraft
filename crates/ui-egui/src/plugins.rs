@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 use shapecraft_plugin_host::index::{self, Index};
 use shapecraft_plugin_host::panel::{Choice, Tone};
 use shapecraft_plugin_host::store::KeyFile;
-use shapecraft_plugin_host::{Capture, Control, Installed, Library, Loaded, Manifest, Package, Panel, Ticket, results};
+use shapecraft_plugin_host::{Capture, Control, Installed, Library, Loaded, Manifest, Package, Panel, Spend, Ticket, results};
 
 use crate::report::{Style, button, error_bar, link, spinner, switch, text_box};
 use crate::theme::{self, Tokens, radius};
@@ -84,6 +84,39 @@ struct Handoff {
     copied: Option<&'static str>,
 }
 
+/// An assistant (control channel, MCP) asked to press a button that costs money: it waits for the person's Allow.
+struct Approval {
+    request: u64,
+    plugin: String,
+    plugin_name: String,
+    panel: String,
+    action: String,
+    values: Value,
+    capture: Option<Capture>,
+    spend: Spend,
+    /// When it was asked for (app clock; negative until the first frame shows it).
+    asked: f64,
+    state: Asked,
+}
+
+enum Asked {
+    Waiting,
+    Denied(String),
+    /// Allowed and started at this time (ms since 1970, to pick out the pictures it made). It runs as the panel's
+    /// own press, so the sheet shows its progress, Cancel, result or error as if the person had pressed Generate.
+    Running {
+        since_ms: u64,
+    },
+    Done(Result<Value, String>, Vec<String>),
+}
+
+/// How long a request waits for the person before it lapses (nothing is spent).
+const APPROVAL_WAIT_S: f64 = 600.0;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
 /// The card that follows "Add Plugin": what's happening, then what to do next.
 enum AddCard {
     Working { name: String, icon: String, size: u64, since: f64 },
@@ -132,6 +165,9 @@ pub struct Plugins {
     file_pick: crate::dialogs::Pick,
     save_pick: Option<(PathBuf, crate::dialogs::Pick)>,
     urls: Vec<String>,
+    /// Paid presses an assistant asked for, oldest first (answered ones stay until asked about, at most 32).
+    approvals: Vec<Approval>,
+    next_request: u64,
 }
 
 fn app_version() -> &'static str {
@@ -168,6 +204,8 @@ impl Plugins {
             file_pick: Default::default(),
             save_pick: None,
             urls: Vec::new(),
+            approvals: Vec::new(),
+            next_request: 1,
         }
     }
 
@@ -327,6 +365,7 @@ impl Plugins {
             }
             busy |= st.run.is_some() || st.refresh.is_some();
         }
+        busy |= self.poll_approvals(ctx);
         if let Some(rx) = &self.browse {
             busy = true;
             if let Ok(r) = rx.try_recv() {
@@ -511,6 +550,87 @@ impl Plugins {
         st.run = Some((action.to_string(), t));
     }
 
+    /// Allowed presses: start them; finished ones: keep the answer and the pictures for the assistant.
+    fn poll_approvals(&mut self, ctx: &egui::Context) -> bool {
+        let now = ctx.input(|i| i.time);
+        let mut busy = false;
+        let mut finished = Vec::new();
+        for (i, a) in self.approvals.iter_mut().enumerate() {
+            match &a.state {
+                Asked::Waiting => {
+                    busy = true;
+                    if a.asked < 0.0 {
+                        a.asked = now;
+                        // The person may be in another window: ask the system to point at ShapeCraft.
+                        ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
+                    } else if now - a.asked > APPROVAL_WAIT_S {
+                        a.state = Asked::Denied("Nobody answered in ShapeCraft, so nothing was made or spent.".into());
+                    }
+                }
+                Asked::Running { .. } => {
+                    busy = true;
+                    let st = self.panels.get(&(a.plugin.clone(), a.panel.clone()));
+                    if st.is_none_or(|st| st.run.is_none()) {
+                        let answer = match st.and_then(|st| st.message.clone()) {
+                            Some((Tone::Error, e)) => Err(e),
+                            Some((Tone::Dim, m)) if m.starts_with("Cancelled") => Err("Cancelled in ShapeCraft.".to_string()),
+                            Some((_, m)) => Ok(json!({ "message": m })),
+                            None => Ok(Value::Null),
+                        };
+                        finished.push((i, answer));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (i, answer) in finished {
+            let (plugin, since) = match &self.approvals[i].state {
+                Asked::Running { since_ms, .. } => (self.approvals[i].plugin.clone(), *since_ms),
+                _ => continue,
+            };
+            // The panel loop files new pictures under the plugin; these are the ones made since the press.
+            if let Some(l) = self.loaded.get(&plugin) {
+                let new = l.activity.take_results();
+                let list = self.results_of(&plugin);
+                for r in new.iter().rev() {
+                    list.insert(0, r.clone());
+                }
+            }
+            let paths: Vec<String> =
+                self.results_of(&plugin).iter().filter(|e| e.time >= since).map(|e| e.path.to_string_lossy().into_owned()).collect();
+            self.approvals[i].state = Asked::Done(answer, paths);
+        }
+        busy
+    }
+
+    /// The person's answer to the oldest waiting request.
+    fn answer_approval(&mut self, allow: bool) {
+        let Some(i) = self.approvals.iter().position(|a| matches!(a.state, Asked::Waiting)) else { return };
+        if !allow {
+            self.approvals[i].state = Asked::Denied("The person chose Don't Allow in ShapeCraft. Nothing was made or spent.".into());
+            return;
+        }
+        let (plugin, panel, action, values, capture) = {
+            let a = &mut self.approvals[i];
+            (a.plugin.clone(), a.panel.clone(), a.action.clone(), a.values.clone(), a.capture.take())
+        };
+        let since_ms = now_ms();
+        let ticket = match self.ensure(&plugin) {
+            Some(l) if l.busy() => Err("The plugin is still busy with something else; ask again in a moment."),
+            Some(l) => Ok(l.run(&action, &values, capture)),
+            None => Err("The plugin isn't added or is switched off."),
+        };
+        self.approvals[i].state = match ticket {
+            Ok(t) => {
+                let st = self.state(&plugin, &panel);
+                st.message = None;
+                st.run = Some((action, t));
+                Asked::Running { since_ms }
+            }
+            Err(e) => Asked::Denied(e.into()),
+        };
+    }
+
     fn texture(&mut self, ctx: &egui::Context, path: &PathBuf) -> Option<TextureHandle> {
         if let Some(t) = self.textures.get(path) {
             return Some(t.clone());
@@ -533,6 +653,10 @@ pub(crate) fn frame(ui: &mut Ui) {
     let ctx = ui.ctx().clone();
     with(|p| {
         p.poll(&ctx);
+        // A waiting Allow card sits over everything, so Esc (Don't Allow) is its, not the sheet's under it.
+        if p.approvals.iter().any(|a| matches!(a.state, Asked::Waiting)) && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            p.answer_approval(false);
+        }
         if p.sheet.is_some() {
             sheet(p, ui);
         }
@@ -547,6 +671,9 @@ pub(crate) fn frame(ui: &mut Ui) {
         }
         if p.handoff.is_some() {
             handoff_card(p, ui);
+        }
+        if p.approvals.iter().any(|a| matches!(a.state, Asked::Waiting)) {
+            approval_card(p, ui);
         }
         for url in std::mem::take(&mut p.urls) {
             // Offscreen runs (snap, tests) set SHAPECRAFT_NO_BROWSER so nothing opens on the person's screen.
@@ -607,7 +734,14 @@ pub(crate) fn offer_generative() {
 
 /// Whether a plugin sheet or card has the keyboard (the workspace leaves keys alone then).
 pub(crate) fn takes_keys() -> bool {
-    with(|p| p.sheet.as_ref().is_some_and(|s| !s.hidden) || p.offer || p.confirm.is_some() || p.add_card.is_some() || p.handoff.is_some())
+    with(|p| {
+        p.sheet.as_ref().is_some_and(|s| !s.hidden)
+            || p.offer
+            || p.confirm.is_some()
+            || p.add_card.is_some()
+            || p.handoff.is_some()
+            || p.approvals.iter().any(|a| matches!(a.state, Asked::Waiting))
+    })
 }
 
 /// Brings back a sheet put aside for Preferences (its Connections button), once Preferences closes.
@@ -2282,6 +2416,75 @@ fn confirm_card(p: &mut Plugins, ui: &mut Ui) {
     }
 }
 
+/// "Allow <service> to charge your account?": an assistant asked to press a paid button. Never answered by a key
+/// press except Esc (Don't Allow), so a stray Return can't spend money.
+fn approval_card(p: &mut Plugins, ui: &mut Ui) {
+    let Some(a) = p.approvals.iter().find(|a| matches!(a.state, Asked::Waiting)) else { return };
+    let ctx = ui.ctx().clone();
+    let (spend, plugin_name) = (a.spend.clone(), a.plugin_name.clone());
+    let more = p.approvals.iter().filter(|a| matches!(a.state, Asked::Waiting)).count() - 1;
+    let mut answer = None;
+    let w = 460.0;
+    let pad = 28.0;
+    let tw = w - 2.0 * pad;
+    let who = if spend.with.is_empty() { "the service".to_string() } else { spend.with.clone() };
+    let body = format!(
+        "An assistant connected to ShapeCraft wants {plugin_name} to make {}. Your view and description go to {who}, which \
+         charges your account for it{}.",
+        if spend.what.is_empty() { "something".to_string() } else { spend.what.clone() },
+        if spend.estimate.is_empty() { String::new() } else { format!(" ({})", spend.estimate) },
+    );
+    let measure = |text: &str, font: egui::FontId| ctx.fonts_mut(|f| f.layout(text.to_string(), font, Color32::WHITE, tw).size().y);
+    let body_h = measure(&body, theme::body(13.0));
+    let detail_h = if spend.detail.is_empty() { 0.0 } else { measure(&spend.detail, theme::body(12.0)) + 22.0 };
+    let h = 132.0 + body_h + detail_h + if more > 0 { 22.0 } else { 0.0 };
+    dim_and_card(ui, egui::Id::NULL.with("plugin-approval"), w, h, |ui, card| {
+        let painter = ui.painter().clone();
+        let x0 = card.left() + pad;
+        let mut y = card.top() + 34.0;
+        painter.text(
+            pos2(x0, y),
+            Align2::LEFT_CENTER,
+            format!("Allow {who} to charge your account?"),
+            theme::strong(17.0),
+            Tokens::text_strong(),
+        );
+        y += 24.0;
+        let g = painter.layout(body.clone(), theme::body(13.0), Tokens::text(), tw);
+        y += {
+            let gh = g.size().y;
+            painter.galley(pos2(x0, y), g, Tokens::text());
+            gh
+        } + 12.0;
+        if !spend.detail.is_empty() {
+            let g = painter.layout(format!("“{}”", spend.detail), theme::body(12.0), Tokens::text_dim(), tw);
+            let gh = g.size().y;
+            painter.galley(pos2(x0, y), g, Tokens::text_dim());
+            y += gh + 10.0;
+        }
+        if more > 0 {
+            painter.text(
+                pos2(x0, y + 6.0),
+                Align2::LEFT_CENTER,
+                format!("{more} more waiting after this one."),
+                theme::body(11.5),
+                Tokens::text_dim(),
+            );
+        }
+        let by = card.bottom() - 34.0;
+        painter.hline(card.x_range(), by - 26.0, Stroke::new(1.0, Tokens::divider()));
+        if button(ui, card.right() - pad + 8.0, by, "Allow", Style::Primary, true).0 {
+            answer = Some(true);
+        }
+        if button(ui, card.right() - pad - 80.0, by, "Don't Allow", Style::Plain, true).0 {
+            answer = Some(false);
+        }
+    });
+    if let Some(allow) = answer {
+        p.answer_approval(allow);
+    }
+}
+
 /// Adding a plugin, start to finish: working (with what it's doing), then ready (with what to do next) or what went
 /// wrong (with Try Again).
 fn add_card(p: &mut Plugins, ui: &mut Ui) {
@@ -2479,12 +2682,54 @@ pub(crate) fn control_call(method: &str, params: &Value, capture: impl FnOnce() 
             Ok(Value::Null)
         }),
         "plugins.run" => {
-            let cap = if params.get("capture").and_then(Value::as_bool).unwrap_or(false) { capture() } else { None };
-            with(|p| {
-                let (id, panel) = (s("id"), if s("panel").is_empty() { "main".into() } else { s("panel") });
+            // The panel says whether the button looks at the view and whether it costs money. A paid press waits for
+            // the person's Allow in the app: the answer is `{"needs_approval": {"request": n, …}}`, then
+            // `plugins.approval {request}` tells how it went.
+            let (id, panel) = (s("id"), if s("panel").is_empty() { "main".to_string() } else { s("panel") });
+            let action = s("action");
+            let button = with(|p| -> Result<Option<(bool, Option<Spend>)>, String> {
                 let values = Value::Object(p.state(&id, &panel).values.clone());
                 let loaded = p.ensure(&id).ok_or("the plugin isn't added or is off")?;
-                let t = loaded.run(&s("action"), &values, cap);
+                let text = loaded.panel(&panel, &values).wait().map_err(|e| e.to_string())?;
+                Ok(Panel::parse(&text)?.button_for(&action))
+            })?;
+            let (wants_view, spend) = button.unwrap_or((false, None));
+            let wants_view = params.get("capture").and_then(Value::as_bool).unwrap_or(wants_view);
+            let cap = if wants_view { capture() } else { None };
+            if let Some(spend) = spend {
+                return with(|p| {
+                    let values = Value::Object(p.state(&id, &panel).values.clone());
+                    let plugin_name = p.installed(&id).map(|i| i.manifest.name.clone()).unwrap_or_else(|| id.clone());
+                    let request = p.next_request;
+                    p.next_request += 1;
+                    let answer = json!({ "needs_approval": {
+                        "request": request, "with": spend.with, "what": spend.what, "estimate": spend.estimate,
+                        "note": "ShapeCraft is asking the person to Allow or Don't Allow this on screen. Poll plugins.approval." } });
+                    if p.approvals.len() >= 32 {
+                        p.approvals.retain(|a| matches!(a.state, Asked::Waiting | Asked::Running { .. }));
+                    }
+                    if p.approvals.iter().filter(|a| matches!(a.state, Asked::Waiting)).count() >= 4 {
+                        return Err("Four requests are already waiting for the person's answer in ShapeCraft.".into());
+                    }
+                    p.approvals.push(Approval {
+                        request,
+                        plugin: id.clone(),
+                        plugin_name,
+                        panel: panel.clone(),
+                        action: action.clone(),
+                        values,
+                        capture: cap,
+                        spend,
+                        asked: -1.0,
+                        state: Asked::Waiting,
+                    });
+                    Ok(answer)
+                });
+            }
+            with(|p| {
+                let values = Value::Object(p.state(&id, &panel).values.clone());
+                let loaded = p.ensure(&id).ok_or("the plugin isn't added or is off")?;
+                let t = loaded.run(&action, &values, cap);
                 if params.get("wait").and_then(Value::as_bool).unwrap_or(true) {
                     let out = t.wait().map_err(|e| e.to_string())?;
                     let new = loaded.activity.take_results();
@@ -2497,11 +2742,31 @@ pub(crate) fn control_call(method: &str, params: &Value, capture: impl FnOnce() 
                     }
                     Ok(json!({ "answer": serde_json::from_str::<Value>(&out).unwrap_or(Value::Null), "results": paths }))
                 } else {
-                    p.state(&id, &panel).run = Some((s("action"), t));
+                    p.state(&id, &panel).run = Some((action.clone(), t));
                     Ok(Value::Null)
                 }
             })
         }
+        // How a paid request is going: waiting (for the person), denied, running (with progress), done (answer +
+        // pictures). `withdraw: true` takes back one still waiting.
+        "plugins.approval" => with(|p| {
+            let n = params.get("request").and_then(Value::as_u64).ok_or("'request' is required")?;
+            let withdraw = params.get("withdraw").and_then(Value::as_bool).unwrap_or(false);
+            let i = p.approvals.iter().position(|a| a.request == n).ok_or("no such request")?;
+            if withdraw && matches!(p.approvals[i].state, Asked::Waiting) {
+                p.approvals[i].state = Asked::Denied("Withdrawn before the person answered. Nothing was made or spent.".into());
+            }
+            let plugin = p.approvals[i].plugin.clone();
+            let progress = p.loaded.get(&plugin).map(|l| l.activity.progress()).unwrap_or_default();
+            let a = &p.approvals[i];
+            Ok(match &a.state {
+                Asked::Waiting => json!({ "state": "waiting" }),
+                Asked::Denied(why) => json!({ "state": "denied", "reason": why }),
+                Asked::Running { .. } => json!({ "state": "running", "progress": progress.0, "message": progress.1 }),
+                Asked::Done(Ok(answer), results) => json!({ "state": "done", "answer": answer, "results": results }),
+                Asked::Done(Err(e), results) => json!({ "state": "failed", "error": e, "results": results }),
+            })
+        }),
         "plugins.select" => with(|p| {
             p.selected = Some(s("id")).filter(|i| !i.is_empty());
             p.browsing = false;

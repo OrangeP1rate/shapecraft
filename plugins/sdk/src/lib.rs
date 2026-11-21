@@ -127,6 +127,23 @@ pub mod ui {
         json!({ "kind": "segmented", "id": id, "options": options, "value": value })
     }
 
+    /// Gives a segmented control a pictogram per option, or a toggle its pictogram (docs/plugins.md, "Pictograms"):
+    /// in a sheet they show as tiles.
+    pub fn icons(mut control: Value, icons: &[&str]) -> Value {
+        if control.get("kind").and_then(Value::as_str) == Some("toggle") {
+            control["icon"] = Value::from(icons.first().copied().unwrap_or(""));
+        } else {
+            control["icons"] = json!(icons);
+        }
+        control
+    }
+
+    /// Puts a segmented control at the top of a sheet: the switch between two ways of working.
+    pub fn in_header(mut control: Value) -> Value {
+        control["place"] = Value::from("header");
+        control
+    }
+
     /// A choice for [`menu`].
     pub fn choice(value: &str, label: &str, group: &str, detail: &str) -> Value {
         json!({ "value": value, "label": label, "group": group, "detail": detail })

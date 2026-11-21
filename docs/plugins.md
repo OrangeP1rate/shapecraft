@@ -143,14 +143,22 @@ the rest of the app, and touch, pen, keyboard and the numpad all just work. `"ma
 |---|---|---|
 | `text` | `id`, `label`, `placeholder`, `multiline` | the text |
 | `secret` | `id`, `label`, `placeholder` | — (saved by the app; read it with `secret(id)`) |
-| `toggle` | `id`, `label`, `value` | true/false |
-| `segmented` | `id`, `label`, `options`, `value` | the picked option |
+| `toggle` | `id`, `label`, `value`, `icon` | true/false |
+| `segmented` | `id`, `label`, `options`, `value`, `icons`, `place` | the picked option |
 | `menu` | `id`, `label`, `options` (`value`, `label`, `group`, `detail`), `value`, `empty` | the picked value |
 | `button` | `id`, `label`, `action`, `primary`, `capture`, `enabled`, `spends` | — (runs `action`) |
 | `note` | `text`, `tone` (dim, normal, good, warning, error) | |
 | `heading`, `separator`, `link` (`label`, `url`) | | |
 | `results` | | pictures from `add-result` |
 | `stage` | | (sheets) the view, then the newest result |
+
+**Pictograms.** In a sheet, a `segmented` with `icons` (one per option) and a `toggle` with an `icon` show as tiles: a
+small picture of what the option does over its name. The app draws them in its own colors, the highlighted part being
+what changes: `surroundings`, `whole-picture`, `keep-exact`, `move-resize`, `pictures-1`, `pictures-2`, `pictures-4`,
+`service`, `chat`, `sparkle` (other names show no picture). A `heading` in a sheet's row names the tiles after it.
+A `segmented` with `place: "header"` sits at the top of the sheet as the switch between two ways of working (the
+panel then shows only what belongs to the side picked). The SDK has `ui::icons(control, &[…])` and
+`ui::in_header(control)`.
 
 The app asks for the panel again whenever a value changes and after every action, so a panel can depend on its
 values (show a field only when a toggle is on). Panel calls must answer within 5 seconds: no network in `panel`.

@@ -26,8 +26,8 @@ and 8189 on this computer); **Find ComfyUI** fills the address in. For another m
 address (start ComfyUI there with `--listen`). Built in: **FLUX.2 klein** (the 4B model edits pictures on a laptop:
 about a minute on a MacBook Air) and **FLUX.1 Kontext [dev]**.
 
-**Free, no account set up here:** under the options, **Or free in a chat** takes your view to ChatGPT, Gemini,
-Copilot, Grok or Meta AI, which make pictures on their free plans. ShapeCraft puts the view on the clipboard and
+**Free, no account set up here:** switch the top of the sheet to **Free Chat**, pick ChatGPT, Gemini, Copilot,
+Grok or Meta AI (they make pictures on their free plans), and press **Open** (for example **Open Gemini**). ShapeCraft puts the view on the clipboard and
 opens the site; paste it, then **Copy Description** and paste the words under it. Save what it makes and **Add It
 to History** to keep it with the rest. (On iPad and phones, save the view first and attach it there.)
 
@@ -41,12 +41,14 @@ plugin.
 
 ## Make a picture
 
-Click **Generative Render**. The sheet shows your current view:
+Click **Generative Render**. The sheet shows your current view, with the prompt under it. The switch at the top
+picks **Your AI Service** (an account or ComfyUI you connected) or **Free Chat**. Every option is a tile with a
+small picture of what it does:
 
 1. Describe the scene, the light and the mood. ⌘Return (Ctrl+Enter) generates too.
-2. **Surroundings** changes only what's around your model. **Keep My Model Exact** (on by default) lays your model's
+2. **Surroundings** changes only what's around your model. **Keep It Exact** (on by default) lays your model's
    own pixels back over the result, so the AI can't change its shape. Turn it off to let the AI relight your model
-   into the scene. With ComfyUI, Keep My Model Exact goes further: only the scene around your model is repainted
+   into the scene, and **Let It Move** lets the AI also move, turn or resize it. With ComfyUI, Keep It Exact goes further: only the scene around your model is repainted
    (shadows on the ground included), so there's never a second copy of it in the picture. Your own workflow gets the
    repaint mask (white around the model) as `{{mask}}`. **Whole Picture** lets the AI restyle everything, model
    included.

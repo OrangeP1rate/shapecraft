@@ -123,28 +123,55 @@ fn main_panel(v: &Values) -> Panel {
         None => go,
     };
     count["label"] = Value::from("Pictures");
-    // The sheet: the picture, the prompt bar, then a row of how (mode, exact, move) and a row of who (model, how many).
-    // A separator starts a new row; an empty model list makes the app offer "Connect…" instead of Generate.
-    Panel::new("Generative Render")
+    let count = ui::icons(count, &["pictures-1", "pictures-2", "pictures-4"]);
+    let free = v.str("source") == SOURCES[1];
+    // The sheet: the switch between the person's own AI and a free chat at the top, the picture, the prompt bar,
+    // then a row of how (what changes, the model kept exact or free to move) and a row of who: the model and how
+    // many, or which free chat. A separator starts a new row; an empty model list makes the app offer "Connect…".
+    let p = Panel::new("Generative Render")
         .style("sheet")
+        .with(ui::in_header(ui::icons(ui::segmented("source", &SOURCES, SOURCES[0]), &["service", "chat"])))
         .with(ui::stage())
-        .with(ui::text_box("prompt", "Describe the scene, the light and the mood…"))
-        .with(go)
-        .with(ui::segmented("mode", &MODES, &mode))
-        .with_if(mode == MODES[0], ui::toggle("exact", "Keep My Model Exact", true))
-        .with_if(mode == MODES[0] && !exact, ui::toggle("move", "Let It Move and Resize", false))
-        .with(ui::separator())
-        .with(model_menu)
-        .with(count)
-        // No account at all: take the view to a free chat that makes pictures (the app copies it and opens the site).
-        .with(ui::separator())
-        .with(ui::heading("Or free in a chat"))
-        .with(ui::button("free-chatgpt", "ChatGPT", "handoff:chatgpt"))
-        .with(ui::button("free-gemini", "Gemini", "handoff:gemini"))
-        .with(ui::button("free-copilot", "Copilot", "handoff:copilot"))
-        .with(ui::button("free-grok", "Grok", "handoff:grok"))
-        .with(ui::button("free-meta", "Meta AI", "handoff:meta"))
-        .with(ui::results())
+        .with(ui::text_box("prompt", "Describe the scene, the light and the mood…"));
+    let p = if free {
+        let chat = chat_of(v);
+        let (_, name, _) = CHATS.iter().find(|(id, ..)| *id == chat).copied().unwrap_or(CHATS[0]);
+        p.with(json!({ "kind": "button", "id": "open-chat", "label": format!("Open {name}"), "action": format!("handoff:{chat}"),
+                        "primary": true }))
+    } else {
+        p.with(go)
+    };
+    let p = p
+        .with(ui::heading("What Changes"))
+        .with(ui::icons(ui::segmented("mode", &MODES, &mode), &["surroundings", "whole-picture"]))
+        .with_if(mode == MODES[0], ui::heading("Your Model"))
+        .with_if(mode == MODES[0], ui::icons(ui::toggle("exact", "Keep It Exact", true), &["keep-exact"]))
+        .with_if(mode == MODES[0] && !exact, ui::icons(ui::toggle("move", "Let It Move", false), &["move-resize"]))
+        .with(ui::separator());
+    if free {
+        // No account at all: the app copies the view and opens the chat; the words follow on a card.
+        let names: Vec<&str> = CHATS.iter().map(|(_, n, _)| *n).collect();
+        let chat = CHATS.iter().find(|(id, ..)| *id == chat_of(v)).map_or(CHATS[0].1, |c| c.1);
+        let mut pick = ui::icons(ui::segmented("chat", &names, chat), &["chat"; 5]);
+        pick["label"] = Value::from("Chat");
+        p.with(pick)
+            .with(ui::note(
+                "Free, with that site's own limits. Your view goes on the clipboard and the site opens; paste the picture, then the words.",
+                "dim",
+            ))
+            .with(ui::results())
+    } else {
+        p.with(model_menu).with(count).with(ui::results())
+    }
+}
+
+/// The two ways of working: the person's own AI service (or ComfyUI), or a free chat site.
+pub const SOURCES: [&str; 2] = ["Your AI Service", "Free Chat"];
+
+/// The free chat picked (its id), from its name in the "chat" tiles.
+fn chat_of(v: &Values) -> &'static str {
+    let name = v.str("chat");
+    CHATS.iter().find(|(_, n, _)| *n == name).map_or(CHATS[0].0, |c| c.0)
 }
 
 /// What Generate would cost with the picked model: whose account, what it makes, the price when the service lists

@@ -111,6 +111,9 @@ pub enum Control {
         label: String,
         #[serde(default)]
         value: bool,
+        /// A pictogram the app draws (see [`ICONS`]); a sheet shows the toggle as a tile with it.
+        #[serde(default)]
+        icon: String,
     },
     /// A row of segments, one picked.
     Segmented {
@@ -120,6 +123,12 @@ pub enum Control {
         options: Vec<String>,
         #[serde(default)]
         value: String,
+        /// One pictogram per option (see [`ICONS`]); a sheet shows the options as tiles with them.
+        #[serde(default)]
+        icons: Vec<String>,
+        /// "header": a sheet shows it at the top, as the switch between two ways of working.
+        #[serde(default)]
+        place: String,
     },
     /// A pop-up menu of choices, grouped.
     Menu {
@@ -171,6 +180,21 @@ pub enum Control {
     /// A thin line between sections.
     Separator {},
 }
+
+/// The pictograms the app draws for `icon` / `icons` (anything else shows no pictogram). Drawn in code, in the
+/// app's colors: the highlighted part is what the option changes.
+pub const ICONS: [&str; 10] = [
+    "surroundings",  // a new scene around an untouched model
+    "whole-picture", // everything restyled, the model too
+    "keep-exact",    // the model pinned in place, pixel for pixel
+    "move-resize",   // the model may move and change size
+    "pictures-1",
+    "pictures-2",
+    "pictures-4",
+    "service", // an AI service on your own account or computer
+    "chat",    // a chat on a website
+    "sparkle",
+];
 
 /// The most controls a panel may have (anything past this is dropped).
 pub const MAX_CONTROLS: usize = 60;

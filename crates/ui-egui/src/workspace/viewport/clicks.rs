@@ -521,6 +521,22 @@ impl Workspace {
 
     fn click_at(&mut self, c: Pos2, shift: bool) {
         self.items_focus = false;
+        // A fillet's Edge ▸ Edit...: a click on an edge of its body picks it or lets it go; nothing else is picked.
+        if let Some(ed) = self.edge_edit.as_ref() {
+            let body = ed.body;
+            if let Some((Pick::Edge { body: b, edge }, _)) = self.pick_at(c)
+                && b == body
+                && let Some(ed) = self.edge_edit.as_mut()
+            {
+                if let Some(k) = ed.edges.iter().position(|e| *e == edge) {
+                    ed.edges.remove(k);
+                } else {
+                    ed.edges.push(edge);
+                }
+                self.session.selection = ed.edges.iter().map(|&edge| Pick::Edge { body, edge }).collect();
+            }
+            return;
+        }
         // A cut step's Subtract From ▸ Edit...: a click on a body picks it or lets it go.
         if self.cut_edit.is_some() {
             let hit = self.pick_at(c).and_then(|(p, _)| p.body());

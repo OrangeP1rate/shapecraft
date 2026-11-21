@@ -6,7 +6,7 @@
 use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use shapecraft_doc::format_length;
-use shapecraft_engine::history::{self, FieldKind};
+use shapecraft_engine::history::{self, BREAKPOINT, FieldKind};
 
 use super::Workspace;
 use super::tools::{ExtrudeTool, FilletTool, ThreadTool, Tool};
@@ -464,6 +464,9 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
     if ws.cut_edit.as_ref().is_some_and(|(s, _)| Some(*s) != ws.history.open || !matches!(ws.tool, Tool::Idle)) {
         ws.cut_edit = None;
     }
+    if ws.edge_edit.as_ref().is_some_and(|e| Some(e.step) != ws.history.open || !matches!(ws.tool, Tool::Idle)) {
+        edge_end(ws, false);
+    }
     // Show on Tool Start: a card tool that has just started opens its card once.
     // (A tool a pick started counts: the reference lights it as running, s29-010.)
     let tool_name = match &ws.tool {
@@ -531,6 +534,7 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
     let mut open_popup: Option<(&'static str, egui::Pos2)> = None;
     let mut profile_click: Option<usize> = None;
     let mut cut_click: Option<usize> = None;
+    let mut edge_click: Option<usize> = None;
     let mut cut_clear: Option<usize> = None;
     egui::Area::new(ui.scope_id().with("step-card")).fixed_pos(card.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         let (rect, _) = ui.allocate_exact_size(card.size(), Sense::click());
@@ -584,10 +588,13 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                         (Source::Step(i), "Subtract From") => Some(*i),
                         _ => None,
                     };
-                    let editing = match cut_step {
-                        Some(i) => ws.cut_edit.as_ref().is_some_and(|(s, _)| *s == i),
-                        None => matches!((&source, ws.profile_edit.as_ref()), (Source::Step(i), Some((s, ..))) if s == i),
-                    };
+                    let edge_editing =
+                        *label == "Edge" && matches!((&source, ws.edge_edit.as_ref()), (Source::Step(i), Some(e)) if e.step == *i);
+                    let editing = edge_editing
+                        || match cut_step {
+                            Some(i) => ws.cut_edit.as_ref().is_some_and(|(s, _)| *s == i),
+                            None => matches!((&source, ws.profile_edit.as_ref()), (Source::Step(i), Some((s, ..))) if s == i),
+                        };
                     let link = Rect::from_min_max(pos2(rx - 50.0, y + 8.0), pos2(rx, y + 28.0));
                     // Split Body's rows are only their chips (s29-027).
                     let editable = !matches!(source, Source::Split { .. });
@@ -609,6 +616,7 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                             (Source::Step(_), "Faces to Thread") => {
                                 pick_hint = Some("Pick the faces again: undo the thread and thread them anew")
                             }
+                            (Source::Step(i), "Edge") => edge_click = Some(*i),
                             (Source::Step(_), _) => pick_hint = Some("Pick the edges again: open the step's body and fillet them anew"),
                             (Source::Split { .. }, _) => {
                                 pick_hint = Some("Click bodies, faces, planes or sketches in the view to change them")
@@ -617,6 +625,7 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                         }
                     }
                     let count = match (cut_step, editing) {
+                        _ if edge_editing => ws.edge_edit.as_ref().map_or(*count, |e| e.edges.len()),
                         (Some(_), true) => ws.cut_edit.as_ref().map_or(*count, |(_, l)| l.len()),
                         (Some(i), false) => cut_list(ws, i).map_or(*count, |l| l.len()),
                         (None, true) => ws.profile_edit.as_ref().map_or(*count, |(_, _, r)| r.len()),
@@ -863,6 +872,13 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
             cut_begin(ws, i, false);
         }
     }
+    if let Some(i) = edge_click {
+        if ws.edge_edit.as_ref().is_some_and(|e| e.step == i) {
+            edge_end(ws, true);
+        } else {
+            edge_begin(ws, i);
+        }
+    }
     if let Some(i) = cut_clear {
         cut_begin(ws, i, true);
     }
@@ -1073,6 +1089,69 @@ fn cut_done(ws: &mut Workspace, step: usize) {
     let _ = ws.run("edit_step", json!({ "step": step, "params": { "from": ids } }));
 }
 
+/// A fillet's or chamfer's Edge ▸ Edit... (#89): the model rolls back to just before the step, showing the body as
+/// the step found it, with the step's edges picked. A click on an edge of that body adds it or lets it go, and Done
+/// rebuilds the step with them; Escape (or closing the card) puts everything back as it was.
+#[derive(Clone, Debug)]
+pub(crate) struct EdgeEdit {
+    /// The step's place in the list while rolled back (the open card's).
+    pub(crate) step: usize,
+    /// Its place before, and the undo depth the rollback left (so it's taken back exactly).
+    orig: usize,
+    depth: usize,
+    /// Where a breakpoint was before (counting steps without it), to put it back if the rollback can't be undone.
+    held: Option<usize>,
+    pub(crate) body: shapecraft_doc::ItemId,
+    pub(crate) edges: Vec<u32>,
+}
+
+pub(super) fn edge_begin(ws: &mut Workspace, step: usize) {
+    let all = ws.session.all_steps();
+    let Some(e) = all.get(step).and_then(|h| h.entries.first()) else { return };
+    let Some(body) = e.params.get("body").and_then(Value::as_u64).map(shapecraft_doc::ItemId) else {
+        ws.toast("This step rounds a whole body: pick its edges again by filleting anew");
+        return;
+    };
+    let edges: Vec<u32> = e
+        .params
+        .get("edges")
+        .and_then(Value::as_array)
+        .map(|l| l.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+        .unwrap_or_default();
+    let held = all.iter().position(|h| h.kind == BREAKPOINT);
+    let plain = step - usize::from(held.is_some_and(|b| b < step));
+    if ws.run("set_breakpoint", json!({ "before": plain })).is_none() {
+        return;
+    }
+    let rolled = plain + 1;
+    ws.history.open = Some(rolled);
+    ws.history.editing = None;
+    ws.profile_edit = None;
+    ws.cut_edit = None;
+    ws.session.selection = edges.iter().map(|&edge| shapecraft_doc::Pick::Edge { body, edge }).collect();
+    ws.edge_edit = Some(EdgeEdit { step: rolled, orig: step, depth: ws.session.undo_depth(), held, body, edges });
+    ws.toast("Click edges to add or remove them, then Done");
+}
+
+/// Ends picking a step's edges: with `apply`, the step is rebuilt with the picked ones (none picked keeps picking).
+pub(super) fn edge_end(ws: &mut Workspace, apply: bool) {
+    let Some(ed) = ws.edge_edit.take() else { return };
+    if apply && ed.edges.is_empty() {
+        ws.edge_edit = Some(ed);
+        ws.toast("Pick at least one edge");
+        return;
+    }
+    // Back to the model as it was: the rollback taken back exactly, or the breakpoint put back where it was.
+    if !(ws.session.undo_depth() == ed.depth && ws.session.drop_last_step()) {
+        let _ = ws.run("set_breakpoint", ed.held.map_or(json!({}), |b| json!({ "before": b })));
+    }
+    ws.session.selection.clear();
+    ws.history.open = Some(ed.orig);
+    if apply {
+        let _ = ws.run("edit_step", json!({ "step": ed.orig, "params": { "body": ed.body.0, "edges": ed.edges } }));
+    }
+}
+
 fn profile_edit(ws: &mut Workspace, step: usize) {
     if let Some((s, sketch, regions)) = ws.profile_edit.take() {
         if s == step && !regions.is_empty() {
@@ -1100,6 +1179,45 @@ mod cut_tests {
     use super::*;
     use shapecraft_doc::ItemId;
     use std::sync::Arc;
+
+    /// #89: a fillet's Edge ▸ Edit... rolls the model back to before the fillet with its edge picked; another edge
+    /// added and Done rebuild the fillet on both, as one step that a single undo takes back. Escape changes nothing.
+    #[test]
+    fn a_fillets_edges_are_picked_again() {
+        let mut s = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "Fillet edges");
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("rectangle", &json!({"corner": [0, 0], "opposite": [20, 20]})).unwrap();
+        s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 20, "result": "new"})).unwrap();
+        let body = s.doc.bodies[0].id;
+        s.execute("fillet", &json!({"body": body.0, "edges": [0], "radius": 2})).unwrap();
+        let step = s.all_steps().len() - 1;
+        let mut ws = Workspace::new(s, crate::settings::Settings::default());
+        let faces = |ws: &Workspace| ws.session.doc.bodies[0].mesh.triangle_faces.iter().max().map_or(0, |m| m + 1);
+        let filleted = faces(&ws);
+        ws.open_history_step(step);
+        let depth = ws.session.undo_depth();
+
+        // Escape: nothing changes.
+        edge_begin(&mut ws, step);
+        assert!(ws.edge_edit.is_some());
+        assert!(faces(&ws) < filleted, "rolled back to the plain box: {} faces", faces(&ws));
+        assert_eq!(ws.session.selection, vec![shapecraft_doc::Pick::Edge { body, edge: 0 }]);
+        ws.escape();
+        assert!(ws.edge_edit.is_none() && faces(&ws) == filleted && ws.session.undo_depth() == depth);
+        assert_eq!(ws.history.open, Some(step));
+
+        // Another edge, then Done.
+        edge_begin(&mut ws, step);
+        ws.edge_edit.as_mut().unwrap().edges.push(5);
+        edge_end(&mut ws, true);
+        assert!(ws.edge_edit.is_none() && !ws.session.at_breakpoint());
+        let edges = ws.session.all_steps()[step].entries[0].params["edges"].clone();
+        assert_eq!(edges, json!([0, 5]));
+        assert!(faces(&ws) > filleted, "two edges rounded: {} faces", faces(&ws));
+        assert_eq!(ws.session.undo_depth(), depth + 1, "one step");
+        let _ = ws.run("undo", json!({}));
+        assert_eq!(faces(&ws), filleted);
+    }
 
     /// A cut step's Subtract From lists the bodies it cut; × starts over from none, Done refuses an empty list and
     /// otherwise names the picked bodies in the step; Escape ends the picking, then closes the card.

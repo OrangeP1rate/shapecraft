@@ -260,6 +260,8 @@ pub struct Workspace {
     pub profile_edit: Option<(usize, ItemId, Vec<u32>)>,
     /// A cut step's Subtract From ▸ Edit...: the step and the bodies picked so far (clicks toggle them).
     pub cut_edit: Option<(usize, Vec<ItemId>)>,
+    /// A fillet's or chamfer's Edge ▸ Edit...: the edges being picked again with the model rolled back (#89).
+    pub(crate) edge_edit: Option<step_card::EdgeEdit>,
     /// The bodies the open step's cut works on, found for a revision (the card asks every frame).
     pub(crate) cut_found: std::cell::RefCell<Option<(u64, usize, Vec<ItemId>)>>,
     /// "Select Through This Point…": where its list opened and what's under the point; the entry hovered.
@@ -702,6 +704,7 @@ impl Workspace {
             xray_opacity: 0.28,
             profile_edit: None,
             cut_edit: None,
+            edge_edit: None,
             cut_found: Default::default(),
             through: None,
             menu_hover: None,

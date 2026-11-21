@@ -430,6 +430,10 @@ impl Workspace {
             self.session.selection.clear();
             return;
         }
+        if self.edge_edit.is_some() {
+            super::step_card::edge_end(self, false);
+            return;
+        }
         if self.profile_edit.take().is_some() {
             return;
         }

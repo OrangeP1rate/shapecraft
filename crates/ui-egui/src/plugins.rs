@@ -1311,8 +1311,29 @@ fn menu(ui: &mut Ui, id: &str, options: &[Choice], cur: &str, empty: &str, w: f3
 
 // ——— The sheet (Generative Render) ———
 
+/// A card in the middle of the window that the person can drag by its top strip, like the sheet; where it was left
+/// is remembered while the app runs (kept on screen).
 fn dim_and_card(ui: &mut Ui, id: egui::Id, w: f32, h: f32, f: impl FnOnce(&mut Ui, Rect)) {
-    dim_and_card_at(ui, id, w, h, egui::Vec2::ZERO, f);
+    let key = id.with("offset");
+    let offset = ui.ctx().data(|d| d.get_temp::<egui::Vec2>(key)).unwrap_or_default();
+    let mut dragged = egui::Vec2::ZERO;
+    dim_and_card_at(ui, id, w, h, offset, |ui, card| {
+        // Registered first, so the card's own buttons (drawn after) stay on top of it.
+        let grip = Rect::from_min_max(card.min, pos2(card.right(), card.top() + 56.0));
+        let drag = ui.interact(grip, id.with("grip"), Sense::drag());
+        if drag.hovered() || drag.dragged() {
+            ui.ctx().set_cursor_icon(if drag.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+        }
+        dragged = drag.drag_delta();
+        f(ui, card);
+    });
+    if dragged != egui::Vec2::ZERO {
+        // Kept within what dim_and_card_at allows, so a long drag past the edge doesn't pile up.
+        let full = ui.ctx().content_rect();
+        let size = vec2(w.min(full.width() - 24.0), h.min(full.height() - 24.0));
+        let room = ((full.size() - size) / 2.0 - vec2(4.0, 4.0)).max(egui::Vec2::ZERO);
+        ui.ctx().data_mut(|d| d.insert_temp(key, (offset + dragged).clamp(-room, room)));
+    }
 }
 
 /// A card moved by `offset` from the middle (kept on screen).

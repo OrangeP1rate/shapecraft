@@ -19,7 +19,7 @@ In **Preferences ▸ Plugins**, open **Generative Render**:
 | **OpenRouter** | **Sign In with OpenRouter**: your browser opens, you approve, done. One account, many image models (Google's Gemini image models, OpenAI's GPT Image, FLUX, Seedream…) | Pay per picture, from your OpenRouter credit. Prices are on OpenRouter's site and shown next to each model |
 | **OpenAI** | Paste an API key from platform.openai.com | Pay per picture on your OpenAI account |
 | **Google Gemini** | Paste an API key from aistudio.google.com | Pay per picture. Gemini's image models need billing turned on (no free tier) |
-| **ComfyUI** (your computer or your network) | Turn on **Use ComfyUI**, set its address (default `http://127.0.0.1:8188`), **Test Connection** | Free, private, works offline. Needs a GPU and FLUX.1 Kontext [dev] installed in ComfyUI, or your own workflow |
+| **ComfyUI** (your computer or your network) | Turn on **Use ComfyUI**; it's found by itself (or type its address), **Test Connection** | Free, private, works offline. Needs FLUX.2 klein or FLUX.1 Kontext [dev] installed in ComfyUI, or your own workflow |
 
 **ComfyUI** is found by itself when its address is left empty (it looks at ports 8188, 8000 for ComfyUI Desktop,
 and 8189 on this computer); **Find ComfyUI** fills the address in. For another machine on your network, type its

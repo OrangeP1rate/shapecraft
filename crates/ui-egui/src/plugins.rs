@@ -1502,10 +1502,16 @@ fn sheet(p: &mut Plugins, ui: &mut Ui) {
     let go = controls.iter().find(|c| matches!(c, Control::Button { primary: true, .. })).cloned();
     let top = controls.iter().find(|c| matches!(c, Control::Segmented { place, .. } if place == "header")).cloned();
     let mut rows: Vec<Vec<Control>> = vec![Vec::new()];
+    let mut notes: Vec<(String, Tone)> = Vec::new();
     for c in &controls {
         match c {
             Control::Separator {} => rows.push(Vec::new()),
-            Control::Stage {} | Control::Results {} | Control::Note { .. } | Control::Link { .. } => {}
+            // A note straight after a row's heading is what that zone says (nothing to pick there now).
+            Control::Note { text, tone } => match rows.last_mut() {
+                Some(r) if matches!(r.last(), Some(Control::Heading { .. })) => r.push(c.clone()),
+                _ => notes.push((text.clone(), *tone)),
+            },
+            Control::Stage {} | Control::Results {} | Control::Link { .. } => {}
             Control::Text { .. } if prompt.as_ref() == Some(c) => {}
             Control::Button { .. } if go.as_ref() == Some(c) => {}
             Control::Segmented { .. } if top.as_ref() == Some(c) => {}
@@ -1518,8 +1524,6 @@ fn sheet(p: &mut Plugins, ui: &mut Ui) {
     }
     rows.retain(|r| r.iter().any(|c| !matches!(c, Control::Heading { .. })));
     let connected = !matches!(&go, Some(Control::Button { enabled: Some(false), .. }));
-    let notes: Vec<(String, Tone)> =
-        controls.iter().filter_map(|c| if let Control::Note { text, tone } = c { Some((text.clone(), *tone)) } else { None }).collect();
     let prompt_text = match &prompt {
         Some(Control::Text { id, placeholder, .. }) => {
             (values.get(id).and_then(Value::as_str).unwrap_or("").to_string(), placeholder.clone())
@@ -1688,7 +1692,7 @@ fn sheet(p: &mut Plugins, ui: &mut Ui) {
                 );
                 y = bar.bottom() + gap;
                 // How and who: tiles with a picture of what each does.
-                draw_options(ui, &placed, pos2(bx0, y), &values, touch, &mut acts);
+                draw_options(ui, &placed, pos2(bx0, y), &values, &mut acts);
                 y += options_h;
                 if notes_h > 0.0 {
                     y += 6.0;
@@ -2098,10 +2102,12 @@ fn header_switch(ui: &Ui, r: Rect, c: &Control, values: &Map<String, Value>, act
     }
 }
 
-/// Where one of a sheet's options goes, or a caption over the tiles after it.
+/// Where one of a sheet's options goes: a zone (one question, its own shaded panel with a caption), an option in
+/// it, or a zone's words.
 enum Placed {
-    Caption(egui::Pos2, String),
+    Zone(Rect, String),
     Item(Rect, Control),
+    Text(Rect, String),
 }
 
 fn tile_h(touch: bool) -> f32 {
@@ -2121,20 +2127,25 @@ fn tile_w(p: &egui::Painter, label: &str, icon: &str) -> f32 {
     (lw + 24.0).max(pict_size(icon).x + 28.0).max(if pict_size(icon).x < 50.0 { 58.0 } else { 104.0 })
 }
 
-/// The natural width of one option on a sheet row.
+/// How many tiles a control shows (0 for anything else).
+fn tile_count(c: &Control) -> usize {
+    match c {
+        Control::Segmented { options, .. } if tiled(c) => options.len(),
+        Control::Toggle { .. } if tiled(c) => 1,
+        _ => 0,
+    }
+}
+
+/// The natural width of something that isn't a tile.
 fn item_w(p: &egui::Painter, c: &Control, touch: bool) -> f32 {
     match c {
-        Control::Segmented { options, icons, .. } if tiled(c) => {
-            options.iter().zip(icons).map(|(o, i)| tile_w(p, o, i)).sum::<f32>() + 8.0 * (options.len().max(1) - 1) as f32
-        }
-        Control::Toggle { label, icon, .. } if tiled(c) => tile_w(p, label, icon),
         Control::Segmented { options, .. } => options.iter().map(|o| g_w(p, o).max(40.0) - 4.0).sum(),
         Control::Toggle { label, .. } => p.layout_no_wrap(label.clone(), theme::body(12.5), Color32::WHITE).size().x + 54.0,
         Control::Menu { .. } => {
             if touch {
-                330.0
+                260.0
             } else {
-                300.0
+                220.0
             }
         }
         Control::Button { label, .. } => p.layout_no_wrap(label.clone(), theme::body(12.0), Color32::WHITE).size().x + 20.0,
@@ -2142,83 +2153,165 @@ fn item_w(p: &egui::Painter, c: &Control, touch: bool) -> f32 {
     }
 }
 
-/// Lays the rows out in `width`: each option at its natural size, wrapping to a new line when it doesn't fit, with
-/// captions (a row's headings, or a segmented's or menu's own label) over the tiles they name.
+/// One question in the sheet: its caption and what answers it.
+struct ZoneSpec {
+    caption: String,
+    items: Vec<Control>,
+    text: Option<String>,
+}
+
+impl ZoneSpec {
+    fn min_w(&self, p: &egui::Painter, touch: bool) -> f32 {
+        let tiles: f32 = self
+            .items
+            .iter()
+            .map(|c| match c {
+                Control::Segmented { options, icons, .. } if tiled(c) => {
+                    options.iter().zip(icons).map(|(o, i)| tile_w(p, o, i) + 8.0).sum()
+                }
+                Control::Toggle { label, icon, .. } if tiled(c) => tile_w(p, label, icon) + 8.0,
+                other => item_w(p, other, touch) + 8.0,
+            })
+            .sum();
+        tiles.max(if self.text.is_some() { 180.0 } else { 0.0 }) + 2.0 * ZONE_PAD
+    }
+}
+
+const ZONE_PAD: f32 = 12.0;
+const ZONE_GAP: f32 = 10.0;
+
+/// A row's zones: a heading starts one, and so does a segmented or menu with its own label.
+fn zones_of(row: &[Control]) -> Vec<ZoneSpec> {
+    let mut zones: Vec<ZoneSpec> = Vec::new();
+    let mut pending: Option<String> = None;
+    for c in row {
+        match c {
+            Control::Heading { text } => {
+                pending = Some(text.clone());
+                zones.push(ZoneSpec { caption: text.clone(), items: Vec::new(), text: None });
+            }
+            Control::Note { text, .. } => {
+                if let Some(z) = zones.last_mut() {
+                    z.text = Some(text.clone());
+                }
+            }
+            other => {
+                let own = match other {
+                    Control::Segmented { label, .. } | Control::Menu { label, .. } if !label.is_empty() => Some(label.clone()),
+                    _ => None,
+                };
+                let starts = pending.take().is_none() && (own.is_some() || zones.is_empty());
+                if starts {
+                    zones.push(ZoneSpec { caption: own.unwrap_or_default(), items: Vec::new(), text: None });
+                }
+                if let Some(z) = zones.last_mut() {
+                    z.items.push(other.clone());
+                }
+            }
+        }
+    }
+    zones.retain(|z| !z.items.is_empty() || z.text.is_some());
+    zones
+}
+
+/// Lays the rows out in `width` as zones: each question on its own shaded panel, the zones of a row sharing it evenly
+/// (stacked when they don't fit side by side), every zone in a row the same height, its answers centred in it.
 fn lay_out(p: &egui::Painter, rows: &[Vec<Control>], width: f32, touch: bool) -> (Vec<Placed>, f32) {
-    let cap_h = 20.0;
+    let cap_h = 22.0;
     let row_h = if touch { 36.0 } else { 30.0 };
     let mut placed = Vec::new();
     let mut y = 0.0;
-    for (ri, row) in rows.iter().enumerate() {
-        if ri > 0 {
-            y += 12.0;
+    // Side by side only when every row's zones fit (so the zones line up as a grid from row to row).
+    let all: Vec<Vec<ZoneSpec>> = rows.iter().map(|r| zones_of(r)).filter(|z| !z.is_empty()).collect();
+    let side = all.iter().all(|zs| {
+        let n = zs.len() as f32;
+        let share = (width - ZONE_GAP * (n - 1.0)) / n;
+        zs.iter().all(|z| z.min_w(p, touch) <= share)
+    });
+    let lines: Vec<Vec<&ZoneSpec>> =
+        if side { all.iter().map(|zs| zs.iter().collect()).collect() } else { all.iter().flatten().map(|z| vec![z]).collect() };
+    for (li, line) in lines.iter().enumerate() {
+        if li > 0 {
+            y += ZONE_GAP;
         }
-        // One line at a time: gather (caption, control, width), then place them.
-        let mut line: Vec<(Option<String>, Control, f32)> = Vec::new();
-        let mut x = 0.0;
-        let mut pending: Option<String> = None;
-        let flush = |line: &mut Vec<(Option<String>, Control, f32)>, y: &mut f32, placed: &mut Vec<Placed>| {
-            if line.is_empty() {
-                return;
-            }
-            let has_cap = line.iter().any(|(c, ..)| c.is_some());
-            let band = line.iter().map(|(_, c, _)| if tiled(c) { tile_h(touch) } else { row_h }).fold(0.0, f32::max);
-            let top = *y + if has_cap { cap_h } else { 0.0 };
-            let mut x = 0.0;
-            for (k, (cap, c, w)) in line.drain(..).enumerate() {
-                if k > 0 {
-                    x += if cap.is_some() { 26.0 } else { 8.0 };
-                }
-                if let Some(cap) = cap {
-                    placed.push(Placed::Caption(pos2(x, *y + 7.0), cap));
-                }
-                // Tiles fill the band; anything else sits just under its caption.
-                let (iy, ih) = if tiled(&c) { (top + (band - tile_h(touch)) / 2.0, tile_h(touch)) } else { (top + 2.0, row_h) };
-                placed.push(Placed::Item(Rect::from_min_size(pos2(x, iy), vec2(w, ih)), c));
-                x += w;
-            }
-            *y = top + band;
-        };
-        for c in row {
-            if let Control::Heading { text } = c {
-                pending = Some(text.clone());
-                continue;
-            }
-            let own = match c {
-                Control::Segmented { label, .. } | Control::Menu { label, .. } if !label.is_empty() => Some(label.clone()),
-                _ => None,
-            };
-            let cap = pending.take().or(own);
-            let fresh = cap.is_some();
-            let natural = item_w(p, c, touch);
-            let w = natural.min(width);
-            let gap = if line.is_empty() {
-                0.0
-            } else if fresh {
-                26.0
+        let n = line.len() as f32;
+        let zw = (width - ZONE_GAP * (n - 1.0)) / n;
+        let inner = zw - 2.0 * ZONE_PAD;
+        let content_h = |z: &ZoneSpec| -> f32 {
+            if z.items.iter().any(tiled) {
+                tile_h(touch)
+            } else if let Some(t) = &z.text {
+                p.layout(t.clone(), theme::body(12.0), Color32::WHITE, inner).size().y.max(row_h)
             } else {
-                8.0
-            };
-            if !line.is_empty() && x + gap + w > width {
-                flush(&mut line, &mut y, &mut placed);
-                y += 10.0;
-                x = 0.0;
+                row_h
             }
-            x += if line.is_empty() { 0.0 } else { gap } + w;
-            line.push((cap, c.clone(), w));
+        };
+        let band = line.iter().map(|z| content_h(z)).fold(0.0, f32::max);
+        let zh = ZONE_PAD * 0.75 + cap_h + band + ZONE_PAD;
+        for (k, z) in line.iter().enumerate() {
+            let zr = Rect::from_min_size(pos2(k as f32 * (zw + ZONE_GAP), y), vec2(zw, zh));
+            placed.push(Placed::Zone(zr, z.caption.clone()));
+            let top = zr.top() + ZONE_PAD * 0.75 + cap_h;
+            let tiles: usize = z.items.iter().map(tile_count).sum();
+            if tiles > 0 {
+                // Even tiles across the zone (up to a comfortable size), the group centred.
+                let tw = ((inner - 8.0 * (tiles as f32 - 1.0)) / tiles as f32).min(150.0);
+                let group = tw * tiles as f32 + 8.0 * (tiles as f32 - 1.0);
+                let mut x = zr.left() + ZONE_PAD + (inner - group) / 2.0;
+                let ty = top + (band - tile_h(touch)) / 2.0;
+                for c in &z.items {
+                    let t = tile_count(c);
+                    if t == 0 {
+                        continue;
+                    }
+                    let w = tw * t as f32 + 8.0 * (t as f32 - 1.0);
+                    placed.push(Placed::Item(Rect::from_min_size(pos2(x, ty), vec2(w, tile_h(touch))), c.clone()));
+                    x += w + 8.0;
+                }
+            } else if let Some(t) = &z.text {
+                let th = p.layout(t.clone(), theme::body(12.0), Color32::WHITE, inner).size().y;
+                placed.push(Placed::Text(
+                    Rect::from_min_size(pos2(zr.left() + ZONE_PAD, top + (band - th) / 2.0), vec2(inner, th)),
+                    t.clone(),
+                ));
+            } else {
+                let mut x = zr.left() + ZONE_PAD;
+                for c in &z.items {
+                    let w = if matches!(c, Control::Menu { .. }) { inner } else { item_w(p, c, touch).min(inner) };
+                    placed.push(Placed::Item(Rect::from_min_size(pos2(x, top + (band - row_h) / 2.0), vec2(w, row_h)), c.clone()));
+                    x += w + 8.0;
+                }
+            }
         }
-        flush(&mut line, &mut y, &mut placed);
+        y += zh;
     }
     (placed, y)
 }
 
 /// Draws what [`lay_out`] placed, offset to `origin`.
-fn draw_options(ui: &mut Ui, placed: &[Placed], origin: egui::Pos2, values: &Map<String, Value>, touch: bool, acts: &mut Vec<Act>) {
+fn draw_options(ui: &mut Ui, placed: &[Placed], origin: egui::Pos2, values: &Map<String, Value>, acts: &mut Vec<Act>) {
     let o = origin.to_vec2();
     for (n, item) in placed.iter().enumerate() {
         match item {
-            Placed::Caption(at, text) => {
-                ui.painter().text(*at + o, Align2::LEFT_CENTER, text, theme::strong(11.5), Tokens::text_dim());
+            Placed::Zone(r, caption) => {
+                let r = r.translate(o);
+                let p = ui.painter();
+                p.rect_filled(r, radius(12), theme::c(0x1e1e1f));
+                p.rect_stroke(r, radius(12), Stroke::new(1.0, theme::c(0x313133)), StrokeKind::Inside);
+                p.text(
+                    pos2(r.left() + ZONE_PAD, r.top() + ZONE_PAD * 0.75 + 9.0),
+                    Align2::LEFT_CENTER,
+                    caption,
+                    theme::strong(11.5),
+                    Tokens::text_dim(),
+                );
+            }
+            Placed::Text(r, text) => {
+                let r = r.translate(o);
+                let g = ui.painter().layout(text.clone(), theme::body(12.0), Tokens::text_dim(), r.width());
+                // One line sits in the middle of its zone, longer text from the left.
+                let x = if g.rows.len() == 1 { r.center().x - g.size().x / 2.0 } else { r.left() };
+                ui.painter().galley(pos2(x, r.top()), g, Tokens::text_dim());
             }
             Placed::Item(r, c) => {
                 let r = r.translate(o);
@@ -2226,13 +2319,10 @@ fn draw_options(ui: &mut Ui, placed: &[Placed], origin: egui::Pos2, values: &Map
                     Control::Segmented { id, options, icons, .. } if tiled(c) => {
                         let cur = values.get(id).and_then(Value::as_str).unwrap_or("");
                         let k_cur = options.iter().position(|x| x == cur).unwrap_or(0);
-                        let natural: Vec<f32> = options.iter().zip(icons).map(|(o, i)| tile_w(ui.painter(), o, i)).collect();
-                        let gaps = 8.0 * (options.len().max(1) - 1) as f32;
-                        let k_fit = ((r.width() - gaps) / natural.iter().sum::<f32>().max(1.0)).min(1.0);
-                        let mut x = r.left();
+                        let k_n = options.len().max(1) as f32;
+                        let tw = (r.width() - 8.0 * (k_n - 1.0)) / k_n;
                         for (k, opt) in options.iter().enumerate() {
-                            let tr = Rect::from_min_size(pos2(x, r.top()), vec2(natural[k] * k_fit, r.height()));
-                            x = tr.right() + 8.0;
+                            let tr = Rect::from_min_size(pos2(r.left() + k as f32 * (tw + 8.0), r.top()), vec2(tw, r.height()));
                             let icon = icons.get(k).map(String::as_str).unwrap_or("");
                             if tile(ui, tr, ui.scope_id().with(("sheet-tile", n, k)), opt, icon, k == k_cur, false) && k != k_cur {
                                 acts.push(Act::Set(id.clone(), Value::from(opt.clone())));
@@ -2254,7 +2344,6 @@ fn draw_options(ui: &mut Ui, placed: &[Placed], origin: egui::Pos2, values: &Map
             }
         }
     }
-    let _ = touch;
 }
 
 /// One option as a tile: its pictogram over its name, lit when picked (a toggle also shows a tick).

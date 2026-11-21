@@ -144,7 +144,8 @@ fn main_panel(v: &Values) -> Panel {
     let p = p
         .with(ui::heading("What Changes"))
         .with(ui::icons(ui::segmented("mode", &MODES, &mode), &["surroundings", "whole-picture"]))
-        .with_if(mode == MODES[0], ui::heading("Your Model"))
+        .with(ui::heading("Your Model"))
+        .with_if(mode != MODES[0], ui::note("Whole Picture restyles your model along with the scene.", "dim"))
         .with_if(mode == MODES[0], ui::icons(ui::toggle("exact", "Keep It Exact", true), &["keep-exact"]))
         .with_if(mode == MODES[0] && !exact, ui::icons(ui::toggle("move", "Let It Move", false), &["move-resize"]))
         .with(ui::separator());

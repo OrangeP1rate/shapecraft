@@ -15,13 +15,18 @@ of ours.**
     key, or run it free and offline on your own computer with ComfyUI (found by itself; FLUX.2 klein works on a
     laptop). No account at all? **Or free in a chat** takes your view to ChatGPT, Gemini, Copilot, Grok or Meta AI.
   - **Keep My Model Exact** keeps your model's own pixels, so the AI can't change its shape; **Let It Move and
-    Resize** lets it float, turn or scale your model to suit the scene.
+    Resize** lets it float, turn or scale your model to suit the scene. On your own computer, ComfyUI repaints only
+    the scene around your model, shadows included, so it stays exactly where it is with no second copy.
   - **History** keeps every picture on your computer, with what made it, when, and your words: Save, Copy, Use
     Prompt again, Delete. Pills on each picture say which service and model made it.
   - 1, 2 or 4 pictures at a time, a prompt box that grows with your words, Edit and Try Again after a result, and a
     sheet you can move. ShapeCraft sets no quota.
   - See [docs/generative-render.md](docs/generative-render.md). Why a plugin: not everyone wants AI in their CAD
     app, and this way it's there only if you add it.
+- **Assistants ask before they spend.** AI assistants connected to ShapeCraft (MCP) can now use plugins too, but
+  anything that costs money on your account (a picture from OpenAI, Gemini or OpenRouter) waits for you to press
+  **Allow** in ShapeCraft, with what it makes and what it sends. Free ones, like ComfyUI on your computer, run at once.
+  See [docs/mcp.md](docs/mcp.md).
 - **Write your own plugin** in Rust against a small, documented API; share it with a pull request and CI builds it
   for every release. See [docs/plugins.md](docs/plugins.md).
 

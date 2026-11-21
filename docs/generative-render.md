@@ -46,12 +46,22 @@ Click **Generative Render**. The sheet shows your current view:
 1. Describe the scene, the light and the mood. ⌘Return (Ctrl+Enter) generates too.
 2. **Surroundings** changes only what's around your model. **Keep My Model Exact** (on by default) lays your model's
    own pixels back over the result, so the AI can't change its shape. Turn it off to let the AI relight your model
-   into the scene. **Whole Picture** lets the AI restyle everything, model included.
+   into the scene. With ComfyUI, Keep My Model Exact goes further: only the scene around your model is repainted
+   (shadows on the ground included), so there's never a second copy of it in the picture. Your own workflow gets the
+   repaint mask (white around the model) as `{{mask}}`. **Whole Picture** lets the AI restyle everything, model
+   included.
 3. Pick **1, 2 or 4** pictures and the **Model**.
 4. **Generate**. The newest picture replaces the view in the sheet; earlier ones line up underneath. Click one to look
    again, and use the save button in the prompt bar to save the one shown.
 
 Pictures are also kept by the plugin (the 200 newest), so closing the sheet loses nothing.
+
+## With an AI assistant
+
+An assistant connected to ShapeCraft through MCP can read the sheet's options and make pictures too (see
+[mcp.md](mcp.md)). When the picked service costs money, nothing is sent until you press **Allow** on the card
+ShapeCraft shows, which says which service, how many pictures, and the words being sent. **Don't Allow** (or Esc)
+stops it with nothing spent. ComfyUI on your own computer is free, so it runs without asking.
 
 ## Privacy
 

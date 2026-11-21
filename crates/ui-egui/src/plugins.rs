@@ -62,12 +62,26 @@ struct Sheet {
     pending_delete: Option<PathBuf>,
     /// Out of the way while Preferences is open over it.
     hidden: bool,
+    /// Where it was dragged to (by its header), from the middle of the window.
+    offset: egui::Vec2,
 }
 
 /// Adding a plugin: what it is and what it asks for, waiting for the person's OK.
 struct Confirm {
     manifest: Manifest,
     source: Source,
+}
+
+/// Taking the view to a free chat: the view on the clipboard, the site open, the words to paste after it.
+struct Handoff {
+    plugin: String,
+    site: String,
+    url: String,
+    text: String,
+    /// The clipboard and the site are done once, on the first frame.
+    started: bool,
+    /// What was last copied ("picture" / "words"), for the card's line.
+    copied: Option<&'static str>,
 }
 
 /// The card that follows "Add Plugin": what's happening, then what to do next.
@@ -104,6 +118,8 @@ pub struct Plugins {
     /// A finished add, held until the card has shown "working" long enough to read.
     add_done: Option<Result<Installed, String>>,
     requests: Vec<Request>,
+    handoff: Option<Handoff>,
+    add_pick: crate::dialogs::Pick,
     /// The listing being added, for Try Again.
     retry: Option<Box<index::Entry>>,
     notice: Option<(Tone, String)>,
@@ -141,6 +157,8 @@ impl Plugins {
             add_card: None,
             add_done: None,
             requests: Vec::new(),
+            handoff: None,
+            add_pick: Default::default(),
             retry: None,
             notice: None,
             sheet: None,
@@ -258,6 +276,7 @@ impl Plugins {
                 let action = action.clone();
                 st.run = None;
                 st.dirty = true;
+                let answer_json = answer.as_ref().ok().and_then(|t| serde_json::from_str::<Value>(t).ok());
                 st.message = Some(match answer {
                     Ok(text) => {
                         let msg = serde_json::from_str::<Value>(&text)
@@ -272,6 +291,32 @@ impl Plugins {
                     }
                     Err(e) => (Tone::Error, e.to_string()),
                 });
+                // An answer may fill in values ("set": the address Find ComfyUI found) or send the person to a web page
+                // with the view on the clipboard ("handoff").
+                if let Some(j) = answer_json {
+                    if let Some(set) = j.get("set").and_then(Value::as_object) {
+                        for (k, v) in set {
+                            st.values.insert(k.clone(), v.clone());
+                        }
+                        let text = Value::Object(st.values.clone()).to_string();
+                        if let Some(d) = self.installed(&plugin).map(|i| i.dir.clone()) {
+                            let _ = KeyFile::settings(&d).set(&format!("panel.{panel}"), Some(&text));
+                        }
+                    }
+                    if let Some(h) = j.get("handoff") {
+                        let field = |k: &str| h.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                        if field("url").starts_with("https://") {
+                            self.handoff = Some(Handoff {
+                                plugin: plugin.clone(),
+                                site: field("site"),
+                                url: field("url"),
+                                text: field("text"),
+                                started: false,
+                                copied: None,
+                            });
+                        }
+                    }
+                }
                 // Newly saved sign-ins or keys change the other panels too.
                 for ((p, _), other) in self.panels.iter_mut() {
                     if *p == plugin {
@@ -312,6 +357,39 @@ impl Plugins {
             }
         } else if let Some(done) = self.add_done.take() {
             self.finish_add(done);
+        }
+        if let Some(Some(path)) = self.add_pick.taken()
+            && let Some(plugin) = self.handoff.as_ref().map(|h| h.plugin.clone()).or_else(|| self.sheet.as_ref().map(|s| s.plugin.clone()))
+        {
+            let site = self.handoff.as_ref().map(|h| h.site.clone()).unwrap_or_else(|| "Added".into());
+            let prompt = self
+                .panels
+                .get(&(plugin.clone(), "main".to_string()))
+                .and_then(|st| st.values.get("prompt"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let dir = self.installed(&plugin).map(|i| i.dir.clone());
+            let r =
+                std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| shapecraft_plugin_host::images::decode(&b)).and_then(|pic| {
+                    results::save(
+                        &dir.ok_or("plugin not added")?,
+                        &pic,
+                        if prompt.is_empty() { "(no description)" } else { &prompt },
+                        &format!("{site} · Free chat"),
+                    )
+                });
+            match r {
+                Ok(e) => {
+                    self.results_of(&plugin).insert(0, e.clone());
+                    if let Some(s) = self.sheet.as_mut() {
+                        s.shown = Some(e);
+                        s.editing = false;
+                    }
+                    self.handoff = None;
+                }
+                Err(e) => self.notice = Some((Tone::Error, format!("That picture couldn't be added: {e}"))),
+            }
         }
         if let Some(Some(path)) = self.file_pick.taken() {
             self.confirm_file(path);
@@ -467,8 +545,16 @@ pub(crate) fn frame(ui: &mut Ui) {
         if p.add_card.is_some() {
             add_card(p, ui);
         }
+        if p.handoff.is_some() {
+            handoff_card(p, ui);
+        }
         for url in std::mem::take(&mut p.urls) {
-            crate::landing::open_link(&url);
+            // Offscreen runs (snap, tests) set SHAPECRAFT_NO_BROWSER so nothing opens on the person's screen.
+            if std::env::var_os("SHAPECRAFT_NO_BROWSER").is_some() {
+                log::info!("would open {url}");
+            } else {
+                crate::landing::open_link(&url);
+            }
         }
     });
 }
@@ -504,6 +590,7 @@ pub(crate) fn open_sheet(plugin: &str, panel: &str, capture: Option<Capture>) {
             history: false,
             pending_delete: None,
             hidden: false,
+            offset: egui::Vec2::ZERO,
         });
     });
 }
@@ -520,7 +607,7 @@ pub(crate) fn offer_generative() {
 
 /// Whether a plugin sheet or card has the keyboard (the workspace leaves keys alone then).
 pub(crate) fn takes_keys() -> bool {
-    with(|p| p.sheet.as_ref().is_some_and(|s| !s.hidden) || p.offer || p.confirm.is_some() || p.add_card.is_some())
+    with(|p| p.sheet.as_ref().is_some_and(|s| !s.hidden) || p.offer || p.confirm.is_some() || p.add_card.is_some() || p.handoff.is_some())
 }
 
 /// Brings back a sheet put aside for Preferences (its Connections button), once Preferences closes.
@@ -1091,9 +1178,16 @@ fn menu(ui: &mut Ui, id: &str, options: &[Choice], cur: &str, empty: &str, w: f3
 // ——— The sheet (Generative Render) ———
 
 fn dim_and_card(ui: &mut Ui, id: egui::Id, w: f32, h: f32, f: impl FnOnce(&mut Ui, Rect)) {
+    dim_and_card_at(ui, id, w, h, egui::Vec2::ZERO, f);
+}
+
+/// A card moved by `offset` from the middle (kept on screen).
+fn dim_and_card_at(ui: &mut Ui, id: egui::Id, w: f32, h: f32, offset: egui::Vec2, f: impl FnOnce(&mut Ui, Rect)) {
     let ctx = ui.ctx().clone();
     let full = ctx.content_rect();
     let card = Rect::from_center_size(full.center(), vec2(w.min(full.width() - 24.0), h.min(full.height() - 24.0)));
+    let room = ((full.size() - card.size()) / 2.0 - vec2(4.0, 4.0)).max(egui::Vec2::ZERO);
+    let card = card.translate(offset.clamp(-room, room));
     egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(full.min).show(&ctx, |ui| {
         let _ = ui.allocate_rect(full, Sense::click());
         let p = ui.painter().clone();
@@ -1254,7 +1348,7 @@ fn sheet(p: &mut Plugins, ui: &mut Ui) {
     for c in &controls {
         match c {
             Control::Separator {} => rows.push(Vec::new()),
-            Control::Stage {} | Control::Results {} | Control::Note { .. } | Control::Heading { .. } | Control::Link { .. } => {}
+            Control::Stage {} | Control::Results {} | Control::Note { .. } | Control::Link { .. } => {}
             Control::Text { .. } if prompt.as_ref() == Some(c) => {}
             Control::Button { .. } if go.as_ref() == Some(c) => {}
             other => {
@@ -1291,8 +1385,17 @@ fn sheet(p: &mut Plugins, ui: &mut Ui) {
     let mut acts = Vec::new();
     let mut out =
         SheetOut { close: ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) && running.is_none(), ..Default::default() };
-    dim_and_card(ui, egui::Id::NULL.with("plugin-sheet"), w, h, |ui, card| {
+    let offset = p.sheet.as_ref().map_or(egui::Vec2::ZERO, |s| s.offset);
+    let mut dragged = egui::Vec2::ZERO;
+    dim_and_card_at(ui, egui::Id::NULL.with("plugin-sheet"), w, h, offset, |ui, card| {
         let painter = ui.painter().clone();
+        // The header moves the sheet (the buttons in it sit outside the grip).
+        let grip = Rect::from_min_max(card.min, pos2(card.right() - 90.0, card.top() + header_h));
+        let drag = ui.interact(grip, ui.scope_id().with("sheet-grip"), Sense::drag());
+        if drag.hovered() || drag.dragged() {
+            ui.ctx().set_cursor_icon(if drag.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+        }
+        dragged = drag.drag_delta();
         let x0 = card.left() + pad;
         let x1 = card.right() - pad;
         // Header: the title (or History with a way back), and Connections / History.
@@ -1465,6 +1568,9 @@ fn sheet(p: &mut Plugins, ui: &mut Ui) {
         }
     });
     apply(p, &plugin, &panel_id, acts, capture, &dir);
+    if let Some(s) = p.sheet.as_mut() {
+        s.offset += dragged;
+    }
     let pressed_generate =
         p.panels.get(&(plugin.clone(), panel_id.clone())).is_some_and(|s| s.run.as_ref().is_some_and(|r| r.0 == "generate"));
     if let Some(s) = p.sheet.as_mut() {
@@ -1769,10 +1875,154 @@ fn inline_control(ui: &mut Ui, c: &Control, values: &Map<String, Value>, h: f32,
                 acts.push(Act::Set(id.clone(), Value::from(v)));
             }
         }
-        Control::Button { label, action, capture, .. } if ui.button(label).clicked() => {
-            acts.push(Act::Press(action.clone(), *capture));
+        Control::Heading { text } => {
+            ui.label(egui::RichText::new(text).font(theme::body(12.0)).color(Tokens::text_dim()));
+        }
+        Control::Button { label, action, capture, .. } => {
+            // A small pill (the free chats).
+            let g = ui.painter().layout_no_wrap(label.clone(), theme::body(12.0), Tokens::text_strong());
+            let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 20.0, h - 6.0), Sense::click());
+            let fill = if resp.hovered() { Tokens::button_hover() } else { Tokens::chip() };
+            ui.painter().rect_filled(r, radius(((r.height() / 2.0) as u8).max(4)), fill);
+            ui.painter().rect_stroke(
+                r,
+                radius(((r.height() / 2.0) as u8).max(4)),
+                Stroke::new(1.0, Tokens::chip_border()),
+                StrokeKind::Inside,
+            );
+            ui.painter().galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, Tokens::text_strong());
+            if resp.clicked() {
+                acts.push(Act::Press(action.clone(), *capture));
+            }
         }
         _ => {}
+    }
+}
+
+/// The free-chat card: the view is on the clipboard and the site is open; paste the picture, then the words.
+fn handoff_card(p: &mut Plugins, ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    let touch = crate::tablet::touch_ui();
+    let view = p.sheet.as_ref().and_then(|s| s.capture.as_ref()).map(|c| c.view.clone());
+    let Some(h) = p.handoff.as_mut() else { return };
+    if !h.started {
+        h.started = true;
+        if !touch && let Some(v) = &view {
+            ctx.copy_image(egui::ColorImage::from_rgba_unmultiplied([v.width as usize, v.height as usize], &v.pixels));
+            h.copied = Some("picture");
+        }
+        p.urls.push(h.url.clone());
+    }
+    let Some(h) = p.handoff.as_ref() else { return };
+    let (site, text, url, copied) = (h.site.clone(), h.text.clone(), h.url.clone(), h.copied);
+    let mut out: Option<&'static str> = None;
+    if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        out = Some("close");
+    }
+    let paste = if cfg!(target_os = "macos") { "⌘V" } else { "Ctrl+V" };
+    dim_and_card(ui, egui::Id::NULL.with("plugin-handoff"), 480.0, 330.0, |ui, card| {
+        let painter = ui.painter().clone();
+        let pad = 26.0;
+        let x0 = card.left() + pad;
+        painter.text(
+            pos2(x0, card.top() + 34.0),
+            Align2::LEFT_CENTER,
+            format!("Make it in {site}, free"),
+            theme::strong(17.0),
+            Tokens::text_strong(),
+        );
+        painter.text(
+            pos2(x0, card.top() + 56.0),
+            Align2::LEFT_CENTER,
+            format!("{site} is opening in your browser. Sign in there if it asks."),
+            theme::body(12.0),
+            Tokens::text_dim(),
+        );
+        let steps: Vec<(String, String)> = if touch {
+            vec![
+                ("Save the view".into(), format!("Then attach it in {site} (the + or paperclip by the message box).")),
+                ("Copy the description".into(), "Paste it under the picture and send.".into()),
+                ("Bring the result back".into(), "Save the picture it makes, then Add It to History here.".into()),
+            ]
+        } else {
+            vec![
+                ("Paste the view".into(), format!("It's on the clipboard: click the message box and press {paste}.")),
+                ("Copy the description".into(), format!("Then press {paste} again, under the picture, and send.")),
+                ("Bring the result back".into(), "Save the picture it makes, then Add It to History here.".into()),
+            ]
+        };
+        let mut y = card.top() + 88.0;
+        for (k, (t, d)) in steps.iter().enumerate() {
+            let c = pos2(x0 + 11.0, y + 8.0);
+            painter.circle_filled(c, 11.0, Tokens::accent());
+            painter.text(c, Align2::CENTER_CENTER, format!("{}", k + 1), theme::strong(12.0), Color32::WHITE);
+            painter.text(pos2(x0 + 32.0, y), Align2::LEFT_CENTER, t, theme::strong(13.0), Tokens::text_strong());
+            painter.text(pos2(x0 + 32.0, y + 17.0), Align2::LEFT_CENTER, d, theme::body(11.5), Tokens::text_dim());
+            y += 46.0;
+        }
+        let note = match copied {
+            Some("picture") => "The view is on the clipboard.",
+            Some("words") => "The description is on the clipboard.",
+            _ => "",
+        };
+        painter.text(pos2(x0, y + 2.0), Align2::LEFT_CENTER, note, theme::body(11.5), tone_color(Tone::Good));
+        let by = card.bottom() - 30.0;
+        painter.hline(card.x_range(), by - 24.0, Stroke::new(1.0, Tokens::divider()));
+        let (copy, r1) = button(ui, card.right() - pad + 8.0, by, "Copy Description", Style::Primary, true);
+        if copy {
+            out = Some("words");
+        }
+        let (first, r2) =
+            button(ui, r1.left() - 8.0, by, if touch { "Save the View…" } else { "Copy the View" }, Style::Plain, view.is_some());
+        if first {
+            out = Some(if touch { "save" } else { "picture" });
+        }
+        let (add, _) = button(ui, r2.left() - 8.0, by, "Add It to History…", Style::Plain, true);
+        if add {
+            out = Some("add");
+        }
+        let lr = link(ui, pos2(x0, by), "Done", "handoff-done");
+        if ui.interact(lr, ui.scope_id().with("handoff-done-btn"), Sense::click()).clicked() {
+            out = Some("close");
+        }
+        let _ = url;
+    });
+    match out {
+        Some("words") => {
+            ctx.copy_text(text);
+            if let Some(h) = p.handoff.as_mut() {
+                h.copied = Some("words");
+            }
+        }
+        Some("picture") => {
+            if let Some(v) = &view {
+                ctx.copy_image(egui::ColorImage::from_rgba_unmultiplied([v.width as usize, v.height as usize], &v.pixels));
+            }
+            if let Some(h) = p.handoff.as_mut() {
+                h.copied = Some("picture");
+            }
+        }
+        Some("save") => {
+            if let Some(v) = &view
+                && let Ok(png) = shapecraft_plugin_host::images::encode_png(v)
+            {
+                let tmp = std::env::temp_dir().join("ShapeCraft view.png");
+                if std::fs::write(&tmp, png).is_ok() {
+                    let mut pick = crate::dialogs::Pick::default();
+                    pick.start(|| {
+                        crate::dialogs::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("ShapeCraft view.png").save_file()
+                    });
+                    p.save_pick = Some((tmp, pick));
+                }
+            }
+        }
+        Some("add") => {
+            if !p.add_pick.is_open() {
+                p.add_pick.start(|| crate::dialogs::FileDialog::new().add_filter("Pictures", &["png", "jpg", "jpeg", "webp"]).pick_file());
+            }
+        }
+        Some(_) => p.handoff = None,
+        None => {}
     }
 }
 

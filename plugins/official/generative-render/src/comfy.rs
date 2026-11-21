@@ -1,42 +1,179 @@
-//! ComfyUI on this computer or the local network: free, private, offline. The built-in workflow is FLUX.1 Kontext
-//! [dev] (an image-editing model that keeps what it's told to keep); people can paste their own workflow instead.
+//! ComfyUI on this computer or the local network: free, private, offline. Built in: FLUX.2 klein (small and quick,
+//! edits pictures; 4B runs on a laptop) and FLUX.1 Kontext [dev]; people can paste their own workflow instead.
+//! The address is found on its own (the usual ports on this computer) or typed in (another machine on the network).
 
 use shapecraft_plugin::{Value, Values, host, http, json};
 
 use crate::{Job, Made, Model, http_error, settings};
 
-pub const DEFAULT_URL: &str = "http://127.0.0.1:8188";
+/// Where ComfyUI usually listens: the server's default, then ComfyUI Desktop's.
+const LOOK_AT: [&str; 4] = ["http://127.0.0.1:8188", "http://127.0.0.1:8000", "http://127.0.0.1:8189", "http://localhost:8188"];
 
 pub fn defaults() -> Vec<Model> {
     let custom = !settings().str("comfy_workflow").trim().is_empty();
-    let mut v = vec![Model { id: "kontext".into(), name: "FLUX.1 Kontext [dev]".into(), detail: "free".into() }];
+    let mut v = vec![
+        Model { id: "klein".into(), name: "FLUX.2 klein".into(), detail: "free".into() },
+        Model { id: "kontext".into(), name: "FLUX.1 Kontext [dev]".into(), detail: "free".into() },
+    ];
     if custom {
         v.push(Model { id: "custom".into(), name: "My Workflow".into(), detail: "free".into() });
     }
     v
 }
 
-fn base(v: &Values) -> String {
+fn typed(v: &Values) -> Option<String> {
     let u = v.str("comfy_url");
-    let u = if u.trim().is_empty() { DEFAULT_URL.to_string() } else { u.trim().to_string() };
-    let u = if u.contains("://") { u } else { format!("http://{u}") };
-    u.trim_end_matches('/').to_string()
+    let u = u.trim();
+    if u.is_empty() {
+        return None;
+    }
+    let u = if u.contains("://") { u.to_string() } else { format!("http://{u}") };
+    Some(u.trim_end_matches('/').to_string())
+}
+
+/// Whether ComfyUI answers at `b` (a quick look).
+fn answers(b: &str) -> Option<Value> {
+    let r = http::send("GET", &format!("{b}/system_stats"), Vec::new(), Vec::new(), 3).ok()?;
+    (r.status == 200).then(|| http::json(&r).ok()).flatten()
+}
+
+/// The address to use: the typed one, or the first usual one that answers.
+fn base(v: &Values) -> Result<String, String> {
+    if let Some(t) = typed(v) {
+        return Ok(t);
+    }
+    LOOK_AT.iter().find(|u| answers(u).is_some()).map(|u| u.to_string()).ok_or_else(|| {
+        "ComfyUI isn't running on this computer (looked at ports 8188, 8000 and 8189). Start it, or type its address \
+         in Preferences ▸ Plugins ▸ Generative Render."
+            .to_string()
+    })
+}
+
+/// Looks for ComfyUI and fills in the address it found.
+pub fn find(v: &Values) -> Result<String, String> {
+    let candidates: Vec<String> = typed(v).into_iter().chain(LOOK_AT.iter().map(|s| s.to_string())).collect();
+    for u in candidates {
+        if let Some(j) = answers(&u) {
+            let version = j.pointer("/system/comfyui_version").and_then(Value::as_str).unwrap_or("?");
+            let ready = ready_text(&u);
+            return Ok(json!({ "message": format!("Found ComfyUI {version} at {u}. {ready}"), "set": { "comfy_url": u } }).to_string());
+        }
+    }
+    Err("No ComfyUI answered on this computer (ports 8188, 8000, 8189). If it runs on another machine, type its \
+         address, like 192.168.1.20:8188 (start it with --listen so others can reach it)."
+        .into())
+}
+
+/// Which built-in models are installed there, in words.
+fn ready_text(b: &str) -> String {
+    let mut ok = Vec::new();
+    let mut missing = Vec::new();
+    match klein_files(b) {
+        Ok(_) => ok.push("FLUX.2 klein"),
+        Err(e) => missing.push(e),
+    }
+    match find_models(b) {
+        Ok(_) => ok.push("FLUX.1 Kontext"),
+        Err(e) => missing.push(e),
+    }
+    if ok.is_empty() {
+        format!("No built-in model is installed yet: {}", missing.first().cloned().unwrap_or_default())
+    } else {
+        format!("Ready: {}.", ok.join(" and "))
+    }
+}
+
+/// The models this ComfyUI can run now (for the Model menu).
+pub fn list() -> Result<Vec<Model>, String> {
+    let v = settings();
+    let b = base(&v)?;
+    let mut out = Vec::new();
+    if let Ok(f) = klein_files(&b) {
+        let size = if f.unet.contains("9b") { "9B" } else { "4B" };
+        out.push(Model { id: "klein".into(), name: format!("FLUX.2 klein {size}"), detail: "free".into() });
+    }
+    if find_models(&b).is_ok() {
+        out.push(Model { id: "kontext".into(), name: "FLUX.1 Kontext [dev]".into(), detail: "free".into() });
+    }
+    if !v.str("comfy_workflow").trim().is_empty() {
+        out.push(Model { id: "custom".into(), name: "My Workflow".into(), detail: "free".into() });
+    }
+    if out.is_empty() {
+        return Err(ready_text(&b));
+    }
+    Ok(out)
 }
 
 pub fn test(v: &Values) -> Result<String, String> {
-    let b = base(v);
-    let r = http::get(&format!("{b}/system_stats"), &[])?;
-    if r.status != 200 {
-        return Err(http_error("ComfyUI", &r));
-    }
-    let j = http::json(&r)?;
+    let b = base(v)?;
+    let j = answers(&b).ok_or_else(|| format!("Nothing is answering at {b} (is ComfyUI running?)"))?;
     let version = j.pointer("/system/comfyui_version").and_then(Value::as_str).unwrap_or("?");
     let gpu = j.pointer("/devices/0/name").and_then(Value::as_str).unwrap_or("no GPU listed");
-    let kontext = match find_models(&b) {
-        Ok(_) => "FLUX.1 Kontext is ready.".to_string(),
-        Err(e) => e,
-    };
-    shapecraft_plugin::message(&format!("ComfyUI {version} is running ({gpu}). {kontext}"))
+    shapecraft_plugin::message(&format!("ComfyUI {version} is running at {b} ({gpu}). {}", ready_text(&b)))
+}
+
+struct KleinFiles {
+    unet: String,
+    te: String,
+    vae: String,
+}
+
+fn klein_files(b: &str) -> Result<KleinFiles, String> {
+    let pick = |list: &[String], want: &str| list.iter().find(|f| f.to_lowercase().contains(want)).cloned();
+    let unets = options(b, "UNETLoader", "unet_name")?;
+    let tes = options(b, "CLIPLoader", "clip_name")?;
+    let vaes = options(b, "VAELoader", "vae_name")?;
+    let unet = unets
+        .iter()
+        .find(|f| f.to_lowercase().contains("klein") && !f.to_lowercase().contains("base"))
+        .cloned()
+        .or_else(|| pick(&unets, "klein"));
+    let te = pick(&tes, "qwen_3");
+    let vae = pick(&vaes, "flux2");
+    match (unet, te, vae) {
+        (Some(unet), Some(te), Some(vae)) => Ok(KleinFiles { unet, te, vae }),
+        (u, t, va) => {
+            let mut m = Vec::new();
+            if u.is_none() {
+                m.push("a FLUX.2 klein model in models/diffusion_models");
+            }
+            if t.is_none() {
+                m.push("qwen_3_4b in models/text_encoders");
+            }
+            if va.is_none() {
+                m.push("flux2-vae in models/vae");
+            }
+            Err(format!("FLUX.2 klein isn't set up: missing {}.", m.join(", ")))
+        }
+    }
+}
+
+/// FLUX.2 klein editing the view (as ComfyUI's own "Image Edit (FLUX.2 Klein 4B Distilled)" template): the view as
+/// a reference, 4 steps, no guidance.
+fn klein(f: &KleinFiles, image: &str, prompt: &str, seed: u64) -> Value {
+    let steps = if f.unet.contains("base") { 28 } else { 4 };
+    let cfg = if f.unet.contains("base") { 4.0 } else { 1.0 };
+    json!({
+        "1": { "class_type": "UNETLoader", "inputs": { "unet_name": f.unet, "weight_dtype": "default" } },
+        "2": { "class_type": "CLIPLoader", "inputs": { "clip_name": f.te, "type": "flux2", "device": "default" } },
+        "3": { "class_type": "VAELoader", "inputs": { "vae_name": f.vae } },
+        "4": { "class_type": "LoadImage", "inputs": { "image": image } },
+        "5": { "class_type": "ImageScaleToTotalPixels", "inputs": { "image": ["4", 0], "upscale_method": "lanczos", "megapixels": 1.0, "resolution_steps": 1 } },
+        "6": { "class_type": "GetImageSize", "inputs": { "image": ["5", 0] } },
+        "7": { "class_type": "CLIPTextEncode", "inputs": { "text": prompt, "clip": ["2", 0] } },
+        "8": { "class_type": "ConditioningZeroOut", "inputs": { "conditioning": ["7", 0] } },
+        "9": { "class_type": "VAEEncode", "inputs": { "pixels": ["5", 0], "vae": ["3", 0] } },
+        "10": { "class_type": "ReferenceLatent", "inputs": { "conditioning": ["7", 0], "latent": ["9", 0] } },
+        "11": { "class_type": "ReferenceLatent", "inputs": { "conditioning": ["8", 0], "latent": ["9", 0] } },
+        "12": { "class_type": "CFGGuider", "inputs": { "model": ["1", 0], "positive": ["10", 0], "negative": ["11", 0], "cfg": cfg } },
+        "13": { "class_type": "KSamplerSelect", "inputs": { "sampler_name": "euler" } },
+        "14": { "class_type": "Flux2Scheduler", "inputs": { "steps": steps, "width": ["6", 0], "height": ["6", 1] } },
+        "15": { "class_type": "EmptyFlux2LatentImage", "inputs": { "width": ["6", 0], "height": ["6", 1], "batch_size": 1 } },
+        "16": { "class_type": "RandomNoise", "inputs": { "noise_seed": seed } },
+        "17": { "class_type": "SamplerCustomAdvanced", "inputs": { "noise": ["16", 0], "guider": ["12", 0], "sampler": ["13", 0], "sigmas": ["14", 0], "latent_image": ["15", 0] } },
+        "18": { "class_type": "VAEDecode", "inputs": { "samples": ["17", 0], "vae": ["3", 0] } },
+        "19": { "class_type": "SaveImage", "inputs": { "images": ["18", 0], "filename_prefix": "ShapeCraft" } }
+    })
 }
 
 /// The options a loader node offers (file names in its models folder).
@@ -196,17 +333,28 @@ fn run_one(b: &str, workflow: Value) -> Result<Vec<u8>, String> {
 
 pub fn generate(job: &Job) -> Result<Made, String> {
     let v = settings();
-    let b = base(&v);
+    let b = base(&v)?;
+    host::progress(-1.0, "Sending the view to ComfyUI…");
     let image = upload(&b, &job.png)?;
-    let files = if job.model == "custom" { None } else { Some(find_models(&b)?) };
+    enum Flow {
+        Klein(KleinFiles),
+        Kontext(Files),
+        Custom,
+    }
+    let flow = match job.model {
+        "custom" => Flow::Custom,
+        "kontext" => Flow::Kontext(find_models(&b)?),
+        _ => Flow::Klein(klein_files(&b)?),
+    };
     let mut pictures = Vec::new();
     let mut seeds = Vec::new();
     for _ in 0..job.count {
         let r = host::random(6);
         let seed = r.iter().fold(0u64, |a, x| (a << 8) | u64::from(*x));
-        let wf = match &files {
-            Some(f) => kontext(f, &image, &job.prompt, seed),
-            None => custom(&v.str("comfy_workflow"), &image, &job.prompt, seed)?,
+        let wf = match &flow {
+            Flow::Klein(f) => klein(f, &image, &job.prompt, seed),
+            Flow::Kontext(f) => kontext(f, &image, &job.prompt, seed),
+            Flow::Custom => custom(&v.str("comfy_workflow"), &image, &job.prompt, seed)?,
         };
         pictures.push(run_one(&b, wf)?);
         seeds.push(seed.to_string());

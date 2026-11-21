@@ -21,6 +21,16 @@ In **Preferences ▸ Plugins**, open **Generative Render**:
 | **Google Gemini** | Paste an API key from aistudio.google.com | Pay per picture. Gemini's image models need billing turned on (no free tier) |
 | **ComfyUI** (your computer or your network) | Turn on **Use ComfyUI**, set its address (default `http://127.0.0.1:8188`), **Test Connection** | Free, private, works offline. Needs a GPU and FLUX.1 Kontext [dev] installed in ComfyUI, or your own workflow |
 
+**ComfyUI** is found by itself when its address is left empty (it looks at ports 8188, 8000 for ComfyUI Desktop,
+and 8189 on this computer); **Find ComfyUI** fills the address in. For another machine on your network, type its
+address (start ComfyUI there with `--listen`). Built in: **FLUX.2 klein** (the 4B model edits pictures on a laptop:
+about a minute on a MacBook Air) and **FLUX.1 Kontext [dev]**.
+
+**Free, no account set up here:** under the options, **Or free in a chat** takes your view to ChatGPT, Gemini,
+Copilot, Grok or Meta AI, which make pictures on their free plans. ShapeCraft puts the view on the clipboard and
+opens the site; paste it, then **Copy Description** and paste the words under it. Save what it makes and **Add It
+to History** to keep it with the rest. (On iPad and phones, save the view first and attach it there.)
+
 You can connect several and pick the default model under **Default Model**. **Refresh Model Lists** gets the
 current models from each service, so new ones show up without a ShapeCraft update.
 

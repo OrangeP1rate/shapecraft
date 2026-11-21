@@ -139,9 +139,9 @@ impl Workspace {
     /// and over white without its shadow, so the mask is the model alone with soft edges).
     pub fn plugin_capture(&mut self) -> Result<shapecraft_plugin_host::Capture, String> {
         use shapecraft_plugin_host::images::{Mask, Picture};
-        let (w, h, view) = self.capture_over(None, true)?;
-        let (bw, bh, black) = self.capture_over(Some(Rgba::hex(0x000000)), false)?;
-        let (_, _, white) = self.capture_over(Some(Rgba::hex(0xffffff)), false)?;
+        let (w, h, view) = self.capture_scene(None, true, true)?;
+        let (bw, bh, black) = self.capture_scene(Some(Rgba::hex(0x000000)), false, true)?;
+        let (_, _, white) = self.capture_scene(Some(Rgba::hex(0xffffff)), false, true)?;
         if (bw, bh) != (w, h) {
             return Err("the view changed size while it was captured".into());
         }
@@ -179,6 +179,11 @@ impl Workspace {
     }
 
     fn capture_over(&mut self, backdrop: Option<Rgba>, shadow: bool) -> Result<(u32, u32, Vec<u8>), String> {
+        self.capture_scene(backdrop, shadow, false)
+    }
+
+    /// `bare`: the bodies alone, no sketches (what a plugin sees: sketch lines would end up in a generated picture).
+    fn capture_scene(&mut self, backdrop: Option<Rgba>, shadow: bool, bare: bool) -> Result<(u32, u32, Vec<u8>), String> {
         let rect = self.view_rect;
         // The Screenshot tool's size: the view's own pixels, twice that, or Full HD; Visualization's Capture is
         // the view's pixels.
@@ -196,12 +201,17 @@ impl Workspace {
         let grid = (self.view_opts.grid && !self.visualizing && self.settings.shot_grid).then(|| {
             [SketchPlane::XY, SketchPlane::YZ, SketchPlane { origin: DVec3::ZERO, x: DVec3::Z, y: DVec3::X }][self.grid_plane.min(2)]
         });
-        let doc = self.session.doc.clone();
+        let mut doc = self.session.doc.clone();
+        if bare {
+            for sk in &mut doc.sketches {
+                sk.visible = false;
+            }
+        }
         let scene = SceneInput {
             doc: &doc,
             selection: &[],
             hover: None,
-            active_sketch: self.session.active_sketch,
+            active_sketch: if bare { None } else { self.session.active_sketch },
             plane_tiles: &[],
             overlays: &[],
             colors: SceneColors {

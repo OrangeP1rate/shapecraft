@@ -100,6 +100,10 @@ help = "Shown in command search"
 panel = "main"                # open this panel… (or: action = "…" to run an action)
 ```
 
+An action's answer can also carry `"set": {"control id": value}` (the app fills those values in, e.g. an address
+it found) and `"handoff": {"site", "url", "text"}` (the app puts the captured view on the clipboard, opens the
+https page, and shows a card to paste the view and copy `text`: for free web tools with no API).
+
 After a `secret` control is saved, the app runs the action `secret-saved` with `{"id": …}` (optional: answer
 "no action" if you don't need it). Generative Render uses it to fetch the new service's models at once.
 

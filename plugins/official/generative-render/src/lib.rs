@@ -131,7 +131,36 @@ fn main_panel(v: &Values) -> Panel {
         .with(ui::separator())
         .with(model_menu)
         .with(count)
+        // No account at all: take the view to a free chat that makes pictures (the app copies it and opens the site).
+        .with(ui::separator())
+        .with(ui::heading("Or free in a chat"))
+        .with(ui::button("free-chatgpt", "ChatGPT", "handoff:chatgpt"))
+        .with(ui::button("free-gemini", "Gemini", "handoff:gemini"))
+        .with(ui::button("free-copilot", "Copilot", "handoff:copilot"))
+        .with(ui::button("free-grok", "Grok", "handoff:grok"))
+        .with(ui::button("free-meta", "Meta AI", "handoff:meta"))
         .with(ui::results())
+}
+
+/// The free chats people can take the view to: name and address.
+const CHATS: [(&str, &str, &str); 5] = [
+    ("chatgpt", "ChatGPT", "https://chatgpt.com/"),
+    ("gemini", "Gemini", "https://gemini.google.com/app"),
+    ("copilot", "Copilot", "https://copilot.microsoft.com/"),
+    ("grok", "Grok", "https://grok.com/"),
+    ("meta", "Meta AI", "https://www.meta.ai/"),
+];
+
+/// Sends the person to a free chat with the words ready: the app puts the view on the clipboard, opens the site, and
+/// offers the description to paste after the picture (addresses that pre-fill a prompt can send it before the
+/// picture is attached, so none is used).
+fn handoff(site: &str, v: &Values) -> Result<String, String> {
+    let (_, name, url) = CHATS.iter().find(|(id, ..)| *id == site).ok_or("unknown chat")?;
+    let mode = if v.str("mode").is_empty() { MODES[0].to_string() } else { v.str("mode") };
+    let exact = mode == "Surroundings" && v.get("exact").and_then(Value::as_bool).unwrap_or(true);
+    let free = mode == "Surroundings" && !exact && v.bool("move");
+    let text = format!("Make an image from the attached picture. {}", instruction(&mode, &v.str("prompt"), exact, free));
+    Ok(json!({ "handoff": { "site": name, "url": url, "text": text } }).to_string())
 }
 
 fn settings_panel(v: &Values) -> Panel {
@@ -167,9 +196,12 @@ fn settings_panel(v: &Values) -> Panel {
         .with(ui::toggle("comfy_on", "Use ComfyUI", false));
     if v.bool("comfy_on") {
         p = p
-            .with(json!({ "kind": "text", "id": "comfy_url", "label": "Address", "placeholder": comfy::DEFAULT_URL }))
+            .with(ui::note("Leave the address empty to find ComfyUI on this computer by itself (ports 8188, 8000 and 8189). For another machine, type its address.", "dim"))
+            .with(json!({ "kind": "text", "id": "comfy_url", "label": "Address", "placeholder": "Found by itself, or like 192.168.1.20:8188" }))
+            .with(ui::button("comfy-find", "Find ComfyUI", "comfy_find"))
             .with(ui::button("comfy-test", "Test Connection", "comfy_test"))
-            .with(ui::note("Built in: FLUX.1 Kontext [dev]. Or paste your own workflow (API format) with {{image}}, {{prompt}} and {{seed}} where they go.", "dim"))
+            .with(ui::note("Built in: FLUX.2 klein (4B runs on a laptop) and FLUX.1 Kontext [dev]. Or paste your own workflow (API format) with {{image}}, {{prompt}} and {{seed}} where they go.", "dim"))
+            .with(ui::link("Setting up FLUX.2 klein in ComfyUI", "https://huggingface.co/Comfy-Org/Flux-2-Klein-4B"))
             .with(json!({ "kind": "text", "id": "comfy_workflow", "label": "Own Workflow", "multiline": true,
                           "placeholder": "Optional: workflow JSON (Export (API) in ComfyUI)" }))
             .with(ui::link("Setting up FLUX.1 Kontext in ComfyUI", "https://docs.comfy.org/tutorials/flux/flux-1-kontext-dev"));
@@ -208,6 +240,8 @@ impl Guest for GenerativeRender {
                 shapecraft_plugin::message("Signed out. The key is removed from this computer (revoke it at openrouter.ai/settings/keys).")
             }
             "comfy_test" => comfy::test(&v),
+            "comfy_find" => comfy::find(&v),
+            a if a.starts_with("handoff:") => handoff(&a["handoff:".len()..], &v),
             // The app runs this after a key is saved: the new service's models are ready right away.
             "secret-saved" => {
                 let id = v.str("id");
@@ -243,7 +277,7 @@ fn refresh(service: &str) -> Result<usize, String> {
         "openrouter" => openrouter::list()?,
         "openai" => openai::list()?,
         "gemini" => gemini::list()?,
-        "comfy" => comfy::defaults(),
+        "comfy" => comfy::list()?,
         _ => Vec::new(),
     };
     save_models(service, &list)?;

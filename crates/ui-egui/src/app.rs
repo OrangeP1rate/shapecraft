@@ -2696,11 +2696,9 @@ impl eframe::App for ShapeCraftApp {
             }
         }
         crate::plugins::frame(ui);
-        // A plugin sheet set aside for Preferences comes back when Preferences closes.
-        if crate::plugins::sheet_waiting() && !self.ws.as_deref().is_some_and(|w| w.prefs_open) && self.home_prefs.is_none() {
-            crate::plugins::show_sheet_again();
-        }
+        let mut opened_prefs = false;
         for r in crate::plugins::take_requests() {
+            opened_prefs = true;
             match r {
                 crate::plugins::Request::OpenPlugins => match self.ws.as_deref_mut() {
                     Some(ws) => {
@@ -2710,6 +2708,14 @@ impl eframe::App for ShapeCraftApp {
                     None => self.home_prefs = Some(3),
                 },
             }
+        }
+        // A plugin sheet set aside for Preferences comes back once Preferences has closed (not in the frame it opens).
+        if !opened_prefs
+            && crate::plugins::sheet_waiting()
+            && !self.ws.as_deref().is_some_and(|w| w.prefs_open)
+            && self.home_prefs.is_none()
+        {
+            crate::plugins::show_sheet_again();
         }
         if let Some(url) = crate::landing::take_tablet_link() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));

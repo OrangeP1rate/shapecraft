@@ -2,19 +2,28 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
-## Next
-**Plugins, and the first one: Generative Render, with your own AI and no limits of ours.**
+## 0.11.0-alpha
+**Plugins: add only what you want, and the first one puts your model in any scene, with your own AI and no limits
+of ours.**
 ### New
-- **Generative Render.** In Visualization, describe a scene and get a picture of your model in it. Use the AI you
-  already have: sign in with OpenRouter (one account, many image models), paste an OpenAI or Google Gemini key, or
-  run it free on your own computer with ComfyUI. **Keep My Model Exact** keeps your model's own pixels, so the AI
-  can't change its shape. Make 1, 2 or 4 at a time, and save the ones you like. ShapeCraft sets no quota. See
-  [docs/generative-render.md](docs/generative-render.md).
-- **Plugins.** Preferences ▸ Plugins lists what you've added (switch each on or off, change its settings, remove
-  it) and what you can add. Each plugin shows what it may do before you add it, and runs sealed off from your files
-  and computer.
-- **Write your own plugin** in Rust against a small, documented API, and share it through a pull request. CI
-  builds it for every release. See [docs/plugins.md](docs/plugins.md).
+- **Plugins.** ShapeCraft stays lean, and bigger optional features come as plugins you add from Preferences ▸
+  Plugins ▸ Browse. Each one shows exactly what it may do before you add it (which sites it talks to, whether it
+  sees the view), runs sealed off from your files and computer, and can be switched off or removed any time. Adding
+  one shows its progress and what to do next.
+- **Generative Render (a plugin).** In Visualization, describe a scene and get a picture of your model in it.
+  - **Your own AI:** sign in with OpenRouter (one account, dozens of image models), paste an OpenAI or Google Gemini
+    key, or run it free and offline on your own computer with ComfyUI (found by itself; FLUX.2 klein works on a
+    laptop). No account at all? **Or free in a chat** takes your view to ChatGPT, Gemini, Copilot, Grok or Meta AI.
+  - **Keep My Model Exact** keeps your model's own pixels, so the AI can't change its shape; **Let It Move and
+    Resize** lets it float, turn or scale your model to suit the scene.
+  - **History** keeps every picture on your computer, with what made it, when, and your words: Save, Copy, Use
+    Prompt again, Delete. Pills on each picture say which service and model made it.
+  - 1, 2 or 4 pictures at a time, a prompt box that grows with your words, Edit and Try Again after a result, and a
+    sheet you can move. ShapeCraft sets no quota.
+  - See [docs/generative-render.md](docs/generative-render.md). Why a plugin: not everyone wants AI in their CAD
+    app, and this way it's there only if you add it.
+- **Write your own plugin** in Rust against a small, documented API; share it with a pull request and CI builds it
+  for every release. See [docs/plugins.md](docs/plugins.md).
 
 ## 0.10.5-alpha
 **Report a problem or suggest an idea without leaving ShapeCraft.**

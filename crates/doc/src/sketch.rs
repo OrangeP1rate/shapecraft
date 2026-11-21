@@ -236,6 +236,23 @@ pub fn rectangle_loop(entities: &[SketchEntity], i: u32) -> Option<[u32; 4]> {
     (end.distance(a0) < TOL * (1.0 + a0.length())).then_some(out)
 }
 
+/// The middle of every rectangle made of four lines (see [`rectangle_loop`]), once each, for snapping and its dot.
+/// Small sketches only: every line is tried against every other.
+pub fn rectangle_centers(entities: &[SketchEntity]) -> Vec<DVec2> {
+    if entities.len() > 400 {
+        return Vec::new();
+    }
+    (0..entities.len() as u32)
+        .filter_map(|i| {
+            let lp = rectangle_loop(entities, i)?;
+            // Each rectangle once: from its first line.
+            (lp.iter().min() == Some(&i)).then_some(())?;
+            let [p0, _, p2, _] = rectangle_frame(entities, lp)?.corners();
+            Some((p0 + p2) / 2.0)
+        })
+        .collect()
+}
+
 /// The frame of the rectangle `lines` make (see [`rectangle_loop`]).
 pub fn rectangle_frame(entities: &[SketchEntity], lines: [u32; 4]) -> Option<RectFrame> {
     let mut pts = Vec::with_capacity(8);
@@ -668,6 +685,8 @@ mod tests {
         let f = rectangle_frame(&es, lp).unwrap();
         assert!((f.width - 4.0).abs() < 1e-12 && (f.height - 2.0).abs() < 1e-12 && f.origin.distance(DVec2::new(0.0, 1.0)) < 1e-12);
         assert!(rectangle_loop(&es, 0).is_none());
+        // Its middle, once (#86); the loose line has none.
+        assert_eq!(rectangle_centers(&es), vec![DVec2::new(2.0, 2.0)]);
         // A turned one too.
         let r = glam::DAffine2::from_angle(0.4);
         let turned: Vec<SketchEntity> = SketchEntity::rectangle_lines(DVec2::ZERO, DVec2::new(3.0, 1.0))

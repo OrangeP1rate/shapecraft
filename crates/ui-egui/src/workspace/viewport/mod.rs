@@ -16,6 +16,7 @@
 
 mod annotations;
 mod clicks;
+mod curve_drag;
 mod dimensions;
 mod gizmo;
 mod gpu;
@@ -39,6 +40,7 @@ use super::tools::Tool;
 use crate::theme::{self, Tokens, radius};
 
 pub(in crate::workspace) use clicks::PenStroke;
+pub(in crate::workspace) use curve_drag::CurveDrag;
 pub(in crate::workspace) use dimensions::{DimEdit, DimKind, format_degrees};
 pub use gpu::ViewportGpu;
 /// A key point of what lies on a sketch plane: where (in the plane), its snap name, and whether it's a corner.
@@ -143,8 +145,8 @@ impl Workspace {
             vec![Pick::Face { body: Self::before_id(body), face }]
         } else if live && matches!(self.tool, Tool::Move(_) | Tool::Scale(_) | Tool::Pattern(_) | Tool::RotateAxis(_)) {
             self.session.selection.iter().filter(|p| matches!(p, Pick::Body { .. } | Pick::Plane { .. })).copied().collect()
-        } else if self.side_drag.is_some() {
-            // A side being pushed keeps its place in the sketch, so it stays picked.
+        } else if self.side_drag.is_some() || self.curve_drag.is_some() {
+            // A side being pushed (or a curve dragged) keeps its place in the sketch, so it stays picked.
             self.session.selection.clone()
         } else {
             Vec::new()

@@ -211,12 +211,7 @@ impl Workspace {
             }
             // A value that doesn't work keeps the box open with the reason under it.
             Key::Enter | Key::Tab if typing && !self.typed_ok() => {}
-            Key::Enter if self.dim_edit.is_some() => {
-                let kind = self.typed_kind();
-                if let (Some(edit), Some(v)) = (self.dim_edit.take(), self.numeric.take().and_then(|t| self.eval_field(&t, kind).ok())) {
-                    self.apply_dim(edit, v);
-                }
-            }
+            Key::Enter if self.dim_edit.is_some() => self.commit_dim_edit(),
             Key::Escape => self.escape(),
             // Return with nothing to finish opens Search Commands at the pointer (26.202, s36).
             Key::Enter if !typing && !self.is_live() && self.nothing_to_finish() => {

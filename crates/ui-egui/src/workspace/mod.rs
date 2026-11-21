@@ -345,6 +345,8 @@ pub struct Workspace {
     /// Which elements of the sketch being edited are fully defined, for the revision and sketch it was found for.
     defined: Option<(u64, ItemId, Vec<bool>)>,
     pub(crate) side_drag: Option<(ItemId, u32, Vec<shapecraft_doc::SketchEntity>, Pos2)>,
+    /// A sketch curve being dragged straight in the view (a side, a rectangle's corner, a circle's rim…): #87.
+    pub(crate) curve_drag: Option<viewport::CurveDrag>,
     /// The revision a pulled tool's step left (Extrude, Offset Face, Shell, Chamfer/Fillet): pulling again amends
     /// that step, as the reference's live handles do, until another tool or selection takes over.
     pub(crate) live_step: Option<u64>,
@@ -758,6 +760,7 @@ impl Workspace {
             sketch_drag: None,
             pen_stroke: viewport::PenStroke::default(),
             side_drag: None,
+            curve_drag: None,
             just_drawn: Vec::new(),
             defined: None,
             live_step: None,

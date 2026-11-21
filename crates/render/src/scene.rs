@@ -525,6 +525,13 @@ fn sketch_geometry(out: &mut Built, scene: &SceneInput, sketch: &Sketch, active:
                     out.dots.push((m, c.selected_pre.with_alpha(110), 16.0));
                     out.dots.push((m, c.selected_pre, 8.0));
                 }
+            } else if let Some(lp) = rect
+                && lp.iter().min() == Some(&(i as u32))
+                && let Some(f) = shapecraft_doc::rectangle_frame(&sketch.entities, lp)
+            {
+                // Not picked: a plain point at its middle, which snaps (#86, as observed).
+                let [p0, _, p2, _] = f.corners();
+                out.dots.push((plane.to_world((p0 + p2) / 2.0), point_color, 5.0));
             } else if selected && let Some(center) = center_point(e) {
                 out.dots.push((plane.to_world(center), c.selected_pre, 9.0));
             }

@@ -220,7 +220,7 @@ impl Workspace {
         if matches!(self.tool, Tool::Idle) && self.section_drags(ui, resp) {
             return;
         }
-        if self.side_drags(ui, resp) {
+        if self.side_drags(ui, resp) || self.curve_drags(ui, resp) {
             return;
         }
         if self.sketch_drags(ui, resp) {

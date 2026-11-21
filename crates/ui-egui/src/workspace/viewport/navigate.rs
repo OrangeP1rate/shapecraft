@@ -118,6 +118,7 @@ impl Workspace {
 
     pub(in crate::workspace) fn dragging_handle(&self) -> bool {
         self.side_drag.is_some()
+            || self.curve_drag.is_some()
             || self.text_drag.is_some()
             || self.fillet_drag
             || matches!(&self.tool, Tool::Text { at: Some(_), .. })

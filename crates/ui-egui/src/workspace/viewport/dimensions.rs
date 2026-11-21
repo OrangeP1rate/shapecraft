@@ -584,6 +584,16 @@ impl Workspace {
         out
     }
 
+    /// Ends the dimension being typed into: a value that works is applied (Return, or a click anywhere else, as
+    /// observed: #88), anything else just closes the box.
+    pub(in crate::workspace) fn commit_dim_edit(&mut self) {
+        let Some(edit) = self.dim_edit.take() else { return };
+        let kind = if edit.kind == DimKind::Angle { shapecraft_doc::VarKind::Angle } else { shapecraft_doc::VarKind::Length };
+        if let Some(v) = self.numeric.take().filter(|t| !t.trim().is_empty()).and_then(|t| self.eval_field(&t, kind).ok()) {
+            self.apply_dim(edit, v);
+        }
+    }
+
     /// Applies a typed dimension to its sketch element.
     pub(in crate::workspace) fn apply_dim(&mut self, mut edit: DimEdit, value: f64) {
         // A point distance: the second element moves to meet it, and it's kept (s15-012).

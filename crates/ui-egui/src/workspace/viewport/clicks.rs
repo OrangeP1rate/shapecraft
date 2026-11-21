@@ -290,6 +290,8 @@ impl Workspace {
             return;
         }
         self.selected_constraint = None;
+        // A value typed into a dimension and not yet applied: a click anywhere else applies it first (#88).
+        self.commit_dim_edit();
         // A driving dimension's value: type a new one. On a touch screen the numpad opens beside it, as a
         // tool's value pill does (#84).
         if let Some((sketch, entity, kind, ..)) =
@@ -325,9 +327,6 @@ impl Workspace {
             self.numeric = Some(String::new());
             self.numpad_at = Some(c);
             return;
-        }
-        if self.dim_edit.take().is_some() {
-            self.numeric = None;
         }
         self.click_at(c, shift);
     }
@@ -1189,7 +1188,7 @@ impl Workspace {
 }
 
 /// The elements a line moved by `by` changes: the line, and the ends of other lines that met its ends.
-fn moved_side(base: &[SketchEntity], line: u32, by: DVec2) -> Vec<serde_json::Value> {
+pub(super) fn moved_side(base: &[SketchEntity], line: u32, by: DVec2) -> Vec<serde_json::Value> {
     let Some(SketchEntity::Line { a, b }) = base.get(line as usize) else { return Vec::new() };
     let (a, b) = (*a, *b);
     let near = |p: DVec2, q: DVec2| p.distance(q) < 1e-7 * (1.0 + q.length());

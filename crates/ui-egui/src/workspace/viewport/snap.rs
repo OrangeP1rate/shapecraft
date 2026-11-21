@@ -148,6 +148,11 @@ impl Workspace {
                     names.push(n);
                 }
             }
+            // A rectangle's middle (it is four lines, so no one curve has it): #86, as observed.
+            for p in shapecraft_doc::rectangle_centers(&sk.entities) {
+                keys.push(p);
+                names.push("Center");
+            }
             // Where curves cross (small sketches only: every pair is tried).
             if sk.entities.len() <= 200 {
                 for p in shapecraft_doc::sketch_ops::crossings(&sk.entities, 500) {
@@ -284,7 +289,7 @@ impl Workspace {
     }
 
     /// With Snap ▸ Grid on, the point rounded to the grid (when it's within a few pixels of a grid line).
-    fn grid_snapped(&self, p: DVec2) -> DVec2 {
+    pub(super) fn grid_snapped(&self, p: DVec2) -> DVec2 {
         if !self.snap_opts.grid {
             return p;
         }

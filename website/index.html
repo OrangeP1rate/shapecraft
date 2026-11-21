@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-version="0.10.0-alpha">
+<html lang="en" data-version="0.11.1-alpha">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -246,6 +246,25 @@ section>.wrap{z-index:1}
 .kbd{box-shadow:0 0 0 1px var(--amber-soft)}
 .ticks li:before{content:"";width:18px;height:18px;flex:none;border-radius:6px;background:var(--blue-soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 10.5l3 3 7-7' fill='none' stroke='%231d4fff' stroke-width='2.2'/%3E%3C/svg%3E") center/14px no-repeat}
 
+/* Generative Render: the same view before and after, with a handle to slide between them */
+.compare{position:relative;border-radius:14px;overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow);aspect-ratio:1600/948;background:#111;--x:50%;touch-action:pan-y}
+.compare img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border:0;border-radius:0;box-shadow:none;user-select:none;-webkit-user-drag:none}
+.compare .after{clip-path:inset(0 0 0 var(--x))}
+.compare .bar{position:absolute;top:0;bottom:0;left:var(--x);width:2px;margin-left:-1px;background:#fff;pointer-events:none;box-shadow:0 0 14px rgba(0,0,0,.45)}
+.compare .bar:after{content:"";position:absolute;top:50%;left:50%;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M8 6l-4 4 4 4M12 6l4 4-4 4' fill='none' stroke='%23141414' stroke-width='1.8'/%3E%3C/svg%3E") center/18px no-repeat;box-shadow:0 2px 10px rgba(0,0,0,.35)}
+.compare input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:ew-resize;margin:0}
+.compare .tg{position:absolute;top:12px;z-index:1;font:500 12px var(--mono);color:#fff;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);padding:5px 10px;border-radius:99px;pointer-events:none;white-space:nowrap}
+.compare .tg i{font-style:normal}
+#render .ctas{margin-top:24px}
+.compare .tg.l{left:12px} .compare .tg.r{right:12px} .compare .tg.r b{color:#8fb0ff;font-weight:600}
+.gr2{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1fr);gap:40px;align-items:center;margin-top:72px}
+.gr2 figure{margin:0} .gr2 figure img{width:100%;height:auto;border-radius:14px;border:1px solid var(--line);box-shadow:var(--shadow);display:block}
+.gr2 figcaption{font:500 12.5px var(--mono);color:var(--ink-3);margin-top:10px}
+.pillars{display:grid;gap:14px}
+.pillars>div{padding:22px 24px;border-radius:16px;border:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:6px}
+.pillars .n{font:600 12px var(--mono);color:var(--amber)}
+.pillars b{font-size:19px;letter-spacing:-.01em} .pillars span:last-child{font-size:14.5px;color:var(--ink-2)}
+
 /* tiles */
 .gpu{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:28px;align-items:center;margin-top:30px;padding:26px 28px;border-radius:16px;
   border:1px solid var(--line);background:radial-gradient(500px 220px at 100% 50%,var(--amber-soft),transparent 70%),var(--canvas)}
@@ -341,7 +360,7 @@ html.cubing .hint,html.cubing .status{opacity:0}
   section{padding:84px 16px 64px} footer{padding:28px 16px}
   .split,.split.flip{grid-template-columns:1fr;gap:28px} .split.flip .txt{order:0}
   .steps4,.soon5{grid-template-columns:1fr 1fr} .steps4 .st:nth-child(2){border-right:0} .steps4 .st:nth-child(-n+2){border-bottom:1px solid var(--line)}
-  .tiles6,.formats,.trio,.dl3,.shots3,.gpu{grid-template-columns:1fr} .gpu-c{justify-content:flex-start}
+  .tiles6,.formats,.trio,.dl3,.shots3,.gpu,.gr2{grid-template-columns:1fr} .gr2{margin-top:44px} .gpu-c{justify-content:flex-start}
   .float-card{position:static;margin-top:10px}
   .marks:before,.marks:after{display:none}
   footer .in{grid-template-columns:1fr 1fr}
@@ -352,6 +371,7 @@ html.cubing .hint,html.cubing .status{opacity:0}
   .steps4,.soon5{grid-template-columns:1fr} .steps4 .st{border-right:0;border-bottom:1px solid var(--line)}
   .strip .ver{display:none} .strip nav a:not(.btn){display:none} .hint{display:none}
   .chip{font-size:11px;left:10px}
+  .compare .tg i{display:none}
 }
 </style>
 </head>
@@ -410,6 +430,7 @@ html.cubing .hint,html.cubing .status{opacity:0}
     <a class="rowlink" href="#extrude"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 12h12v5H4zM10 11V3M7 6l3-3 3 3"/></svg><span class="tx">Extrude 01</span></a>
     <a class="rowlink" href="#fillet"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 16V9a5 5 0 0 1 5-5h7"/></svg><span class="tx">Fillet 01</span></a>
     <a class="rowlink" href="#move"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3v14M3 10h14"/></svg><span class="tx">Move 01</span></a>
+    <a class="rowlink" href="#render"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="m5 13 3.5-3.5 2.5 2.5 2-2 2 2"/><circle cx="13.5" cy="8" r="1"/></svg><span class="tx">Render 01</span></a>
     <a class="rowlink" href="#agents"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6l4 4-4 4M10 15h6"/></svg><span class="tx">Command 01</span></a>
     <a class="rowlink" href="#files"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h5l2 2h7v8H3z"/></svg><span class="tx">Export 01</span></a>
     <a class="rowlink" href="#download"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg><span class="tx">Download</span></a>
@@ -428,6 +449,7 @@ html.cubing .hint,html.cubing .status{opacity:0}
   <a class="tool" href="#extrude" data-for="extrude"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 12h12v5H4zM10 11V3M7 6l3-3 3 3"/></svg></span><span class="lb">Extrude</span></a>
   <a class="tool" href="#fillet" data-for="fillet"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 16V9a5 5 0 0 1 5-5h7"/></svg></span><span class="lb">Fillet</span></a>
   <a class="tool" href="#move" data-for="move"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3v14M3 10h14M10 3 8 5M10 3l2 2M17 10l-2-2M17 10l-2 2"/></svg></span><span class="lb">Move</span></a>
+  <a class="tool" href="#render" data-for="render"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="m5 13 3.5-3.5 2.5 2.5 2-2 2 2"/><circle cx="13.5" cy="8" r="1"/></svg></span><span class="lb">Render</span></a>
   <a class="tool" href="#agents" data-for="agents"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6l4 4-4 4M10 15h6"/></svg></span><span class="lb">Automate</span></a>
   <a class="tool" href="#files" data-for="files"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h5l2 2h7v8H3z"/></svg></span><span class="lb">Files</span></a>
   <a class="tool" href="#download" data-for="download"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg></span><span class="lb">Download</span></a>
@@ -537,6 +559,40 @@ html.cubing .hint,html.cubing .status{opacity:0}
   </div>
 </section>
 
+<section id="render" class="s-feat" data-hint="Describe a <b>scene</b>. Your model stays exactly as you drew it" data-name="Render 01">
+  <div class="glint br gridded"></div>
+  <div class="wrap">
+    <div class="split marks">
+      <div class="txt">
+        <div class="label"><span>05</span>Generative Render · a plugin</div>
+        <h2>Put your model in any scene.</h2>
+        <p>Describe a place, the light and the mood, and Generative Render paints the world around the view you're looking at. <b>Keep It Exact</b> keeps every pixel of your model, so the shape you designed is the shape in the picture, sitting in its scene with real shadows.</p>
+        <ul class="ticks"><li>Your own AI: OpenRouter, OpenAI or Google Gemini</li><li>Free and offline with ComfyUI on your own computer</li><li>No account at all? Take your view to a free chat</li><li>Every picture kept in History, with the words that made it</li></ul>
+        <div class="ctas"><a class="btn ghost" href="https://github.com/jackharvest/shapecraft/blob/main/docs/generative-render.md">How it works</a><a class="btn ghost" href="https://github.com/jackharvest/shapecraft/blob/main/docs/plugins.md">Write a plugin</a></div>
+      </div>
+      <div class="media reveal">
+        <div class="compare" id="compare">
+          <img src="media/gr-before.jpg" alt="The handheld console in ShapeCraft's view: blue, on a plain dark background" width="1600" height="948" loading="lazy">
+          <img class="after" src="media/gr-after.jpg" alt="The same handheld, unchanged, on a light oak desk by a sunny window with a mug, a plant and an open notebook" width="1600" height="948" loading="lazy">
+          <span class="tg l">Your view</span><span class="tg r"><b>Generated</b><i> · free, on a Mac</i></span>
+          <span class="bar"></span>
+          <input type="range" min="0" max="100" value="50" aria-label="Slide between your view and the generated picture">
+        </div>
+        <div class="float-card"><div class="title">Generative Render <small>ComfyUI</small></div><div class="row"><span class="k">What changes</span><span class="v">Surroundings</span></div><div class="row"><span class="k">Your model</span><span class="v on">Exact</span></div></div>
+      </div>
+    </div>
+    <div class="gr2 reveal">
+      <figure><img src="media/gr-sheet.jpg" alt="The Generative Render sheet: the picture on top, the words under it, then tiles for what changes, your model, the AI model and how many pictures" width="1200" height="1406" loading="lazy">
+        <figcaption>Every option is a tile with a picture of what it does.</figcaption></figure>
+      <div class="pillars">
+        <div><span class="n">01</span><b>A plugin, not a payload.</b><span>ShapeCraft doesn't come with AI built in. Add Generative Render from Preferences ▸ Plugins if you want it, and see exactly what it may do before you do. It runs sealed off from your files and your computer, and you can switch it off or remove it any time. Everyone else keeps a lean app.</span></div>
+        <div><span class="n">02</span><b>Your AI, your account, or none.</b><span>Your view and your words go from your computer to the service you picked, and nowhere else. ShapeCraft never sees them and has no account to make. With ComfyUI, nothing leaves your computer at all.</span></div>
+        <div><span class="n">03</span><b>No limits of ours.</b><span>No credits, no monthly cap. Make as many as your provider or your graphics card allows. An AI assistant connected over MCP can use it too, but anything that costs money waits for you to press Allow.</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="s-tiles" data-hint="Everything else that comes in the box" data-name="Move 01">
   <div class="glint tr gridded"></div>
   <div class="wrap">
@@ -571,7 +627,7 @@ html.cubing .hint,html.cubing .status{opacity:0}
   <div class="glint bl gridded"></div>
   <div class="wrap split">
     <div class="txt">
-      <div class="label"><span>05</span>Automate</div>
+      <div class="label"><span>06</span>Automate</div>
       <h2>Every button is a command.</h2>
       <p>Menus, shortcuts, command search, scripts, the CLI, a JSON control channel and a built-in MCP server all call the same command list. Run it headless on a server, or connect to the open app and watch the model being built. The handheld at the top of this page was made that way, one command at a time.</p>
       <div class="ctas"><a class="btn ghost" href="https://github.com/jackharvest/shapecraft/blob/main/docs/mcp.md">Read the MCP guide</a></div>
@@ -590,7 +646,7 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
 <section id="files" class="s-feat" data-hint="Your files stay <b>yours</b>" data-name="Export 01">
   <div class="glint bl gridded"></div>
   <div class="wrap">
-    <div class="label center"><span>06</span>Exchange</div>
+    <div class="label center"><span>07</span>Exchange</div>
     <h2 class="center">Plain folders. Open formats.</h2>
     <p class="lede center">Open the files you already have, from <code>.shapr</code> projects to STEP and Parasolid. A project is a folder: a readable <code>project.json</code> with the History, and the bodies as STEP. An imported file is never written over. Drawings go out as PDF, SVG, DXF and DWG, and a sketch can go out as DWG.</p>
     <div class="formats reveal">
@@ -612,7 +668,7 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
 <section id="download" class="s-blue" data-hint="Pick your <b>platform</b>. Alpha builds: keep backups" data-name="Download">
   <div class="glint mid gridded"></div>
   <div class="wrap marks">
-    <div class="label center light"><span>07</span>Download</div>
+    <div class="label center light"><span>08</span>Download</div>
     <h2 class="center">Get ShapeCraft.</h2>
     <p class="lede center">Download, double-click, model. Everything it needs is inside, and it keeps itself up to date.</p>
     <div class="dl3 reveal">
@@ -630,7 +686,7 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
 <section id="soon" class="s-feat" data-hint="Coming next. Your <b>feedback</b> decides what's first" data-name="Nearing completion">
   <div class="glint tr gridded"></div>
   <div class="wrap">
-    <div class="label center"><span>08</span>Nearing completion</div>
+    <div class="label center"><span>09</span>Nearing completion</div>
     <h2 class="center">What's next.</h2>
     <p class="lede center">What you report from the apps shapes these, so tell us how you use it.</p>
     <div class="soon5 reveal">
@@ -646,7 +702,7 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
 <section id="donate" class="s-coffee" data-hint="Free forever. <b>Tips</b> keep it moving" data-name="Support">
   <div class="glint tr gridded"></div>
   <div class="wrap split">
-    <div class="txt"><div class="label"><span>09</span>Support</div>
+    <div class="txt"><div class="label"><span>10</span>Support</div>
       <h2>Free. If it saved you a subscription…</h2>
       <p>No paid tier, ever. Building it still costs money in test hardware, build machines and development tools. My wife is fairly sure that's where my evenings and our money disappear to. A coffee is the best counter-argument I have. It buys no features and no priority, only more hours on the work.</p></div>
     <div class="center reveal"><a class="bmc big" href="https://www.buymeacoffee.com/jackharvest">☕ Prove my wife wrong</a><p class="small">Can't tip? A star or a good bug report helps as much.</p></div>
@@ -656,7 +712,7 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
 <section id="contribute" class="s-feat alt" data-hint="Found a bug? <b>Report it</b> on GitHub" data-name="Your step next">
   <div class="glint br gridded"></div>
   <div class="wrap">
-    <div class="label center"><span>10</span>Contribute</div>
+    <div class="label center"><span>11</span>Contribute</div>
     <h2 class="center">Help shape it.</h2>
     <div class="trio reveal">
       <a href="https://github.com/jackharvest/shapecraft/issues/new/choose"><b>Report a bug →</b><span>What you did, what you expected, and the project folder if you can.</span></a>
@@ -889,6 +945,21 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
   addEventListener('wheel',function(e){if(active)e.preventDefault()},{passive:false});
   addEventListener('keydown',function(e){if(active&&e.key==='Escape')snapBack()});
   draw();
+})();
+
+/* Generative Render: slide between the view and the picture. It eases in once when it first comes into view. */
+(function(){
+  var c=document.getElementById('compare'); if(!c) return;
+  var r=c.querySelector('input');
+  function set(v){c.style.setProperty('--x',v+'%')}
+  r.addEventListener('input',function(){set(r.value)});
+  if(!('IntersectionObserver' in window)||matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  var io=new IntersectionObserver(function(es){
+    if(!es[0].isIntersecting) return; io.disconnect();
+    var t0=performance.now();
+    (function step(t){var k=Math.min(1,(t-t0)/1400), e=1-Math.pow(1-k,3), v=88-38*e; set(v); r.value=v; if(k<1&&document.activeElement!==r) requestAnimationFrame(step)})(t0);
+  },{threshold:.5});
+  io.observe(c);
 })();
 </script>
 </body>

@@ -1095,7 +1095,12 @@ pub(crate) fn button(ui: &Ui, right: f32, y: f32, label: &str, style: Style, ena
     };
     let p = ui.painter();
     p.rect_filled(r, radius(6), fill);
-    let ink = if enabled { Color32::WHITE } else { Tokens::text_ghost() };
+    // White on blue, and on the grey button in the dark theme; the light theme's grey is pale, so dark ink there.
+    let ink = match style {
+        _ if !enabled => Tokens::text_ghost(),
+        Style::Plain if theme::is_light() => Tokens::text_strong(),
+        _ => Color32::WHITE,
+    };
     p.text(r.center(), Align2::CENTER_CENTER, label, theme::body(13.0), ink);
     (enabled && resp.clicked(), r)
 }

@@ -2082,7 +2082,7 @@ fn header_switch(ui: &Ui, r: Rect, c: &Control, values: &Map<String, Value>, act
         } else if resp.hovered() {
             p.rect_filled(s, inner, Tokens::button_hover());
         }
-        let g = p.layout_no_wrap(o.clone(), theme::body(12.5), Color32::WHITE);
+        let g = p.layout_no_wrap(o.clone(), theme::body(12.5), Color32::PLACEHOLDER);
         let icon = icons.get(k).filter(|i| known_icon(i));
         let total = g.size().x + if icon.is_some() { 22.0 } else { 0.0 };
         let mut tx = s.center().x - total / 2.0;
@@ -2367,7 +2367,7 @@ fn tile(ui: &Ui, r: Rect, id: egui::Id, label: &str, icon: &str, on: bool, check
     let ps = pict_size(icon);
     let pict = Rect::from_center_size(pos2(r.center().x, r.top() + 10.0 + 20.0), ps);
     pictogram(p, pict, icon, on);
-    let g = p.layout_no_wrap(label.to_string(), theme::body(12.0), Color32::WHITE);
+    let g = p.layout_no_wrap(label.to_string(), theme::body(12.0), Color32::PLACEHOLDER);
     let col = if on { Tokens::text_strong() } else { Tokens::text_dim() };
     let lr = Rect::from_min_max(pos2(r.left() + 4.0, r.top()), pos2(r.right() - 4.0, r.bottom()));
     p.with_clip_rect(lr).galley(pos2(r.center().x - g.size().x / 2.0, r.bottom() - 10.0 - g.size().y), g, col);

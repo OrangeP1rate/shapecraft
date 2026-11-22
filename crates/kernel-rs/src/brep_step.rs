@@ -96,7 +96,7 @@ fn edge_ends(brep: &Brep) -> Vec<(Option<usize>, Option<usize>)> {
 }
 
 /// Which faces of a solid to walk the other way round so that every edge is walked once each way: a body whose
-/// faces disagree (seen in Shapr3D files: a symmetric extrude's mirrored half walked backwards) is made to agree,
+/// faces disagree (seen in .shapr imports: a symmetric extrude's mirrored half walked backwards) is made to agree,
 /// keeping the side whose loops enclose a positive volume. Nothing turns for a body that already agrees, or one no
 /// turning can fix.
 fn turned_faces(brep: &Brep, ends: &[(Option<usize>, Option<usize>)]) -> Vec<bool> {

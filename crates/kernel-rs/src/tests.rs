@@ -68,7 +68,8 @@ fn closed_meshes_are_solids() {
 #[test]
 fn what_it_cant_do_yet_says_so() {
     let b = K.make_box(DVec3::ZERO, DVec3::ONE).unwrap();
-    let e = K.fillet_edges_variable(&b, &[0], 0.1, 0.2).unwrap_err().to_string();
+    let face = K.face(&b, 0).unwrap();
+    let e = K.scale(&face, DVec3::ZERO, DVec3::splat(2.0)).unwrap_err().to_string();
     assert!(e.contains("not in the Rust kernel yet"), "{e}");
     let occt_made = shapecraft_kernel::Shape::new(Foreign);
     assert!(K.mass_props(&occt_made).is_err(), "another kernel's shape is refused, not misread");
@@ -390,4 +391,20 @@ fn outlines_projected_onto_a_face_split_it() {
     let far = K.extrude_circle(DVec3::new(50.0, 50.0, 25.0), 4.0, DVec3::Z).unwrap();
     let away = K.face(&far, top_of(&far, 26.0)[0]).unwrap();
     assert!(K.imprint(&block, top, &[(away, None)]).is_err());
+}
+
+#[test]
+fn variable_fillets_round_lone_straight_edges_and_refuse_corners() {
+    let cube = K.make_box(DVec3::ZERO, DVec3::splat(10.0)).unwrap();
+    let front = edge_near(&cube, DVec3::new(5.0, 0.0, 10.0));
+    let side = edge_near(&cube, DVec3::new(0.0, 5.0, 10.0));
+    let r = K.fillet_edges_variable(&cube, &[front], 1.0, 3.0).unwrap();
+    let loss = 1000.0 - K.mass_props(&r).unwrap().volume;
+    assert!((loss - 9.4833).abs() < 1e-3, "{loss}");
+    // Two edges meeting at a corner, and a round edge: refused with a reason, not a wrong shape.
+    assert!(K.fillet_edges_variable(&cube, &[front, side], 1.0, 3.0).is_err());
+    let disc = K.extrude_circle(DVec3::ZERO, 5.0, DVec3::Z * 2.0).unwrap();
+    assert!(K.fillet_edges_variable(&disc, &[edge_near(&disc, DVec3::new(5.0, 0.0, 2.0))], 0.5, 1.0).is_err());
+    // Too big for the edges it ends on.
+    assert!(K.fillet_edges_variable(&cube, &[front], 1.0, 11.0).is_err());
 }

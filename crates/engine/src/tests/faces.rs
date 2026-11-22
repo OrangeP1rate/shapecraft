@@ -615,3 +615,35 @@ fn revolve_with_a_height_makes_a_coil() {
     // Without a height, past one turn is still refused.
     assert!(s.execute("revolve", &json!({"sketch": 1, "region": 0, "axis": "v", "angle": 720})).is_err());
 }
+
+/// A variable fillet eases from `radius` at the edge's start to `radius2` at its end (level at both ends, as Open
+/// CASCADE's does): rounding a cube's edge from 1 to 3 takes ≈ 9.48 (a rolling ball's envelope; circular sections
+/// square to the edge with a straight change would take 9.30), more of it toward the end. Two edges apart take twice.
+#[test]
+fn variable_fillet_eases_from_one_radius_to_the_other() {
+    let cube = || {
+        let mut s = session();
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("rectangle", &json!({"corner": [0, 0], "opposite": [10, 10]})).unwrap();
+        s.execute("extrude", &json!({"sketch": 1, "region": 0, "distance": 10})).unwrap();
+        s
+    };
+    let mut s = cube();
+    let front = edges_where(&s, 0, |p| p[1].abs() < 1e-3 && (p[2] - 10.0).abs() < 1e-3);
+    s.execute("fillet", &json!({"body": 2, "edges": front, "radius": 1, "radius2": 3})).unwrap();
+    let loss = 1000.0 - volume(&mut s);
+    assert!((loss - 9.48).abs() < 0.01, "{loss}");
+    let shape = s.doc.bodies[0].shape.clone();
+    let halves = s.kernel.split_by_plane(&shape, shapecraft_kernel::DVec3::new(5.0, 0.0, 0.0), shapecraft_kernel::DVec3::X).unwrap();
+    let mut by_x: Vec<(f64, f64)> =
+        halves.iter().map(|h| (s.kernel.bounds(h).unwrap().min.x, s.kernel.mass_props(h).unwrap().volume)).collect();
+    by_x.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert!(by_x.len() == 2 && by_x[0].1 - by_x[1].1 > 4.0, "the start keeps more: {by_x:?}");
+
+    let mut s = cube();
+    let apart =
+        edges_where(&s, 0, |p| (p[1].abs() < 1e-3 && (p[2] - 10.0).abs() < 1e-3) || ((p[1] - 10.0).abs() < 1e-3 && p[2].abs() < 1e-3));
+    assert_eq!(apart.len(), 2);
+    s.execute("fillet", &json!({"body": 2, "edges": apart, "radius": 1, "radius2": 3})).unwrap();
+    assert!((1000.0 - volume(&mut s) - 2.0 * loss).abs() < 1e-3, "{}", 1000.0 - volume(&mut s));
+}

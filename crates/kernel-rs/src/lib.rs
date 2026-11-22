@@ -20,6 +20,7 @@ mod remove;
 mod step;
 mod surgery;
 mod unify;
+mod varfillet;
 mod wrap;
 
 use std::collections::HashMap;
@@ -654,7 +655,8 @@ impl Kernel for RustKernel {
             F::MoveEdge => Limited("circles round a flat face, and straight edges between flat faces"),
             F::Fill => Limited("flat openings (any opening on a mesh body)"),
             F::WrapEmboss => Limited("on cones, and across a face's edge, it takes up to a second"),
-            F::VariableFillet | F::SetbackCorners => Missing,
+            F::VariableFillet => Limited("straight edges between flat faces, ending square on flat faces, not meeting at corners"),
+            F::SetbackCorners => Missing,
             F::ProjectAsEdge => Limited("closed outlines that land inside one flat face"),
             F::Iges => Limited("solids and shells (B-rep); files of loose trimmed surfaces need Open CASCADE"),
             F::Extrude | F::DraftAngles | F::Loft | F::PushPull | F::Chamfer | F::Shell | F::SplitBody => Full,
@@ -943,7 +945,7 @@ impl Kernel for RustKernel {
         if (r1 - r2).abs() <= 1e-12 * r1.abs().max(1.0) {
             return self.fillet_edges(shape, edges, r1);
         }
-        Err(not_yet("variable-radius fillets"))
+        varfillet::fillet_variable(exact(shape)?, edges, r1, r2)
     }
 
     fn translate(&self, shape: &Shape, by: DVec3) -> Result<Shape> {

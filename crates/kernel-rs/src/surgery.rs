@@ -17,15 +17,15 @@ use shapecraft_kernel::{DMat3, DVec3, Kernel, Result, Shape};
 use crate::{ArShape, RustKernel, bad, edges_of, pack, wrap};
 
 /// The picked edges' body as a neutral B-rep, which body of the shape it is, and the picks as its edge indices.
-struct Opened {
-    body: usize,
-    brep: Brep,
-    edges: Vec<usize>,
+pub(crate) struct Opened {
+    pub(crate) body: usize,
+    pub(crate) brep: Brep,
+    pub(crate) edges: Vec<usize>,
     arris: HashMap<usize, EdgeId>,
     faces: HashMap<arris::topo::FaceId, usize>,
 }
 
-fn open(s: &ArShape, picks: &[u32]) -> Result<Opened> {
+pub(crate) fn open(s: &ArShape, picks: &[u32]) -> Result<Opened> {
     let all = edges_of(s);
     let mut body = None;
     let mut ids = Vec::with_capacity(picks.len());
@@ -462,7 +462,7 @@ const CHAMFER2: &str = "the Rust kernel makes two-distance chamfers on outside e
                         where a flat face meets a cylinder or cone about the same axis";
 
 /// A face's outward normal when it's flat.
-fn plane_out(b: &Brep, f: usize) -> Option<DVec3> {
+pub(crate) fn plane_out(b: &Brep, f: usize) -> Option<DVec3> {
     match b.surfaces.get(b.faces[f].surface)? {
         Surface::Plane { normal, .. } => Some(normal.normalize() * if b.faces[f].flip { -1.0 } else { 1.0 }),
         _ => None,

@@ -17,9 +17,13 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
   Parasolid, SolidWorks, NX and Solid Edge files have, used to stop the import; they read now.
 - **A second geometry kernel, in pure Rust (in testing).** Preferences ▸ Advanced ▸ Geometry Kernel picks between
   Open CASCADE (the default) and a new kernel written entirely in Rust, built on the open-source Arris kernel. It
-  models exactly (sketches with lines, arcs and circles; extrude, revolve, loft, sweep, threads; booleans, fillets,
-  chamfers, shells, offsets; STEP in and out) and already passes 135 of the 188 modeling checks Open CASCADE does;
-  the tab shows the current count. What it can't do yet, it says so instead of guessing. Projects made with it
+  models exactly (sketches, extrude with draft, revolve, loft, sweep, threads; booleans, fillets, chamfers, shells,
+  offsets, Offset Edge, deleting holes and pockets; drawings; STEP with part names and colors, and every file
+  Open CASCADE opens except IGES) and passes 169 of the 188 modeling checks Open CASCADE does. The Advanced tab
+  lists what it does the same, what works with limits, and what still needs Open CASCADE; while it runs, those
+  tools and options (Fill, Wrap & Emboss, Project as Edge, two-distance chamfers, setback corners, IGES) are
+  greyed out and say why. Most modeling runs as fast or faster than on Open CASCADE (fillets, chamfers, shells
+  and lofts several times faster); cuts into faces full of holes and threads are slower. Projects made with it
   live in a folder of their own, so your work stays on Open CASCADE while you try it. Restart to switch. For
   developers: `--kernel rust` or `SHAPECRAFT_KERNEL=rust`, and the command-line tools build without Open CASCADE
   at all (`cargo build -p shapecraft-cli --no-default-features`), checked by CI on every push.

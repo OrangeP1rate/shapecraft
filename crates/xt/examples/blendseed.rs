@@ -13,7 +13,12 @@ fn main() {
         println!("s0 {}", format!("{:?}", s[s0]).chars().take(400).collect::<String>());
         for k in 0..n {
             let q = p + d * k as f64;
-            let both = shapecraft_xt::blend::on_both(s, (s0, o0), (s1, o1), q);
+            let both = shapecraft_xt::blend::on_both(
+                s,
+                shapecraft_xt::blend::Support::Surface(s0, o0),
+                shapecraft_xt::blend::Support::Surface(s1, o1),
+                q,
+            );
             let f0 = shapecraft_xt::blend::project(s, s0, q);
             println!(
                 "seed {q:.4?} on_both {both:.5?} moved {:?} | foot0 {:.4?} dist {:?}",

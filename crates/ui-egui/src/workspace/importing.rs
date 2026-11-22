@@ -92,6 +92,9 @@ impl Workspace {
                 if skipped == 1 { "was" } else { "were" }
             ));
         }
+        if let Some(note) = done["note"].as_str() {
+            self.toast(note.to_string());
+        }
         let cut = done["repair_cut"].as_u64().unwrap_or(0);
         if cut > 0 {
             self.toast(format!(

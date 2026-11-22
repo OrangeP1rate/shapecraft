@@ -287,12 +287,12 @@ fn project_nurbs(s: &NurbsSurface, p: DVec3) -> Option<(DVec3, DVec3)> {
     (n.length() > 1e-300).then(|| (q, n / n.length()))
 }
 
-/// The point nearest `p` on the curve where two surfaces, each moved `offset` along its natural normal, meet.
-pub fn on_both(surfaces: &[Surface], a: (usize, f64), b: (usize, f64), mut p: DVec3) -> Option<DVec3> {
+/// The point nearest `p` on the curve where two supports, each moved out by its offset, meet.
+pub fn on_both(surfaces: &[Surface], a: Support, b: Support, mut p: DVec3) -> Option<DVec3> {
     for _ in 0..60 {
-        let (fa, na) = project(surfaces, a.0, p)?;
-        let (fb, nb) = project(surfaces, b.0, p)?;
-        let (fa, fb) = (fa + a.1 * na, fb + b.1 * nb);
+        let (fa, na) = a.touch(surfaces, p)?;
+        let (fb, nb) = b.touch(surfaces, p)?;
+        let (fa, fb) = (fa + a.offset() * na, fb + b.offset() * nb);
         // The point closest to p on the line where both tangent planes meet.
         let c = na.dot(nb);
         let det = 1.0 - c * c;
@@ -388,7 +388,7 @@ fn stretch_for(surfaces: &[Surface], s: [Support; 2], spine: Vec<DVec3>, near: &
     // A corner lies on the ball's section at its station: across the spine from the center there. Among the stations
     // about a ball's radius away, that is the one whose tangent the corner is least along.
     let tangent = |i: usize| (spine[(i + 1).min(n - 1)] - spine[i.saturating_sub(1)]).normalize_or_zero();
-    let radius = s[0].1.abs().max(s[1].1.abs());
+    let radius = s[0].radius().max(s[1].radius());
     let station = |p: &DVec3| {
         let along = |i: usize| (*p - spine[i]).dot(tangent(i)).abs();
         (0..n)
@@ -425,8 +425,46 @@ fn stretch_for(surfaces: &[Surface], s: [Support; 2], spine: Vec<DVec3>, near: &
     part
 }
 
-/// A support of a blend: surface index and the signed offset that puts it through the ball's center.
-pub type Support = (usize, f64);
+/// A support of a blend: what the ball rolls on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Support {
+    /// A surface (its index) and the signed offset along its natural normal that puts it through the ball's center.
+    Surface(usize, f64),
+    /// The edge where two surfaces meet, and the ball's radius: a ball rolling between a face and an edge (Parasolid
+    /// keeps the edge as a blend of no radius between the edge's faces). The ball's centers are a pipe round it.
+    Edge(usize, usize, f64),
+}
+
+impl Support {
+    /// How far the ball's center is from the support.
+    pub fn radius(self) -> f64 {
+        match self {
+            Support::Surface(_, d) => d.abs(),
+            Support::Edge(_, _, r) => r.abs(),
+        }
+    }
+
+    /// The signed distance along `touch`'s direction from the support out to the ball's center.
+    pub fn offset(self) -> f64 {
+        match self {
+            Support::Surface(_, d) => d,
+            Support::Edge(_, _, r) => r.abs(),
+        }
+    }
+
+    /// The point of the support nearest `p` and the unit direction the support's offset is taken along there (a
+    /// surface's natural normal; from an edge, straight out towards `p`).
+    pub fn touch(self, surfaces: &[Surface], p: DVec3) -> Option<(DVec3, DVec3)> {
+        match self {
+            Support::Surface(s, _) => project(surfaces, s, p),
+            Support::Edge(a, b, _) => {
+                let q = on_both(surfaces, Support::Surface(a, 0.0), Support::Surface(b, 0.0), p)?;
+                let out = p - q;
+                (out.length() > 1e-9).then(|| (q, out / out.length()))
+            }
+        }
+    }
+}
 
 /// The rolling-ball blend between two supports along `spine` (ball centers in the spine's own order), as a
 /// rational surface: u along the spine, v around the ball from the first support to the second.
@@ -452,8 +490,8 @@ pub fn rolling_ball(surfaces: &[Surface], s: [Support; 2], spine: &[DVec3], near
     let centers: Vec<DVec3> = before.into_iter().chain(spine.iter().copied()).chain(after).collect();
     let mut rows: Vec<[[f64; 4]; 5]> = Vec::with_capacity(centers.len());
     for c in &centers {
-        let (f0, _) = project(surfaces, s[0].0, *c).ok_or("cannot project to the first blend support")?;
-        let (f1, _) = project(surfaces, s[1].0, *c).ok_or("cannot project to the second blend support")?;
+        let (f0, _) = s[0].touch(surfaces, *c).ok_or("cannot project to the first blend support")?;
+        let (f1, _) = s[1].touch(surfaces, *c).ok_or("cannot project to the second blend support")?;
         let (d0, d1) = (f0 - *c, f1 - *c);
         let r = (d0.length() + d1.length()) / 2.0;
         let mid = d0.normalize_or_zero() + d1.normalize_or_zero();
@@ -633,7 +671,7 @@ mod tests {
             Surface::Plane { origin: DVec3::ZERO, normal: DVec3::Y, x: DVec3::X },
         ];
         let spine: Vec<DVec3> = (0..6).map(|i| DVec3::new(i as f64, 2.0, 2.0)).collect();
-        let s = rolling_ball(&surfaces, [(0, 2.0), (1, 2.0)], &spine, &[]).expect("blend");
+        let s = rolling_ball(&surfaces, [Support::Surface(0, 2.0), Support::Surface(1, 2.0)], &spine, &[]).expect("blend");
         for u in [0.0, 0.3, 0.5, 0.9, 1.0] {
             for v in [0.0, 0.25, 0.5, 1.0] {
                 let p = eval(&s, u, v);
@@ -643,6 +681,30 @@ mod tests {
         }
         assert!((eval(&s, 0.5, 0.0).z).abs() < 1e-9, "v = 0 touches the first support");
         assert!((eval(&s, 0.5, 1.0).y).abs() < 1e-9, "v = 1 touches the second support");
+    }
+
+    #[test]
+    fn a_ball_rolled_between_a_floor_and_an_edge_touches_the_edge() {
+        // Floor z = 0; the edge is where the planes x = 0 and z = 3 meet (a line along y). A ball of radius 2 on the
+        // floor touching that edge has its center at x = √3, z = 2.
+        let surfaces = vec![
+            Surface::Plane { origin: DVec3::ZERO, normal: DVec3::Z, x: DVec3::X },
+            Surface::Plane { origin: DVec3::ZERO, normal: DVec3::X, x: DVec3::Y },
+            Surface::Plane { origin: DVec3::new(0.0, 0.0, 3.0), normal: DVec3::Z, x: DVec3::X },
+        ];
+        let x = 3f64.sqrt();
+        let spine: Vec<DVec3> = (0..6).map(|i| DVec3::new(x + 0.05, i as f64, 2.0)).collect();
+        let s = rolling_ball(&surfaces, [Support::Surface(0, 2.0), Support::Edge(1, 2, 2.0)], &spine, &[]).expect("blend");
+        for u in [0.0, 0.3, 0.5, 0.9, 1.0] {
+            for v in [0.0, 0.25, 0.5, 1.0] {
+                let p = eval(&s, u, v);
+                let off = (p.x - x).hypot(p.z - 2.0);
+                assert!((off - 2.0).abs() < 1e-9, "u {u} v {v}: {p} is {off} from the ball centers");
+            }
+        }
+        assert!(eval(&s, 0.5, 0.0).z.abs() < 1e-9, "v = 0 touches the floor");
+        let e = eval(&s, 0.5, 1.0);
+        assert!(e.x.abs() < 1e-9 && (e.z - 3.0).abs() < 1e-9, "v = 1 touches the edge: {e}");
     }
 
     #[test]
@@ -678,7 +740,7 @@ mod tests {
             Surface::Cone { origin: DVec3::ZERO, axis: DVec3::Z, x: DVec3::X, radius: 5.0, half_angle: 0.1 },
             Surface::Plane { origin: DVec3::new(0.0, 0.0, 1.0), normal: DVec3::Z, x: DVec3::X },
         ];
-        let p = on_both(&surfaces, (0, 0.0), (1, 0.0), DVec3::new(3.0, 3.0, 0.7)).expect("on both");
+        let p = on_both(&surfaces, Support::Surface(0, 0.0), Support::Surface(1, 0.0), DVec3::new(3.0, 3.0, 0.7)).expect("on both");
         assert!((p.z - 1.0).abs() < 1e-9);
         assert!((p.truncate().length() - (5.0 + 0.1f64.tan())).abs() < 1e-9);
     }

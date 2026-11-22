@@ -3,6 +3,7 @@
 
 pub mod blend;
 pub mod model;
+pub mod native;
 pub mod read;
 pub mod schema;
 pub mod sldprt;

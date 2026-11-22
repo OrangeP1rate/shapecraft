@@ -225,7 +225,7 @@ impl<'a> Cx<'a> {
                 let (curve, _) = self.curve(self.ptr(n, "profile"))?;
                 (Surface::Revolution { curve, origin: self.vec(n, "base")? * MM, axis: self.vec(n, "axis")? }, true)
             }
-            "BLENDED_EDGE" if self.get(n, "blend_type").and_then(Val::char) == Some(b'R') => {
+            "BLENDED_EDGE" if matches!(self.get(n, "blend_type").and_then(Val::char), Some(b'R' | b'E')) => {
                 // u follows the spine's own parameter and v runs from the first support to the second (the other
                 // way when the spine's sense is negative), so the natural normal flips with the spine.
                 let supports = self.blend_supports(n)?;
@@ -255,6 +255,10 @@ impl<'a> Cx<'a> {
                 let near = self.face_corners(p);
                 let s = blend::rolling_ball(&self.b.surfaces, supports, &centers, &near).map_err(|e| bad(format!("blend #{p}: {e}")))?;
                 (Surface::BSpline(s), reversed)
+            }
+            "BLENDED_EDGE" => {
+                let t = self.get(n, "blend_type").and_then(Val::char).map(char::from).unwrap_or('?');
+                return Err(bad(format!("blend type {t} (#{p}) is not supported yet")));
             }
             other => return Err(bad(format!("surface type {other} (#{p}) is not supported yet"))),
         };
@@ -536,8 +540,24 @@ impl<'a> Cx<'a> {
             Some(Val::Reals(r)) if r.len() == 2 => [r[0], r[1]],
             _ => return Err(bad("blend without a range")),
         };
-        let mut out = [(0, 0.0); 2];
+        let mut out = [Support::Surface(0, 0.0); 2];
         for k in 0..2 {
+            // A rolling-ball blend of no radius stands for the edge between its own supports: the ball rolls on it.
+            let edge = self.node(ptrs[k]).filter(|sn| {
+                self.f.type_name(sn.ty) == "BLENDED_EDGE"
+                    && matches!(self.get(sn, "range"), Some(Val::Arr(a)) if a.iter().all(|v| v.real().is_some_and(|r| r.abs() < 1e-12)))
+            });
+            if let Some(sub) = edge.cloned() {
+                let [a, b] = match self.get(&sub, "surface") {
+                    Some(Val::Arr(a)) if a.len() == 2 => [a[0].ptr(), a[1].ptr()],
+                    _ => return Err(bad("edge blend without two supports")),
+                };
+                let (Ok((a, false)), Ok((b, false))) = (self.surface(a), self.surface(b)) else {
+                    return Err(bad("blend on an edge between surfaces whose normal we turn"));
+                };
+                out[k] = Support::Edge(a, b, range[k] * MM);
+                continue;
+            }
             let (s, flip) = self.surface(ptrs[k])?;
             // (Tried: offsetting along our turned normal builds these, but a blend rolled on our approximation of
             // another blend lands up to a millimeter off; refuse rather than build a bad solid.)
@@ -545,7 +565,7 @@ impl<'a> Cx<'a> {
                 return Err(bad("blend on a surface whose normal we turn"));
             }
             let sense = if self.node(ptrs[k]).is_some_and(|sn| self.minus(sn, "sense")) { -1.0 } else { 1.0 };
-            out[k] = (s, range[k] * MM * sense);
+            out[k] = Support::Surface(s, range[k] * MM * sense);
         }
         Ok(out)
     }
@@ -572,7 +592,12 @@ impl<'a> Cx<'a> {
             }
             let Ok(s) = self.blend_supports(blend) else { return Ok(None) };
             let Ok((x, false)) = self.surface(support) else { return Ok(None) };
-            let Some(&(_, off)) = s.iter().find(|(k, _)| *k == x) else { return Ok(None) };
+            let Some(off) = s.iter().find_map(|k| match *k {
+                Support::Surface(k, off) if k == x => Some(off),
+                _ => None,
+            }) else {
+                return Ok(None);
+            };
             let surfaces = &self.b.surfaces;
             // The ball touching the support at p has its center straight out from p.
             return Ok(blend::densify(chart, 32, |p| {
@@ -600,7 +625,7 @@ impl<'a> Cx<'a> {
         if [a, b].into_iter().any(spline) {
             return Ok(None);
         }
-        Ok(blend::densify(chart, 32, |p| blend::on_both(surfaces, (a, 0.0), (b, 0.0), p)))
+        Ok(blend::densify(chart, 32, |p| blend::on_both(surfaces, Support::Surface(a, 0.0), Support::Surface(b, 0.0), p)))
     }
 
     fn vertex(&mut self, p: u32) -> Result<Option<usize>> {

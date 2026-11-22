@@ -10,6 +10,7 @@ shapecraft-kernel.workspace = true
 thiserror.workspace = true
 miniz_oxide = "0.8"
 cfb = "0.10"
+lzma-rs = "0.3"
 
 [dev-dependencies]
 shapecraft-kernel-occt.workspace = true

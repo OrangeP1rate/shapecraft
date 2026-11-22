@@ -52,7 +52,7 @@ Then move it, copy it, pattern it, and send it to your printer.
 - 🖱️ **Feels like home.** On first launch, pick the navigation your hands already know (a dozen popular CAD and 3D
   apps are in the list), so orbit, pan and zoom just work.
 - ⏪ **Change your mind.** Every step stays in History. Change a number later and the model rebuilds.
-- 📂 **Opens what you already have.** `.shapr`, STEP, Parasolid, SolidWorks parts, IGES, STL, OBJ, 3MF, and DXF or SVG as sketches.
+- 📂 **Opens what you already have.** `.shapr`, STEP, Parasolid, SolidWorks, NX and Solid Edge parts, JT, IGES, STL, OBJ, 3MF, and DXF or SVG as sketches.
 - 🎓 **Learn it over coffee.** Three built-in tutorials, about seven minutes each, in eleven languages.
 - 🛟 **Hard to lose work.** Autosave, safe saves, and a project that reopens even after a crash.
 - 🔄 **Keeps itself fresh.** New versions download in the background and install when you close the app.
@@ -106,7 +106,7 @@ It's an **alpha**, so keep backups of anything precious, and tell us when someth
   wrap and emboss.
 - **History:** every step stays editable on its Parameter Card; change a number and the model rebuilds.
 - **Files:** projects are folders (`project.json` plus STEP). Open and save STEP, IGES, Parasolid XT, STL, 3MF, OBJ
-  and `.shapr`; open SolidWorks parts (`.sldprt`); export glTF, FBX, VRML, and 2D drawings to PDF, SVG, DXF and DWG.
+  and `.shapr`; open SolidWorks, NX and Solid Edge parts (`.sldprt`, `.prt`, `.par`) and JT; export glTF, FBX, VRML, and 2D drawings to PDF, SVG, DXF and DWG.
 - **Visualize:** materials you drag onto bodies, HDR panoramas, display modes, section views.
 - **Plugins:** add only what you want from Preferences ▸ Plugins. **Generative Render** puts your model in any
   scene you describe, using your own OpenRouter, OpenAI or Gemini account or a ComfyUI on your computer, with no

@@ -87,8 +87,8 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             label: "Import File…",
             menu: "File/Import File…",
             shortcut: Some("⇧⌘I"),
-            help: "Import STEP, IGES, Parasolid or SolidWorks part bodies, STL or OBJ meshes as bodies, or DXF or SVG drawings as a sketch",
-            params: r#"{"path": "/in.step|.stp|.iges|.igs|.x_t|.x_b|.sldprt|.stl|.obj|.dxf|.svg", "config": n? (SolidWorks: which configuration, default the first), "plane": "top"|"front"|"right"? (DXF/SVG: the sketch plane, default top), "units": "mm"|"cm"|"m"|"in"|"ft"? (STL/OBJ: what the file's numbers are in, default mm), "heal": "quality"|"speed"|{"repair": bool, "edges": bool, "sew": bool, "simplify": bool}? (STEP/IGES/Parasolid clean-up, default speed = none)}"#,
+            help: "Import STEP, IGES, Parasolid, SolidWorks, NX, Solid Edge or JT bodies, STL or OBJ meshes as bodies, or DXF or SVG drawings as a sketch",
+            params: r#"{"path": "/in.step|.stp|.iges|.igs|.x_t|.x_b|.sldprt|.prt (NX)|.par|.psm|.jt|.stl|.obj|.dxf|.svg", "config": n? (SolidWorks: which configuration, default the first), "plane": "top"|"front"|"right"? (DXF/SVG: the sketch plane, default top), "units": "mm"|"cm"|"m"|"in"|"ft"? (STL/OBJ: what the file's numbers are in, default mm), "heal": "quality"|"speed"|{"repair": bool, "edges": bool, "sew": bool, "simplify": bool}? (STEP/IGES/Parasolid clean-up, default speed = none)}"#,
             modifies: true,
             enabled: always,
             run: import_file,
@@ -245,8 +245,9 @@ fn import_any(s: &mut Session, p: &Params) -> Result<Value> {
         "x_t" | "x_b" | "xmt_txt" | "xmt_bin" => {
             s.stage("Reading the file…", 0);
             let bytes = read_capped(&path)?;
-            import_parasolid(s, p, &path, &bytes, None, true, false)
+            import_parasolid(s, p, &path, &bytes, false, true, false)
         }
+        "prt" | "par" | "psm" | "pwd" | "jt" => import_native(s, p, &path),
         "sldprt" => {
             s.stage("Reading the SolidWorks part…", 0);
             let bytes = read_capped(&path)?;
@@ -286,7 +287,7 @@ fn import_any(s: &mut Session, p: &Params) -> Result<Value> {
             let mut out = json!({"bodies": [], "folder": null, "repair_cut": 0});
             let mut ids = Vec::new();
             for ps in sources {
-                let got = import_parasolid(s, p, &path, ps, config, false, fallback)?;
+                let got = import_parasolid(s, p, &path, ps, config.is_some(), false, fallback)?;
                 ids.extend(got["bodies"].as_array().into_iter().flatten().filter_map(Value::as_u64));
                 out["repair_cut"] = json!(out["repair_cut"].as_u64().unwrap_or(0) + got["repair_cut"].as_u64().unwrap_or(0));
             }
@@ -354,15 +355,83 @@ fn import_any(s: &mut Session, p: &Params) -> Result<Value> {
     }
 }
 
-/// Bodies from a Parasolid transmit file (a `.x_t`/`.x_b`, or the partition inside a SolidWorks part), in a
+/// An NX part, a Solid Edge part or a JT file: the Parasolid model each keeps, in a folder named after the file.
+fn import_native(s: &mut Session, p: &Params, path: &std::path::Path) -> Result<Value> {
+    use shapecraft_xt::native::{Native, jt, kind, nx, solid_edge};
+    let bad = |e: String| EngineError::BadParams(e);
+    let stem = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    s.stage("Reading the file…", 0);
+    let bytes = read_capped(path)?;
+    let mut note = None;
+    let files = match kind(&bytes) {
+        Some(Native::Nx) => nx(&bytes),
+        Some(Native::SolidEdge) => solid_edge(&bytes).map_err(bad)?,
+        Some(Native::Jt) => {
+            let j = jt(&bytes).map_err(bad)?;
+            if j.parts.is_empty() {
+                return Err(bad(if j.meshes > 0 || j.jt_breps > 0 {
+                    format!(
+                        "{stem} has only display meshes in it, not exact geometry. Save it again with exact (XT B-Rep) geometry, or export STEP"
+                    )
+                } else {
+                    format!("{stem} has no geometry in it")
+                }));
+            }
+            if j.parts.len() > 1 {
+                note = Some("Each part is placed where its own file puts it: assembly positions aren't read yet".to_string());
+            }
+            j.parts
+        }
+        None if bytes.starts_with(b"#UGC") => {
+            return Err(bad(format!("{stem} is a Creo part, which can't be read. Export it from Creo as STEP")));
+        }
+        None => return Err(bad(format!("{stem} isn't an NX part, a Solid Edge part or a JT file"))),
+    };
+    if files.is_empty() {
+        return Err(bad(format!("{stem} has no solid model saved in it (an assembly or drawing, or a part saved without its geometry)")));
+    }
+    let solo = files.len() == 1;
+    let (mut ids, mut cut, mut failed) = (Vec::new(), 0, Vec::new());
+    for ps in &files {
+        match import_parasolid(s, p, path, ps, solo, false, false) {
+            Ok(got) => {
+                ids.extend(got["bodies"].as_array().into_iter().flatten().filter_map(Value::as_u64));
+                cut += got["repair_cut"].as_u64().unwrap_or(0);
+            }
+            // One part of an assembly we can't read doesn't lose the rest.
+            Err(e) if !solo => failed.push(e.to_string()),
+            Err(e) => return Err(e),
+        }
+    }
+    if ids.is_empty() {
+        return Err(bad(match failed.first() {
+            Some(e) => e.clone(),
+            None => format!("{stem} has no bodies in it"),
+        }));
+    }
+    let items: Vec<_> = ids.iter().map(|&i| shapecraft_doc::ItemId(i)).collect();
+    let folder = file_folder(s, path, &items);
+    s.selection.clear();
+    let mut out = json!({ "bodies": ids, "folder": folder, "repair_cut": cut });
+    if let Some(n) = note {
+        out["note"] = json!(n);
+    }
+    if !failed.is_empty() {
+        out["unreadable"] = json!(failed);
+    }
+    Ok(out)
+}
+
+/// Bodies from a Parasolid transmit file (a `.x_t`/`.x_b`, or the model inside another system's part), in a
 /// folder named after the file. Bodies without faces (a part's hidden working bodies) are left out.
 /// `solids_only` also leaves out sheets and wires (a part's feature data carries them beside its solids).
+/// `name_solo`: a file with a single body names it after the file.
 fn import_parasolid(
     s: &mut Session,
     p: &Params,
     path: &std::path::Path,
     bytes: &[u8],
-    config: Option<u32>,
+    name_solo: bool,
     folder: bool,
     solids_only: bool,
 ) -> Result<Value> {
@@ -381,10 +450,7 @@ fn import_parasolid(
     for (k, b) in bodies.into_iter().enumerate() {
         s.progress_step();
         let shape = healed(s, &s.kernel.from_brep(&b.brep)?, heal_options(p)?, &mut cut)?;
-        let name = b.name.unwrap_or_else(|| match (config, solo) {
-            (Some(_), true) => stem.clone(),
-            _ => format!("Imported {:02}", k + 1),
-        });
+        let name = b.name.unwrap_or_else(|| if name_solo && solo { stem.clone() } else { format!("Imported {:02}", k + 1) });
         ids.extend(add_bodies(s, vec![shape], Some(&name))?);
     }
     let folder = if folder { file_folder(s, path, &ids) } else { None };
@@ -421,8 +487,10 @@ fn file_folder(s: &mut Session, path: &std::path::Path, items: &[shapecraft_doc:
     Some(id.0)
 }
 
-const KNOWN_IMPORTS: &[&str] =
-    &["step", "stp", "shapr", "x_t", "x_b", "xmt_txt", "xmt_bin", "sldprt", "iges", "igs", "stl", "obj", "dxf", "svg"];
+const KNOWN_IMPORTS: &[&str] = &[
+    "step", "stp", "shapr", "x_t", "x_b", "xmt_txt", "xmt_bin", "sldprt", "prt", "par", "psm", "pwd", "jt", "iges", "igs", "stl", "obj",
+    "dxf", "svg",
+];
 
 /// The import kind of a file from its first bytes: a Shapr3D project (a ZIP holding `workspace`), Parasolid
 /// (binary "PS", or the text header), STEP or IGES.
@@ -430,12 +498,23 @@ fn sniff(path: &std::path::Path) -> Option<String> {
     use std::io::Read;
     let mut head = vec![0u8; 4096];
     let n = File::open(path).and_then(|mut f| f.read(&mut head)).ok()?;
-    let head = &head[..n];
+    head.truncate(n);
+    // A compound file's directory can be anywhere in it: SolidWorks and Solid Edge are told apart by their streams.
+    if head.starts_with(b"\xD0\xCF\x11\xE0") {
+        head = read_capped(path).ok()?;
+    }
+    let head = &head[..];
     let has = |needle: &[u8]| head.windows(needle.len()).any(|w| w == needle);
     let kind = if head.starts_with(b"PK\x03\x04") && (has(b"workspace") || has(b".metadata")) {
         "shapr"
     } else if shapecraft_xt::sldprt::is_solidworks(head) {
         "sldprt"
+    } else if let Some(k) = shapecraft_xt::native::kind(head) {
+        match k {
+            shapecraft_xt::native::Native::Nx => "prt",
+            shapecraft_xt::native::Native::SolidEdge => "par",
+            shapecraft_xt::native::Native::Jt => "jt",
+        }
     } else if head.starts_with(b"PS\0\0") {
         "x_b"
     } else if head.starts_with(b"**ABCDEFGHIJKLMNOPQRSTUVWXYZ") || has(b"**PARASOLID") {

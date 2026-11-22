@@ -55,6 +55,53 @@ fn solidworks_part_imports_its_model_partition() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// NX, Solid Edge and JT files built around our own Parasolid export import as that body, named after the file;
+/// a JT with only meshes, or a Creo `.prt`, says why it can't.
+#[test]
+fn nx_solid_edge_and_jt_parts_import() {
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("rectangle", &json!({"corner": [0, 0], "opposite": [20, 10]})).unwrap();
+    let sketch = s.active_sketch.unwrap();
+    s.execute("extrude", &json!({"sketch": sketch.0, "region": 0, "distance": 5})).unwrap();
+    let dir = std::env::temp_dir().join(format!("shapecraft-native-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let xb = dir.join("box.x_b");
+    s.execute("export_parasolid", &json!({"path": xb.to_string_lossy()})).unwrap();
+    let ps = std::fs::read(&xb).unwrap();
+    use shapecraft_xt::native::{jt_container, nx_container, solid_edge_container};
+    for (name, bytes) in
+        [("Bracket.prt", nx_container(&ps)), ("Bracket.par", solid_edge_container(&ps).unwrap()), ("Bracket.jt", jt_container(&ps))]
+    {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let mut t = session();
+        let out = t.execute("import_file", &json!({"path": path.to_string_lossy()})).unwrap_or_else(|e| panic!("{name}: {e}")).value;
+        assert_eq!(out["bodies"].as_array().unwrap().len(), 1, "{name}");
+        assert_eq!(t.doc.bodies[0].name, "Bracket", "{name}");
+        let id = t.doc.bodies[0].id.0;
+        let v = t.execute("inspect", &json!({"body": id, "faces": false})).unwrap().value["bodies"][0]["volume_mm3"].as_f64().unwrap();
+        assert!((v - 1000.0).abs() < 1e-3, "{name}: {v}");
+        // Without the extension it's still told apart by its contents.
+        let bare = dir.join(format!("bare-{}", name.replace('.', "-")));
+        std::fs::copy(&path, &bare).unwrap();
+        t.execute("import_file", &json!({"path": bare.to_string_lossy()})).unwrap_or_else(|e| panic!("bare {name}: {e}"));
+    }
+    // A JT with a mesh segment only.
+    let mut mesh_only = jt_container(&ps);
+    let toc = u32::from_le_bytes(mesh_only[85..89].try_into().unwrap()) as usize;
+    mesh_only[toc + 4 + 27] = 7;
+    let path = dir.join("Viewer.jt");
+    std::fs::write(&path, mesh_only).unwrap();
+    let e = s.execute("import_file", &json!({"path": path.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("only display meshes"), "{e}");
+    let creo = dir.join("Creo.prt");
+    std::fs::write(&creo, b"#UGC:2 PART 1234 650 0 2 1 0 0 0 0").unwrap();
+    let e = s.execute("import_file", &json!({"path": creo.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("Creo"), "{e}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn mesh_and_iges_exports_round_trip() {
     let mut s = session();
@@ -341,38 +388,42 @@ fn an_import_reports_its_stages() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Real SolidWorks parts (not in the repo: their licences vary). `SHAPECRAFT_SLDPRT_DIR=folder cargo test -p
-/// shapecraft-engine real_solidworks -- --ignored --nocapture` imports each and prints what came in.
+/// Real parts from other CAD systems (not in the repo: their licences vary): SolidWorks, NX, Solid Edge, JT and
+/// Parasolid. `SHAPECRAFT_PARTS_DIR=folder cargo test -p shapecraft-engine real_cad_parts -- --ignored --nocapture`
+/// imports each and prints what came in (SHAPECRAFT_PARTS_OUT=folder also writes each as STEP).
 #[test]
 #[ignore]
-fn real_solidworks_parts() {
-    let Ok(dir) = std::env::var("SHAPECRAFT_SLDPRT_DIR") else { return };
+fn real_cad_parts() {
+    let Ok(dir) = std::env::var("SHAPECRAFT_PARTS_DIR") else { return };
     let mut failed = 0;
-    for f in std::fs::read_dir(dir).unwrap().flatten() {
-        let path = f.path();
-        if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("sldprt")) {
+    let mut files: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|f| f.path()).collect();
+    files.sort();
+    for path in files {
+        let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if !["sldprt", "prt", "par", "psm", "pwd", "jt", "x_t", "x_b"].contains(&ext.as_str()) {
             continue;
         }
         let mut s = session();
         match s.execute("import_file", &json!({"path": path.to_string_lossy()})) {
             Ok(out) => {
                 let info = s.execute("inspect", &json!({"faces": false})).unwrap().value;
+                // SHAPECRAFT_PARTS_OUT: each import also written as STEP, to check with another system.
+                if let Ok(out_dir) = std::env::var("SHAPECRAFT_PARTS_OUT") {
+                    let step = std::path::Path::new(&out_dir).join(path.with_extension("step").file_name().unwrap());
+                    s.execute("export_step", &json!({"path": step.to_string_lossy()})).unwrap();
+                }
                 let v: Vec<String> = info["bodies"]
                     .as_array()
                     .unwrap()
                     .iter()
                     .map(|b| format!("{:.4} mm³ ({} faces)", b["volume_mm3"].as_f64().unwrap_or(0.0), b["face_count"]))
                     .collect();
-                println!(
-                    "{}: {} configs {}: {v:?}",
-                    path.display(),
-                    out.value["bodies"].as_array().unwrap().len(),
-                    out.value["configurations"]
-                );
+                let name = path.file_name().unwrap().to_string_lossy();
+                println!("{name}: {} bodies: {v:?} {}", out.value["bodies"].as_array().unwrap().len(), out.value["note"]);
             }
             Err(e) => {
                 failed += 1;
-                println!("{}: FAILED {e}", path.display());
+                println!("{}: FAILED {e}", path.file_name().unwrap().to_string_lossy());
             }
         }
     }

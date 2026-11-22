@@ -742,6 +742,22 @@ impl Kernel for RustKernel {
         solid_from("revolve", |m| arris::ops::revolve(m, &p, ax, angle, C))
     }
 
+    fn revolve_helix(&self, face: &Shape, axis: Axis, angle: f64, height: f64) -> Result<Shape> {
+        if height.abs() < 1e-12 {
+            return self.revolve(face, axis, angle);
+        }
+        // The shared checks first: a profile touching the axis, turns running into each other.
+        let mesh = self.tessellate(face, 0.05)?;
+        shapecraft_kernel::helix::path(&mesh, axis, angle, height)?;
+        let p = profile_of_shape(face)?;
+        let start = self.mass_props(face)?.centroid;
+        let ax = AAxis::new(p3(axis.origin), v3(axis.dir)).map_err(|e| bad(format!("axis: {e}")))?;
+        let pitch = height * std::f64::consts::TAU / angle;
+        let path = APath { start: p3(start), segments: vec![PathSegment::Helix { axis: ax, pitch, angle }] };
+        let law = FrameLaw::FixedBinormal(ax.direction);
+        solid_from("helical revolve", |m| arris::ops::sweep(m, &p, &path, law, C))
+    }
+
     fn shell(&self, shape: &Shape, open_faces: &[u32], thickness: f64) -> Result<Shape> {
         let s = exact(shape)?;
         if open_faces.is_empty() {

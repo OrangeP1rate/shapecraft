@@ -15,14 +15,12 @@
 use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, pos2};
 use egui_kittest::Harness;
 use glam::DVec3;
 use serde_json::{Value, json};
-use shapecraft_kernel_occt::OcctKernel;
 use shapecraft_ui::{Options, ShapeCraftApp};
 
 type App<'a> = Harness<'a, ShapeCraftApp>;
@@ -121,12 +119,14 @@ fn run(lines: &[Value], out: Option<&Path>, outcome: &mut Outcome) -> Result<()>
         hosted: false,
     };
     shapecraft_ui::app_log::install_in_memory();
+    // SHAPECRAFT_KERNEL picks the geometry kernel, as in the app (OCCT by default).
+    let kernel = shapecraft_kernels::chosen(&[]).map_err(anyhow::Error::msg)?;
     let mut h = Harness::builder()
         .with_size(size.to_vec2())
         .with_pixels_per_point(scale)
         .with_step_dt(1.0 / 60.0)
         .wgpu()
-        .build_eframe(|cc| ShapeCraftApp::new(Arc::new(OcctKernel::new()), opts, &cc.egui_ctx));
+        .build_eframe(|cc| ShapeCraftApp::new(kernel, opts, &cc.egui_ctx));
     h.run_steps(3);
     let result = steps(&mut h, lines, out, outcome);
     let _ = std::fs::remove_dir_all(&projects);

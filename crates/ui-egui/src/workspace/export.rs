@@ -591,6 +591,9 @@ pub(super) fn dialog(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
         }
         let row = Rect::from_min_size(pos2(list.left() + 10.0, y), vec2(LIST_W - 20.0, ROW_H));
         let resp = ui.interact(row.intersect(list_area), ui.scope_id().with(("exp-row", i)), Sense::click());
+        // A format the kernel in use can't write is ghosted and says why.
+        let lacking = *f == Format::Iges && super::toolbar::core_lacks(shapecraft_kernel::Feature::Iges);
+        let resp = if lacking { resp.on_hover_text(super::toolbar::NEEDS_OCCT) } else { resp };
         let on = d.chosen.contains(f);
         if on {
             // Neighbouring picked rows join into one block (s12-108).
@@ -609,8 +612,9 @@ pub(super) fn dialog(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
             p.circle_stroke(dot, 6.0, Stroke::new(1.0, theme::c(0x6a6a6a)));
         }
         badge(&p, pos2(row.left() + 47.0, row.center().y), tag);
-        p.text(pos2(row.left() + 67.0, row.center().y), Align2::LEFT_CENTER, *name, theme::body(14.0), Color32::WHITE);
-        if resp.clicked() {
+        let ink = if lacking { Tokens::text_ghost() } else { Color32::WHITE };
+        p.text(pos2(row.left() + 67.0, row.center().y), Align2::LEFT_CENTER, *name, theme::body(14.0), ink);
+        if resp.clicked() && !lacking {
             // A click picks just this one; ⌘-click or the round button adds or removes it.
             let toggle = cmd || resp.interact_pointer_pos().is_some_and(|q| q.x < row.left() + 28.0);
             if toggle {

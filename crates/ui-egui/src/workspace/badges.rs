@@ -325,7 +325,10 @@ impl Workspace {
             // G2 is built for straight outside edges between flat faces (engine fillet_g2); others refuse with a toast.
             Badge::Continuity => ("Continuity", vec![("G1 - Tangent", None, true), ("G2 - Curvature", None, true)]),
             Badge::SizeType => ("Size Type", vec![("Radius", None, true), ("Chord Width", None, true)]),
-            Badge::ChamferType => ("Type", vec![("Equal Distance", None, true), ("Two-Distance", None, true)]),
+            Badge::ChamferType => {
+                let two = !super::toolbar::core_lacks(shapecraft_kernel::Feature::TwoDistanceChamfer);
+                ("Type", vec![("Equal Distance", None, true), ("Two-Distance", None, two)])
+            }
             Badge::OffsetType => ("Type", vec![("Single", Some(Icon::OffsetEdge), true), ("Chain", Some(Icon::OffsetChain), true)]),
             Badge::Definition => ("Definition", vec![("Total Angle", None, true), ("Spacing Angle", None, true)]),
             Badge::Orientation => {

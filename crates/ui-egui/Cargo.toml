@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 shapecraft-kernel.workspace = true
+# Preferences ▸ Advanced describes each kernel it can switch to, whichever one is running.
+shapecraft-kernels = { workspace = true, default-features = false }
 shapecraft-doc.workspace = true
 shapecraft-engine.workspace = true
 shapecraft-render.workspace = true

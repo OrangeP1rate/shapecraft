@@ -1741,7 +1741,7 @@ impl ShapeCraftApp {
                     "visualization" => ws.ui_action(crate::workspace::toolbar::UiAction::Visualization),
                     "help" => ws.ui_action(crate::workspace::toolbar::UiAction::Help),
                     "preferences" => {
-                        ws.prefs_tab = params.get("tab").and_then(Value::as_u64).unwrap_or(0).min(4) as usize;
+                        ws.prefs_tab = params.get("tab").and_then(Value::as_u64).unwrap_or(0).min(5) as usize;
                         ws.ui_action(crate::workspace::toolbar::UiAction::Preferences);
                     }
                     "nav_presets" => ws.ui_action(crate::workspace::toolbar::UiAction::NavPresets),
@@ -2290,6 +2290,7 @@ impl ShapeCraftApp {
                 visualizing: ws.visualizing,
                 drawing: ws.drawings.is_some(),
                 checks: ws.menu_checks(),
+                core_missing: ws.session.kernel.missing().into_iter().map(shapecraft_kernel::Feature::bit).sum(),
             },
         };
         bar.update(state);

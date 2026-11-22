@@ -305,6 +305,7 @@ pub(super) fn is_active(ws: &Workspace, def: &ToolDef) -> bool {
 
 impl Workspace {
     pub(in crate::workspace) fn floating_controls(&mut self, ui: &mut Ui) {
+        toolbar::CORE_MISSING.with(|m| *m.borrow_mut() = self.session.kernel.missing());
         let vp = self.viewport_rect;
         // 8 px from the Items sidebar (measured, L02).
         let x = vp.left() + 5.0;

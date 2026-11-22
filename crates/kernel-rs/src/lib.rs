@@ -32,8 +32,8 @@ use glam::DVec2;
 pub use poly::{Kind, Poly, PolyKernel, RsShape};
 use profile::{circle_profile, plane_frame, polygon_profile, profile_of, profile_of_shape};
 use shapecraft_kernel::{
-    Aabb, Axis, BoolOp, DVec3, Distance, EdgeCurve, FacePlane, Kernel, KernelError, MassProps, Mesh, PartInfo, PlanarCurve, PlaneFrame,
-    Result, Shape, ShapeData, SubShape, ViewFrame, ViewLine,
+    Aabb, Axis, BoolOp, DVec3, Distance, EdgeCurve, FacePlane, Feature, Kernel, KernelError, MassProps, Mesh, PartInfo, PlanarCurve,
+    PlaneFrame, Result, Shape, ShapeData, SubShape, Support, ViewFrame, ViewLine,
 };
 
 pub(crate) type AFace = arris::topo::Face;
@@ -492,6 +492,27 @@ fn path_of(curves: &[PlanarCurve]) -> Result<APath> {
 impl Kernel for RustKernel {
     fn name(&self) -> &'static str {
         "rust"
+    }
+
+    /// Kept to what the engine's checks show (`SHAPECRAFT_TEST_KERNEL=rust cargo test -p shapecraft-engine`).
+    fn support(&self, feature: Feature) -> Support {
+        use Feature as F;
+        use Support::{Full, Limited, Missing};
+        match feature {
+            F::SketchRegions => Limited("splines and cut ellipses are followed as fine polylines"),
+            F::OffsetEdge => Limited("chains of ellipses or splines are offset one curve at a time"),
+            F::Sweep => Limited("no twist, scale or orientation settings, no closed paths"),
+            F::Booleans => Limited("bodies that only touch, with nothing in common, can be refused"),
+            F::OffsetFaces => Limited("faces beside fillets or chamfers can be refused"),
+            F::DeleteFaces => Limited("holes, pockets, slots and bosses"),
+            F::Fillet => Limited("some corners where three rounds meet are refused"),
+            F::ChordalFillet => Limited("where the faces meet at one angle along the edge"),
+            F::Scale => Limited("uneven scaling of cones, spheres and tori"),
+            F::VariableFillet | F::SetbackCorners | F::TwoDistanceChamfer | F::MoveEdge | F::Fill | F::WrapEmboss => Missing,
+            F::ProjectAsEdge | F::Iges => Missing,
+            F::Extrude | F::DraftAngles | F::Revolve | F::Loft | F::PushPull | F::Chamfer | F::Shell | F::SplitBody => Full,
+            F::Drawings | F::Measure | F::MeshBodies | F::StepFiles | F::ExactImports => Full,
+        }
     }
 
     fn make_box(&self, min: DVec3, size: DVec3) -> Result<Shape> {

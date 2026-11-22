@@ -228,3 +228,30 @@ fn a_chordal_fillet_on_a_square_edge_has_radius_chord_over_root_two() {
     assert!(close(K.mass_props(&chordal).unwrap().volume, K.mass_props(&radius).unwrap().volume));
     assert!(K.fillet_edges_ex(&b, &[edge], 2.0, false, 1.0).is_err(), "setback corners say they aren't here yet");
 }
+
+#[test]
+fn what_the_table_calls_missing_is_refused() {
+    use shapecraft_kernel::{Feature, Support};
+    let b = K.make_box(DVec3::ZERO, DVec3::splat(10.0)).unwrap();
+    let edge = 0;
+    let refused = |f: Feature| -> bool {
+        match f {
+            Feature::VariableFillet => K.fillet_edges_variable(&b, &[edge], 1.0, 2.0).is_err(),
+            Feature::SetbackCorners => K.fillet_edges_ex(&b, &[edge], 1.0, false, 0.5).is_err(),
+            Feature::TwoDistanceChamfer => K.chamfer_edges_two(&b, &[edge], 1.0, 2.0, None).is_err(),
+            Feature::MoveEdge => K.scale_edge(&b, edge, DVec3::ZERO, DVec3::splat(2.0)).is_err(),
+            Feature::Fill => K.fill(&b, &[edge]).is_err(),
+            Feature::WrapEmboss => K
+                .wrap_emboss(&b, None, &[], shapecraft_kernel::PlaneFrame { origin: DVec3::ZERO, x: DVec3::X, y: DVec3::Y }, 1.0, 0.0, None)
+                .is_err(),
+            Feature::ProjectAsEdge => K.imprint(&b, 0, &[]).is_err(),
+            Feature::Iges => K.write_iges(&[b.clone()], &std::env::temp_dir().join("never.igs")).is_err(),
+            other => panic!("{other:?} is missing: add how it refuses here"),
+        }
+    };
+    for f in Feature::ALL {
+        if K.support(f) == Support::Missing {
+            assert!(refused(f), "{f:?} is listed missing but works: list it as Full or Limited");
+        }
+    }
+}

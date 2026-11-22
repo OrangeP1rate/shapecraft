@@ -249,8 +249,146 @@ impl Default for SweepOptions {
     }
 }
 
+/// Something people can ask a kernel for that not every kernel does in full. Preferences ▸ Advanced lists them, and
+/// the tools and options that need one the running kernel is missing are greyed out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Feature {
+    SketchRegions,
+    OffsetEdge,
+    Extrude,
+    DraftAngles,
+    Revolve,
+    Loft,
+    Sweep,
+    Booleans,
+    PushPull,
+    OffsetFaces,
+    DeleteFaces,
+    Fillet,
+    ChordalFillet,
+    VariableFillet,
+    SetbackCorners,
+    Chamfer,
+    TwoDistanceChamfer,
+    Shell,
+    SplitBody,
+    Scale,
+    MoveEdge,
+    Fill,
+    WrapEmboss,
+    ProjectAsEdge,
+    Drawings,
+    Measure,
+    MeshBodies,
+    StepFiles,
+    ExactImports,
+    Iges,
+}
+
+impl Feature {
+    /// Every feature, in the order Preferences ▸ Advanced lists them.
+    pub const ALL: [Feature; 30] = [
+        Feature::SketchRegions,
+        Feature::OffsetEdge,
+        Feature::Extrude,
+        Feature::DraftAngles,
+        Feature::Revolve,
+        Feature::Loft,
+        Feature::Sweep,
+        Feature::Booleans,
+        Feature::PushPull,
+        Feature::OffsetFaces,
+        Feature::DeleteFaces,
+        Feature::Fillet,
+        Feature::ChordalFillet,
+        Feature::VariableFillet,
+        Feature::SetbackCorners,
+        Feature::Chamfer,
+        Feature::TwoDistanceChamfer,
+        Feature::Shell,
+        Feature::SplitBody,
+        Feature::Scale,
+        Feature::MoveEdge,
+        Feature::Fill,
+        Feature::WrapEmboss,
+        Feature::ProjectAsEdge,
+        Feature::Drawings,
+        Feature::Measure,
+        Feature::MeshBodies,
+        Feature::StepFiles,
+        Feature::ExactImports,
+        Feature::Iges,
+    ];
+
+    /// Its bit in a set of features held as one number (its place in [`Feature::ALL`]).
+    pub fn bit(self) -> u64 {
+        Feature::ALL.iter().position(|f| *f == self).map_or(0, |i| 1 << i)
+    }
+
+    /// What it's called in the app.
+    pub fn label(self) -> &'static str {
+        match self {
+            Feature::SketchRegions => "Sketch regions",
+            Feature::OffsetEdge => "Offset Edge",
+            Feature::Extrude => "Extrude, push and pull",
+            Feature::DraftAngles => "Draft angles",
+            Feature::Revolve => "Revolve and threads",
+            Feature::Loft => "Loft",
+            Feature::Sweep => "Sweep",
+            Feature::Booleans => "Union, subtract, intersect",
+            Feature::PushPull => "Move faces",
+            Feature::OffsetFaces => "Offset Face",
+            Feature::DeleteFaces => "Delete faces",
+            Feature::Fillet => "Fillet",
+            Feature::ChordalFillet => "Fillet by chord width",
+            Feature::VariableFillet => "Variable-radius fillets",
+            Feature::SetbackCorners => "Setback corners",
+            Feature::Chamfer => "Chamfer",
+            Feature::TwoDistanceChamfer => "Two-distance chamfers",
+            Feature::Shell => "Shell",
+            Feature::SplitBody => "Split Body",
+            Feature::Scale => "Scale",
+            Feature::MoveEdge => "Moving or scaling one edge",
+            Feature::Fill => "Fill",
+            Feature::WrapEmboss => "Wrap & Emboss",
+            Feature::ProjectAsEdge => "Project as Edge",
+            Feature::Drawings => "Drawings",
+            Feature::Measure => "Measure",
+            Feature::MeshBodies => "Mesh bodies (STL, OBJ, 3MF)",
+            Feature::StepFiles => "STEP files",
+            Feature::ExactImports => "Parasolid, .shapr, SolidWorks, NX, Solid Edge, JT",
+            Feature::Iges => "IGES files",
+        }
+    }
+}
+
+/// How fully a kernel does a [`Feature`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Support {
+    Full,
+    /// Works, with this limit (said in a few words).
+    Limited(&'static str),
+    Missing,
+}
+
 pub trait Kernel: Send + Sync {
     fn name(&self) -> &'static str;
+
+    /// How fully this kernel does `feature`: the full kernel does everything.
+    fn support(&self, feature: Feature) -> Support {
+        let _ = feature;
+        Support::Full
+    }
+
+    /// Whether this kernel can do `feature` at all (fully or with limits).
+    fn can(&self, feature: Feature) -> bool {
+        self.support(feature) != Support::Missing
+    }
+
+    /// The features this kernel can't do at all.
+    fn missing(&self) -> Vec<Feature> {
+        Feature::ALL.into_iter().filter(|f| !self.can(*f)).collect()
+    }
 
     fn make_box(&self, min: DVec3, size: DVec3) -> Result<Shape>;
 
@@ -601,6 +739,21 @@ pub struct HealOptions {
 impl HealOptions {
     /// Everything on: Import Preferences ▸ Quality.
     pub const ALL: Self = Self { repair: true, edges: true, sew: true, simplify: true };
+}
+
+#[cfg(test)]
+mod feature_tests {
+    use super::Feature;
+
+    #[test]
+    fn every_feature_is_listed_once_with_its_own_bit() {
+        let bits: u64 = Feature::ALL.iter().map(|f| f.bit()).fold(0, |all, b| {
+            assert_eq!(all & b, 0, "a bit used twice");
+            all | b
+        });
+        assert_eq!(bits.count_ones() as usize, Feature::ALL.len());
+        assert!(Feature::ALL.iter().all(|f| !f.label().is_empty()));
+    }
 }
 
 #[cfg(test)]

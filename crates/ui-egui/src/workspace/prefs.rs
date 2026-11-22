@@ -554,6 +554,41 @@ fn advanced_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
         note("so your work stays on Open CASCADE while you try it. Anything it", false);
         note("can't do yet says so instead of guessing.", false);
     }
+    y += 10.0;
+    p.line_segment([pos2(r.left() + 20.0, y), pos2(r.right() - 20.0, y)], Stroke::new(1.0, Tokens::chip_border()));
+    rust_kernel_parity(&p, r, y + 22.0);
+}
+
+/// What the Rust kernel does next to Open CASCADE, from its own table ([`shapecraft_kernel::Kernel::support`]): the
+/// same, with limits, or not yet (those tools are greyed out while it runs).
+fn rust_kernel_parity(p: &egui::Painter, r: Rect, mut y: f32) {
+    use shapecraft_kernel::{Feature, Support};
+    let Ok(rust) = shapecraft_kernels::make("rust") else { return };
+    let (left, width) = (r.left() + 32.0, r.width() - 64.0);
+    let mut para = |text: String, font: egui::FontId, color: Color32, gap: f32| {
+        let galley = p.layout(text, font, color, width);
+        let h = galley.size().y;
+        p.galley(pos2(left, y), galley, color);
+        y += h + gap;
+    };
+    let support: Vec<(Feature, Support)> = Feature::ALL.into_iter().map(|f| (f, rust.support(f))).collect();
+    let names = |want: fn(&Support) -> bool| {
+        // A name never breaks across lines (no-break spaces inside it); the list breaks between names.
+        support.iter().filter(|(_, s)| want(s)).map(|(f, _)| f.label().replace(' ', "\u{a0}")).collect::<Vec<_>>().join("  ·  ")
+    };
+    para("What the Rust kernel does".into(), theme::strong(12.0), Tokens::text_strong(), 8.0);
+    para("The same as Open CASCADE".into(), theme::strong(10.5), Tokens::text_strong(), 3.0);
+    para(names(|s| *s == Support::Full), theme::body(10.5), Tokens::text_dim(), 10.0);
+    para("Works, with limits".into(), theme::strong(10.5), Tokens::text_strong(), 3.0);
+    let limited: Vec<String> = support
+        .iter()
+        .filter_map(|(f, s)| if let Support::Limited(why) = s { Some(format!("{}: {why}", f.label())) } else { None })
+        .collect();
+    for (i, line) in limited.iter().enumerate() {
+        para(line.clone(), theme::body(10.5), Tokens::text_dim(), if i + 1 == limited.len() { 10.0 } else { 2.0 });
+    }
+    para("Needs Open CASCADE (greyed out while Rust runs)".into(), theme::strong(10.5), Tokens::text_strong(), 3.0);
+    para(names(|s| *s == Support::Missing), theme::body(10.5), Tokens::text_dim(), 0.0);
 }
 
 /// Tablet access is early: said plainly so nobody takes it for finished.

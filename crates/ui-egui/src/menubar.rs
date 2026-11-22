@@ -5,6 +5,7 @@
 //! workspace's own key handling, so typing into a field never triggers a tool, and ⌘C/⌘V/⌘A keep working in
 //! text fields.
 
+use shapecraft_kernel::Feature;
 use shapecraft_render::StandardView;
 
 use crate::theme::{self, Tokens};
@@ -76,6 +77,10 @@ pub enum When {
     Visualizing,
     /// In the Drawings sheet.
     Drawing,
+    /// [`When::Selection`], and the kernel in use can do the feature.
+    SelectionWith(Feature),
+    /// [`When::Bodies`], and the kernel in use can do the feature.
+    BodiesWith(Feature),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -93,6 +98,8 @@ pub struct MenuState {
     pub drawing: bool,
     /// Which items carry a check mark: one bit per [`check_bit`].
     pub checks: u32,
+    /// What the kernel in use can't do: one [`Feature::bit`] each.
+    pub core_missing: u64,
 }
 
 /// The items that show a check mark when on (as the reference's View menu does, s40), and their bit in
@@ -153,6 +160,8 @@ impl When {
             When::Modeling => s.in_project && !s.visualizing,
             When::Visualizing => s.in_project && s.visualizing,
             When::Drawing => s.in_project && s.drawing,
+            When::SelectionWith(f) => When::Selection.holds(s) && s.core_missing & f.bit() == 0,
+            When::BodiesWith(f) => When::Bodies.holds(s) && s.core_missing & f.bit() == 0,
         }
     }
 }
@@ -219,7 +228,7 @@ pub fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                         item("STEP…", None, App(ExportAs(Format::Step)), Bodies),
                         item("DXF from Sketch…", None, App(ExportAs(Format::DxfSketch)), InProject),
                         item("DXF from Drawing…", None, App(ExportAs(Format::DxfDrawing)), Bodies),
-                        item("IGES…", None, App(ExportAs(Format::Iges)), Bodies),
+                        item("IGES…", None, App(ExportAs(Format::Iges)), BodiesWith(Feature::Iges)),
                         item("STL…", None, App(ExportAs(Format::Stl)), Bodies),
                         item("USDZ…", None, App(ExportAs(Format::Usdz)), Bodies),
                         item("FBX…", None, App(ExportAs(Format::Fbx)), Bodies),
@@ -392,7 +401,7 @@ pub fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 item("Split Body", None, Tool(ToolKind::SplitBody), Bodies),
                 item("Revolve", Some("V"), Tool(ToolKind::Revolve), InProject),
                 item("Sweep", Some("W"), Tool(ToolKind::Sweep), InProject),
-                item("Fill (Beta)", None, Command("fill"), Selection),
+                item("Fill (Beta)", None, Command("fill"), SelectionWith(Feature::Fill)),
                 item("Replace Face", None, Tool(ToolKind::ReplaceFace), Bodies),
                 item("Project as Edge", None, Tool(ToolKind::ProjectEdge), Bodies),
                 item("Wrap & Emboss", None, Tool(ToolKind::WrapEmboss), Bodies),

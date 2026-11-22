@@ -4,6 +4,8 @@
 
 use egui::{Align2, Color32, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
+use shapecraft_kernel::Feature;
+
 use crate::icons::{self, Icon};
 use crate::theme::{self, Tokens, radius};
 
@@ -797,6 +799,34 @@ pub fn is_new(def: &ToolDef) -> bool {
 thread_local! {
     /// Set each frame by the left column: whether something marked new is behind More.
     pub static OVERFLOW_NEW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set each frame by the left column: what the geometry kernel in use can't do. Tools needing it are greyed out.
+    pub static CORE_MISSING: std::cell::RefCell<Vec<Feature>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What a greyed-out tool says when the pointer rests on it.
+pub const NEEDS_OCCT: &str = "Needs the Open CASCADE kernel (Preferences ▸ Advanced)";
+
+/// Whether the geometry kernel in use can't do `feature` at all.
+pub fn core_lacks(feature: Feature) -> bool {
+    CORE_MISSING.with(|m| m.borrow().contains(&feature))
+}
+
+/// The kernel feature a card option needs (its parameter and value), when it's one not every kernel has.
+pub fn option_feature(key: &str, value: &str) -> Option<Feature> {
+    match (key, value) {
+        ("corner", "setback") => Some(Feature::SetbackCorners),
+        _ => None,
+    }
+}
+
+/// The kernel feature a tool needs, when it's one not every kernel has.
+pub fn feature_of(def: &ToolDef) -> Option<Feature> {
+    match def.action {
+        Action::Command("fill") => Some(Feature::Fill),
+        Action::Tool(ToolKind::WrapEmboss) => Some(Feature::WrapEmboss),
+        Action::Tool(ToolKind::ProjectEdge) => Some(Feature::ProjectAsEdge),
+        _ => None,
+    }
 }
 
 pub fn chip_full(ui: &Ui, anchor: Pos2, def: &ToolDef, sub_text: Option<&str>, left_side: bool, dim: bool, hot: bool, gear: bool) -> Rect {
@@ -904,7 +934,10 @@ pub fn group_full(
         let below = if split.is_some_and(|k| i >= k) { extra } else { 0.0 };
         let r = Rect::from_min_size(pos2(top_left.x, top_left.y + 1.0 + i as f32 * pitch + below), vec2(w, pitch));
         let resp: Response = ui.interact(r, ui.scope_id().with((id, i)), Sense::click());
-        let disabled = disabled_at(i);
+        // A tool the kernel in use can't do is greyed out and says why.
+        let lacking = feature_of(def).is_some_and(core_lacks);
+        let resp = if lacking { resp.on_hover_text(NEEDS_OCCT) } else { resp };
+        let disabled = disabled_at(i) || lacking;
         // The label chip is part of the button, as in the reference.
         // Hover is decided before painting so the chip can light up with the icon cell (it uses last frame's
         // chip rect, which is where the chip still is).

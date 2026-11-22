@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 shapecraft-ui.workspace = true
-shapecraft-kernel-occt.workspace = true
+shapecraft-kernels = { workspace = true, features = ["occt"] }
 egui = "0.37"
 eframe = { version = "0.37", default-features = false, features = ["wgpu"] }
 egui_kittest = { version = "0.37", features = ["wgpu", "eframe"] }

@@ -663,8 +663,13 @@ pub(super) fn show(ws: &mut Workspace, ui: &mut Ui) {
                         if k == *lit {
                             p.rect_filled(c.shrink(2.0), radius(5), seg_on());
                         }
-                        icons::paint(&p, Rect::from_center_size(c.center(), vec2(15.0, 15.0)), *icon, Tokens::text_strong());
-                        if ui.interact(c, ui.scope_id().with(("card-seg", *key, k)), Sense::click()).clicked() && k != *lit {
+                        // An option the kernel in use can't do is ghosted and says why.
+                        let lacking = super::toolbar::option_feature(key, values[k]).is_some_and(super::toolbar::core_lacks);
+                        let ink = if lacking { Tokens::text_ghost() } else { Tokens::text_strong() };
+                        icons::paint(&p, Rect::from_center_size(c.center(), vec2(15.0, 15.0)), *icon, ink);
+                        let resp = ui.interact(c, ui.scope_id().with(("card-seg", *key, k)), Sense::click());
+                        let resp = if lacking { resp.on_hover_text(super::toolbar::NEEDS_OCCT) } else { resp };
+                        if resp.clicked() && k != *lit && !lacking {
                             change = Some((key, json!(values[k])));
                         }
                     }

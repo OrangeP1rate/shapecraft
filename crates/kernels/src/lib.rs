@@ -85,6 +85,15 @@ mod tests {
     #[test]
     fn the_rust_kernel_is_always_there() {
         assert_eq!(make("rust").unwrap().name(), "rust");
+    }
+
+    /// Every kernel answers to the name it's picked by: the app compares the two to tell the default kernel (real
+    /// projects folder, no restart note) from a trial one.
+    #[test]
+    fn kernels_go_by_the_names_they_are_made_from() {
+        for n in names() {
+            assert_eq!(make(n).unwrap().name(), *n);
+        }
         assert!(make("acis").err().is_some_and(|e| e.contains("rust")));
     }
 }

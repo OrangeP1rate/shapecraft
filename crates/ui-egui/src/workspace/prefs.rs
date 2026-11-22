@@ -516,53 +516,129 @@ fn shapecraft_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
 /// them: `SHAPECRAFT_TEST_KERNEL=rust cargo test -p shapecraft-engine`. Kept current when the kernel grows.
 pub(crate) const RUST_KERNEL_CHECKS: (u32, u32) = (179, 190);
 
-/// Settings for those who want to look under the hood: which geometry kernel models, and how close Arris is.
-/// True when its Report a Problem… button was clicked.
+/// Settings for those who want to look under the hood: which geometry kernel models, why someone would pick either,
+/// and how close Arris is. True when its Report a Problem… button was clicked.
 fn advanced_tab(ui: &mut Ui, r: Rect, s: &mut Settings) -> bool {
     let p = ui.painter().clone();
-    let col = r.left() + 170.0;
-    let mut y = r.top() + 92.0;
+    let (left, right) = (r.left() + 24.0, r.right() - 24.0);
+    let mut y = r.top() + 88.0;
+    p.text(pos2(left, y), Align2::LEFT_TOP, "Geometry Kernel", theme::strong(15.0), Tokens::text_strong());
+    let running = crate::settings::RUNNING_KERNEL.get().copied().unwrap_or("occt");
+    if s.kernel != running {
+        p.text(pos2(right, y + 2.0), Align2::RIGHT_TOP, "Restart ShapeCraft to apply", theme::strong(12.0), Tokens::accent());
+    }
     p.text(
-        pos2(r.center().x, y),
-        Align2::CENTER_CENTER,
-        "For the curious. The defaults are what most people want.",
-        theme::body(11.0),
+        pos2(left, y + 21.0),
+        Align2::LEFT_TOP,
+        "The engine under every shape you make. Both open source; restart to switch.",
+        theme::body(11.5),
         Tokens::text_dim(),
     );
-    y += 22.0;
-    p.line_segment([pos2(r.left() + 20.0, y), pos2(r.right() - 20.0, y)], Stroke::new(1.0, Tokens::chip_border()));
-    y += 24.0;
-    row_label(&p, col, y, "Geometry Kernel:");
+    y += 46.0;
     let (pass, all) = RUST_KERNEL_CHECKS;
-    let rust_detail = format!("Our own kernel, in testing: {pass} of {all} modeling checks pass");
-    let choices = [("occt", "Open CASCADE", "The full kernel. Recommended"), ("rust", "Arris (Rust)", rust_detail.as_str())];
-    for (key, name, detail) in choices {
-        if radio(ui, pos2(col, y), &format!("pref-kernel-{key}"), s.kernel == key, true, name, detail) {
-            s.kernel = key.to_string();
-        }
-        y += 38.0;
+    let arris_status = format!("In testing: {pass} of {all} modeling checks pass");
+    let cards = [
+        KernelCard {
+            key: "occt",
+            name: "Open CASCADE",
+            status: "Recommended for real work",
+            reasons: &[
+                "Every tool and option, nothing greyed out",
+                "Decades of industrial use behind it",
+                "The kernel every release is checked on",
+            ],
+        },
+        KernelCard {
+            key: "rust",
+            name: "Arris (Rust)",
+            status: &arris_status,
+            reasons: &[
+                "Pure Rust: no C++ underneath to crash",
+                "Small and portable: the road to the browser",
+                "Ours to fix: your report becomes a test",
+            ],
+        },
+    ];
+    let gap = 12.0;
+    let w = (right - left - gap) / 2.0;
+    let mut tallest: f32 = 0.0;
+    for (i, card) in cards.iter().enumerate() {
+        let x = left + i as f32 * (w + gap);
+        let h = kernel_card(ui, Rect::from_min_size(pos2(x, y), vec2(w, 0.0)), card, s);
+        tallest = tallest.max(h);
     }
-    let running = crate::settings::RUNNING_KERNEL.get().copied().unwrap_or("occt");
-    let mut note = |text: &str, strong: bool| {
-        p.text(
-            pos2(col, y - 4.0),
-            Align2::LEFT_CENTER,
-            text,
-            theme::body(11.0),
-            if strong { Tokens::text_strong() } else { Tokens::text_dim() },
-        );
-        y += 17.0;
-    };
-    if s.kernel != running {
-        note("Restart ShapeCraft to apply.", true);
+    y += tallest + 12.0;
+    // Why a second kernel at all (and, while trying Arris, where its projects live).
+    let mut why = "Why a choice? Two kernels check each other: a shape one gets wrong, the other can catch. And no \
+                   single library decides what ShapeCraft can become."
+        .to_string();
+    if running == "rust" {
+        why.push_str(" Arris keeps its projects in a folder of their own, so your Open CASCADE work stays put.");
     }
-    if s.kernel == "rust" || running == "rust" {
-        note("Arris keeps its projects in their own folder, so your", false);
-        note("Open CASCADE work stays put while you try it.", false);
-    }
-    y += 8.0;
+    let g = p.layout(why, theme::body(11.0), Tokens::text_dim(), right - left);
+    let gh = g.size().y;
+    p.galley(pos2(left, y), g, Tokens::text_dim());
+    y += gh + 14.0;
     p.line_segment([pos2(r.left() + 20.0, y), pos2(r.right() - 20.0, y)], Stroke::new(1.0, Tokens::chip_border()));
-    arris_parity(ui, r, y + 20.0)
+    arris_parity(ui, r, y + 18.0)
+}
+
+/// One kernel on the Advanced tab: what it is, where it stands, and what it's the better pick for.
+struct KernelCard<'a> {
+    key: &'static str,
+    name: &'static str,
+    status: &'a str,
+    reasons: &'static [&'static str],
+}
+
+/// A kernel as a card that picks it when clicked (the whole card is the radio button). `at` gives the top-left and
+/// width; returns the card's height.
+fn kernel_card(ui: &mut Ui, at: Rect, card: &KernelCard, s: &mut Settings) -> f32 {
+    let p = ui.painter().clone();
+    let on = s.kernel == card.key;
+    let pad = 14.0;
+    let inner = at.width() - 2.0 * pad;
+    let reasons: Vec<_> =
+        card.reasons.iter().map(|t| p.layout(t.to_string(), theme::body(11.0), Tokens::text_strong(), inner - 14.0)).collect();
+    let status = p.layout(card.status.to_string(), theme::body(10.5), Tokens::text_dim(), inner - 22.0);
+    let head = 16.0 + status.size().y + 12.0;
+    let body: f32 = reasons.iter().map(|g| g.size().y + 5.0).sum();
+    let rect = Rect::from_min_size(at.min, vec2(at.width(), pad + head + 14.0 + body + pad - 5.0));
+    let resp = ui.interact(rect, ui.scope_id().with(("pref-kernel", card.key)), Sense::click());
+    if resp.clicked() {
+        s.kernel = card.key.to_string();
+    }
+    let (fill, border) = if on {
+        (Tokens::accent().gamma_multiply(0.10), Tokens::accent().gamma_multiply(0.8))
+    } else if resp.hovered() {
+        (Tokens::chip_hover(), Tokens::chip_border())
+    } else {
+        (Tokens::chip(), Tokens::chip_border())
+    };
+    p.rect(rect, radius(8), fill, Stroke::new(1.0, border), StrokeKind::Inside);
+    // Radio dot, name, status.
+    let (x, mut y) = (rect.left() + pad, rect.top() + pad);
+    let dot = pos2(x + 7.0, y + 8.0);
+    p.circle_filled(dot, 7.0, if on { Tokens::accent() } else { theme::c(0x58585c) });
+    if on {
+        p.circle_filled(dot, 2.5, Color32::WHITE);
+    }
+    p.text(pos2(x + 22.0, y + 8.0), Align2::LEFT_CENTER, card.name, theme::strong(13.0), Tokens::text_strong());
+    y += 18.0;
+    p.galley(pos2(x + 22.0, y), status, Tokens::text_dim());
+    y = rect.top() + pad + head;
+    p.text(pos2(x, y), Align2::LEFT_TOP, "PICK IT FOR", theme::strong(9.5), Tokens::text_faint());
+    y += 14.0;
+    for g in reasons {
+        let gh = g.size().y;
+        p.circle_filled(pos2(x + 3.0, y + 7.0), 2.0, Tokens::accent());
+        p.galley(pos2(x + 14.0, y), g, Tokens::text_strong());
+        y += gh + 5.0;
+    }
+    if !on {
+        resp.on_hover_text("Click to pick this kernel (takes effect after a restart)");
+    }
+    rect.height()
 }
 
 /// How close Arris is to Open CASCADE, from its own table ([`shapecraft_kernel::Kernel::support`]): a score and a
@@ -643,12 +719,13 @@ fn arris_parity(ui: &mut Ui, r: Rect, mut y: f32) -> bool {
     }
     y += h + 18.0;
 
-    // How to help.
-    let body = "Arris is written from scratch, in the open. Switch to it above and model the way you always do. \
-                When something is refused, comes out wrong or feels slow, send it in: every report becomes a test, \
-                and every test moves this bar.";
-    let g = p.layout(body.to_string(), theme::body(11.5), Tokens::text_dim(), right - left - 32.0);
-    let card = Rect::from_min_max(pos2(left, y), pos2(right, y + 16.0 + 20.0 + g.size().y + 12.0 + 24.0 + 16.0));
+    // How to help: the words on the left, the button on the right, so the card stays short.
+    let body = "Switch to Arris above and model the way you always do. When something is refused, comes out wrong \
+                or feels slow, send it in: every report becomes a test, and every test moves this bar.";
+    let bw = 150.0;
+    let g = p.layout(body.to_string(), theme::body(11.0), Tokens::text_dim(), right - left - 32.0 - bw - 16.0);
+    let gh = g.size().y;
+    let card = Rect::from_min_max(pos2(left, y), pos2(right, y + 14.0 + 20.0 + gh + 14.0));
     p.rect(
         card,
         radius(8),
@@ -656,10 +733,9 @@ fn arris_parity(ui: &mut Ui, r: Rect, mut y: f32) -> bool {
         Stroke::new(1.0, Tokens::accent().gamma_multiply(0.45)),
         egui::StrokeKind::Inside,
     );
-    p.text(pos2(left + 16.0, y + 16.0), Align2::LEFT_TOP, "Help Arris get to 100%", theme::strong(13.0), Tokens::text_strong());
-    let gh = g.size().y;
-    p.galley(pos2(left + 16.0, y + 36.0), g, Tokens::text_dim());
-    let b = Rect::from_min_size(pos2(left + 16.0, y + 36.0 + gh + 12.0), vec2(150.0, 24.0));
+    p.text(pos2(left + 16.0, y + 14.0), Align2::LEFT_TOP, "Help Arris get to 100%", theme::strong(13.0), Tokens::text_strong());
+    p.galley(pos2(left + 16.0, y + 34.0), g, Tokens::text_dim());
+    let b = Rect::from_center_size(pos2(right - 16.0 - bw / 2.0, card.center().y), vec2(bw, 24.0));
     button(ui, b, "Report a Problem…", true, "arris-report")
 }
 

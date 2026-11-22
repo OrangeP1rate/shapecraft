@@ -146,7 +146,7 @@ fn mass_props_mode(shape: &Shape, mode: i32) -> Result<(MassProps, bool)> {
 
 impl Kernel for OcctKernel {
     fn name(&self) -> &'static str {
-        "OpenCASCADE"
+        "occt"
     }
 
     fn make_box(&self, min: DVec3, size: DVec3) -> Result<Shape> {

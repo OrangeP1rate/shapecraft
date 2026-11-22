@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-version="0.11.2-alpha">
+<html lang="en" data-version="0.12.0-alpha">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -407,7 +407,7 @@ html.cubing .hint,html.cubing .status{opacity:0}
     <a class="rowlink muted" href="#soon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 15c3-7 8-9 12-10"/><circle cx="4" cy="15" r="1.5"/></svg><span class="tx">iPad</span><span class="tag">50%</span><i class="mini" style="--w:50%"></i></a>
     <a class="rowlink muted" href="#soon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 15c3-7 8-9 12-10"/><circle cx="4" cy="15" r="1.5"/></svg><span class="tx">In the browser</span><span class="tag">35%</span><i class="mini" style="--w:35%"></i></a>
     <a class="rowlink muted" href="#soon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 15c3-7 8-9 12-10"/><circle cx="4" cy="15" r="1.5"/></svg><span class="tx">Proxmox / LXC</span><span class="tag">70%</span><i class="mini" style="--w:70%"></i></a>
-    <a class="rowlink muted" href="#soon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 15c3-7 8-9 12-10"/><circle cx="4" cy="15" r="1.5"/></svg><span class="tx">Pure-Rust kernel</span><span class="tag">35%</span><i class="mini" style="--w:35%"></i></a>
+    <a class="rowlink muted" href="#soon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 15c3-7 8-9 12-10"/><circle cx="4" cy="15" r="1.5"/></svg><span class="tx">Pure-Rust kernel</span><span class="tag">68%</span><i class="mini" style="--w:68%"></i></a>
     <a class="rowlink muted" href="#soon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 15c3-7 8-9 12-10"/><circle cx="4" cy="15" r="1.5"/></svg><span class="tx">Cloud connectors</span><span class="tag">45%</span><i class="mini" style="--w:45%"></i></a>
     <div class="group">Links</div>
     <a class="rowlink" href="https://github.com/jackharvest/shapecraft"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 6 3 10l4 4M13 6l4 4-4 4"/></svg><span class="tx">Source code</span></a>
@@ -474,7 +474,7 @@ html.cubing .hint,html.cubing .status{opacity:0}
         <a class="btn go lg" href="#download">Download for <span id="os">your computer</span></a>
         <a class="btn ghost lg" href="https://github.com/jackharvest/shapecraft">View on GitHub</a>
       </div>
-      <div class="opens"><span>Opens what you already have</span><a href="#files">.shapr</a><a href="#files">.step</a><a href="#files">.x_t</a><a href="#files">.igs</a><a href="#files">.stl</a><a href="#files">.obj</a><a href="#files">.dxf</a><a href="#files">.svg</a></div>
+      <div class="opens"><span>Opens what you already have</span><a href="#files">.shapr</a><a href="#files">.step</a><a href="#files">.x_t</a><a href="#files">.sldprt</a><a href="#files">.prt</a><a href="#files">.par</a><a href="#files">.jt</a><a href="#files">.igs</a><a href="#files">.stl</a><a href="#files">.obj</a><a href="#files">.dxf</a><a href="#files">.svg</a></div>
       <div class="meta">Free and open source · MIT OR Apache-2.0 · Made in Rust</div>
     </div>
     <div class="media stage reveal">
@@ -648,14 +648,17 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
   <div class="wrap">
     <div class="label center"><span>07</span>Exchange</div>
     <h2 class="center">Plain folders. Open formats.</h2>
-    <p class="lede center">Open the files you already have, from <code>.shapr</code> projects to STEP and Parasolid. A project is a folder: a readable <code>project.json</code> with the History, and the bodies as STEP. An imported file is never written over. Drawings go out as PDF, SVG, DXF and DWG, and a sketch can go out as DWG.</p>
+    <p class="lede center">Open the files you already have, from <code>.shapr</code> projects to STEP, Parasolid, SolidWorks, NX, Solid Edge and JT parts. A project is a folder: a readable <code>project.json</code> with the History, and the bodies as STEP. An imported file is never written over. Drawings go out as PDF, SVG, DXF and DWG, and a sketch can go out as DWG.</p>
     <div class="formats reveal">
       <div><b>STEP · IGES</b><span>Open and save</span></div>
       <div><b>Parasolid XT</b><span>Open and save</span></div>
       <div><b>.shapr</b><span>Open and save</span></div>
       <div><b>STL · OBJ</b><span>Open and save</span></div>
       <div><b>DXF · SVG</b><span>Open as sketches</span></div>
+      <div><b>SolidWorks · NX · Solid Edge · JT</b><span>Open, exactly</span></div>
       <div><b>3MF · glTF · USDZ</b><span>Export, 3MF straight to your slicer</span></div>
+      <div><b>FBX · VRML</b><span>Export to 3D apps</span></div>
+      <div><b>PDF · DWG</b><span>Drawings out</span></div>
     </div>
     <div class="trio reveal">
       <div><b>Folders you own</b><span>Back them up, sync them, put them in git. Nothing is locked in a database.</span></div>
@@ -693,7 +696,7 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
       <div><span class="tag">In testing</span><b>iPad</b><span>ShapeCraft is a native iPhone app now (iPhone Duo included). On an iPad, model in Safari with an Apple Pencil today, served from your computer (Preferences ▸ Tablet). Next: the native app laid out for iPad.</span><i style="--w:50%"></i></div>
       <div><span class="tag">In testing</span><b>In the browser</b><span>ShapeCraft already serves itself to a browser on your network. Next: the kernel on your server and drawing in the browser with WebGPU, so there is nothing to install.</span><i style="--w:35%"></i></div>
       <div><span class="tag">Soon</span><b>Proxmox / LXC</b><span>A container script for headless modeling and agents over MCP is in the repository today (packaging/proxmox). Next: a one-line install from the releases.</span><i style="--w:70%"></i></div>
-      <div><span class="tag">In progress</span><b>Replaceable kernel</b><span>Today the geometry is Open CASCADE Technology (OCCT), behind one Rust interface. More of the geometry logic moves out of C++ into Rust with each release. Pure-Rust kernels we want to plug in next: truck, Fornjot, and SolidCore as it matures. Your projects stay the same.</span><i style="--w:35%"></i></div>
+      <div><span class="tag">In testing</span><b>A second kernel, in Rust</b><span>Open CASCADE is the default; Arris, a kernel written entirely in Rust, is one switch away in Preferences ▸ Advanced and already passes 179 of 190 modeling checks. Two kernels mean no single point of failure, and no one library deciding what ShapeCraft can become.</span><i style="--w:68%"></i></div>
       <div><span class="tag">In progress</span><b>Your cloud, connected</b><span>Work Folder and backups in Google Drive, OneDrive, Dropbox or iCloud Drive work today, through their desktop apps, and every project's older versions are a right-click away. Next: connecting to them from inside the app.</span><i style="--w:45%"></i></div>
     </div>
   </div>

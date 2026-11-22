@@ -10,6 +10,7 @@
 
 mod brep_io;
 mod brep_step;
+mod hlr;
 mod offset2d;
 pub mod poly;
 mod profile;
@@ -230,7 +231,7 @@ fn walls_square_to(s: &ArShape, f: AFace) -> bool {
 }
 
 /// The face's outward normal at the middle of one of its edges, from the edge's curve in the face's (u, v).
-fn normal_at_edge(m: &Model, f: AFace, edge: arris::topo::EdgeId) -> Option<DVec3> {
+pub(crate) fn normal_at_edge(m: &Model, f: AFace, edge: arris::topo::EdgeId) -> Option<DVec3> {
     let face = m.face(f.id).ok()?;
     let c = face.loops().iter().flat_map(|l| l.coedges()).find(|c| c.edge() == edge)?;
     let (_, range) = m.edge(edge).ok()?.curve()?;
@@ -300,7 +301,7 @@ fn edge_at(s: &ArShape, i: u32) -> Result<(Body, AEdge)> {
 }
 
 /// The faces each edge borders (edge id → face indices).
-fn edge_faces(s: &ArShape) -> HashMap<arris::topo::EdgeId, Vec<u32>> {
+pub(crate) fn edge_faces(s: &ArShape) -> HashMap<arris::topo::EdgeId, Vec<u32>> {
     let mut map: HashMap<_, Vec<u32>> = HashMap::new();
     for (i, (_, f)) in faces_of(s).iter().enumerate() {
         if let Ok(face) = s.model.face(f.id) {
@@ -322,10 +323,17 @@ pub(crate) fn curve_of(m: &Model, e: AEdge) -> Option<(Curve, f64, f64)> {
     Some((curve, range.lo(), range.hi()))
 }
 
-fn edge_points(m: &Model, e: AEdge, n: usize) -> Vec<DVec3> {
+/// Points along an edge: its ends for a straight one, else `n` pieces (`None`: a piece every 0.1 rad round a circle
+/// or ellipse, 64 along any other curve, as OCCT's drawings sample them).
+pub(crate) fn edge_points(m: &Model, e: AEdge, n: Option<usize>) -> Vec<DVec3> {
     match curve_of(m, e) {
         Some((c, lo, hi)) => {
-            let n = if matches!(c, Curve::Line { .. }) { 1 } else { n };
+            let n = match (&c, n) {
+                (Curve::Line { .. }, _) => 1,
+                (_, Some(n)) => n,
+                (Curve::Circle { .. } | Curve::Ellipse { .. }, None) => (((hi - lo).abs() / 0.1).ceil() as usize).clamp(2, 4096),
+                (_, None) => 64,
+            };
             (0..=n).map(|i| dp(c.point(lo + (hi - lo) * i as f64 / n as f64))).collect()
         }
         None => Vec::new(),
@@ -731,7 +739,7 @@ impl Kernel for RustKernel {
                 let len = match &c {
                     Curve::Line { .. } => dp(c.point(lo)).distance(dp(c.point(hi))),
                     Curve::Circle { radius, .. } => radius * (hi - lo).abs(),
-                    _ => edge_points(&s.model, e, 256).windows(2).map(|w| w[0].distance(w[1])).sum(),
+                    _ => edge_points(&s.model, e, Some(256)).windows(2).map(|w| w[0].distance(w[1])).sum(),
                 };
                 Ok((len, dp(c.point((lo + hi) / 2.0))))
             }
@@ -1020,8 +1028,9 @@ impl Kernel for RustKernel {
         }
     }
 
-    fn hidden_lines(&self, _shapes: &[Shape], _view: ViewFrame, _deflection: f64) -> Result<Vec<ViewLine>> {
-        Err(not_yet("drawings"))
+    fn hidden_lines(&self, shapes: &[Shape], view: ViewFrame, deflection: f64) -> Result<Vec<ViewLine>> {
+        let exact = shapes.iter().map(exact_or_faceted).collect::<Result<Vec<_>>>()?;
+        hlr::hidden_lines(&exact.iter().map(|s| s.as_ref()).collect::<Vec<_>>(), &view, deflection)
     }
 
     fn offset_curves(&self, frame: PlaneFrame, curves: &[PlanarCurve], distance: f64) -> Result<Shape> {
@@ -1069,7 +1078,7 @@ impl Kernel for RustKernel {
             Some((c @ Curve::Circle { .. }, lo, hi)) => {
                 EdgeCurve::Arc { a: dp(c.point(lo)), mid: dp(c.point((lo + hi) / 2.0)), b: dp(c.point(hi)) }
             }
-            _ => EdgeCurve::Other { points: edge_points(&s.model, e, 64) },
+            _ => EdgeCurve::Other { points: edge_points(&s.model, e, Some(64)) },
         })
     }
 

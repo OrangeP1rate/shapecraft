@@ -15,6 +15,7 @@ mod offset2d;
 pub mod poly;
 mod profile;
 pub mod regions;
+mod remove;
 mod step;
 mod unify;
 
@@ -232,10 +233,15 @@ fn walls_square_to(s: &ArShape, f: AFace) -> bool {
 
 /// The face's outward normal at the middle of one of its edges, from the edge's curve in the face's (u, v).
 pub(crate) fn normal_at_edge(m: &Model, f: AFace, edge: arris::topo::EdgeId) -> Option<DVec3> {
+    normal_along_edge(m, f, edge, 0.5)
+}
+
+/// The face's outward normal at the point `at` (0..1) of the way along one of its edges.
+fn normal_along_edge(m: &Model, f: AFace, edge: arris::topo::EdgeId, at: f64) -> Option<DVec3> {
     let face = m.face(f.id).ok()?;
     let c = face.loops().iter().flat_map(|l| l.coedges()).find(|c| c.edge() == edge)?;
     let (_, range) = m.edge(edge).ok()?.curve()?;
-    let uv = m.curve2(c.pcurve()).ok()?.point((range.lo() + range.hi()) / 2.0);
+    let uv = m.curve2(c.pcurve()).ok()?.point(range.lo() + (range.hi() - range.lo()) * at);
     let n = m.surface(face.surface()).ok()?.normal(uv.x, uv.y)?;
     Some(dv(&n.into_inner()) * sign(f.orientation))
 }
@@ -684,6 +690,43 @@ impl Kernel for RustKernel {
         per_body(s, &edges_of(s), edges, |m, b, es| Ok(arris::ops::fillet(m, b, &es, radius, C).map_err(op("fillet"))?.0))
     }
 
+    /// Chordal sizes become radii where the faces meet at one angle all along each edge (chord = 2r·sin(θ/2), θ the
+    /// turn between their normals) and all the edges come to one radius. Setback corners aren't in Arris.
+    fn fillet_edges_ex(&self, shape: &Shape, edges: &[u32], size: f64, chordal: bool, setback: f64) -> Result<Shape> {
+        if setback > 0.0 {
+            return Err(not_yet("setback corners"));
+        }
+        if !chordal {
+            return self.fillet_edges(shape, edges, size);
+        }
+        let s = exact(shape)?;
+        let all = edges_of(s);
+        let faces = faces_of(s);
+        let bordering = edge_faces(s);
+        let mut radius: Option<f64> = None;
+        for &i in edges {
+            let (_, e) = all.get(i as usize).copied().ok_or_else(|| bad(format!("no edge {i}")))?;
+            let sides: Vec<AFace> =
+                bordering.get(&e.id).into_iter().flatten().filter_map(|&g| faces.get(g as usize)).map(|(_, f)| *f).collect();
+            let [a, b] = sides[..] else { return Err(bad("a chordal fillet needs an edge between two faces")) };
+            let turn = |at: f64| {
+                let (na, nb) = (normal_along_edge(&s.model, a, e.id, at)?, normal_along_edge(&s.model, b, e.id, at)?);
+                Some(na.dot(nb).clamp(-1.0, 1.0).acos())
+            };
+            let angles: Vec<f64> = [0.1, 0.5, 0.9].iter().filter_map(|t| turn(*t)).collect();
+            let (lo, hi) = angles.iter().fold((f64::INFINITY, 0.0f64), |(l, h), x| (l.min(*x), h.max(*x)));
+            if angles.len() < 3 || hi - lo > 1e-9 || lo < 1e-6 {
+                return Err(not_yet("chordal fillets where the angle changes along the edge"));
+            }
+            let r = size / (2.0 * (lo / 2.0).sin());
+            match radius {
+                Some(prev) if (prev - r).abs() > 1e-9 * r => return Err(not_yet("chordal fillets of edges at different angles at once")),
+                _ => radius = Some(r),
+            }
+        }
+        self.fillet_edges(shape, edges, radius.ok_or_else(|| bad("pick edges to round"))?)
+    }
+
     fn fillet_edges_variable(&self, shape: &Shape, edges: &[u32], r1: f64, r2: f64) -> Result<Shape> {
         if (r1 - r2).abs() <= 1e-12 * r1.abs().max(1.0) {
             return self.fillet_edges(shape, edges, r1);
@@ -912,6 +955,31 @@ impl Kernel for RustKernel {
     fn offset_faces(&self, shape: &Shape, faces: &[u32], distance: f64) -> Result<Shape> {
         let s = exact(shape)?;
         per_body(s, &faces_of(s), faces, |m, b, fs| Ok(arris::ops::offset_faces(m, b, &fs, distance, C).map_err(op("offset faces"))?.0))
+    }
+
+    /// Holes, pockets, slots and bosses on a face come out whole (their rim is a hole in the faces kept, which then
+    /// closes); faces whose rim cuts across a face need surfaces extended, which this kernel doesn't do yet.
+    fn remove_faces(&self, shape: &Shape, faces: &[u32]) -> Result<Shape> {
+        if faces.is_empty() || faces.len() > 10_000 {
+            return Err(bad("pick 1 to 10000 faces to remove"));
+        }
+        let s = exact(shape)?;
+        let all = faces_of(s);
+        let mut m = (*s.model).clone();
+        let mut out = Vec::new();
+        for b in &s.bodies {
+            let gone: std::collections::HashSet<arris::topo::FaceId> =
+                faces.iter().filter_map(|i| all.get(*i as usize)).filter(|(ob, _)| ob == b).map(|(_, f)| f.id).collect();
+            if gone.is_empty() {
+                out.push(*b);
+                continue;
+            }
+            out.push(remove::faces(&mut m, *b, &gone).ok_or_else(|| not_yet("removing faces that cut across a face"))?);
+        }
+        if faces.iter().any(|i| *i as usize >= all.len()) {
+            return Err(bad("no such face"));
+        }
+        Ok(wrap(pack(&m, &out)?))
     }
 
     fn split_by_plane(&self, shape: &Shape, origin: DVec3, normal: DVec3) -> Result<Vec<Shape>> {

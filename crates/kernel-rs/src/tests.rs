@@ -216,3 +216,15 @@ fn a_rounded_edge_is_a_convex_blend_and_a_hole_wall_is_none() {
     assert_eq!(found.len(), 1);
     assert!(close(found[0].0, 1.0) && found[0].1, "{found:?}");
 }
+
+#[test]
+fn a_chordal_fillet_on_a_square_edge_has_radius_chord_over_root_two() {
+    let b = K.make_box(DVec3::ZERO, DVec3::splat(10.0)).unwrap();
+    let edge = (0..K.edge_count(&b).unwrap())
+        .find(|&e| matches!(K.edge_curve(&b, e).unwrap(), shapecraft_kernel::EdgeCurve::Line { a, b } if a.z > 9.9 && b.z > 9.9))
+        .unwrap();
+    let chordal = K.fillet_edges_ex(&b, &[edge], 2.0, true, 0.0).unwrap();
+    let radius = K.fillet_edges(&b, &[edge], 2.0 / 2f64.sqrt()).unwrap();
+    assert!(close(K.mass_props(&chordal).unwrap().volume, K.mass_props(&radius).unwrap().volume));
+    assert!(K.fillet_edges_ex(&b, &[edge], 2.0, false, 1.0).is_err(), "setback corners say they aren't here yet");
+}

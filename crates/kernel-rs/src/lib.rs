@@ -20,6 +20,7 @@ mod remove;
 mod step;
 mod surgery;
 mod unify;
+mod wrap;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -652,7 +653,8 @@ impl Kernel for RustKernel {
             F::TwoDistanceChamfer => Limited("outside edges: straight ones between flat faces, circles on cylinders and cones"),
             F::MoveEdge => Limited("circles round a flat face, and straight edges between flat faces"),
             F::Fill => Limited("flat openings (any opening on a mesh body)"),
-            F::VariableFillet | F::SetbackCorners | F::WrapEmboss => Missing,
+            F::WrapEmboss => Limited("on cones, and across a face's edge, it takes up to a second"),
+            F::VariableFillet | F::SetbackCorners => Missing,
             F::ProjectAsEdge => Limited("closed outlines that land inside one flat face"),
             F::Iges => Limited("solids and shells (B-rep); files of loose trimmed surfaces need Open CASCADE"),
             F::Extrude | F::DraftAngles | F::Loft | F::PushPull | F::Chamfer | F::Shell | F::SplitBody => Full,
@@ -1419,6 +1421,19 @@ impl Kernel for RustKernel {
             return Err(bad("nothing to project"));
         }
         surgery::imprint(exact(shape)?, face, tools)
+    }
+
+    fn wrap_emboss(
+        &self,
+        body: &Shape,
+        face: Option<u32>,
+        regions: &[Shape],
+        frame: PlaneFrame,
+        depth: f64,
+        rotation: f64,
+        center: Option<DVec3>,
+    ) -> Result<Shape> {
+        wrap::wrap_emboss(body, face, regions, frame, depth, rotation, center)
     }
 
     fn loft(&self, sections: &[Shape]) -> Result<Shape> {

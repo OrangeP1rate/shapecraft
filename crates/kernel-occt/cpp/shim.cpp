@@ -3216,13 +3216,17 @@ int sk_wrap_emboss(const SkShape* body, int64_t face, const SkShape* const* regi
         };
         TopoDS_Shape solid = thicken(thick);
         if (solid.IsNull()) return fail("couldn't raise the wrapped profile");
-        // Raised material sits outside the face, an engraving inside: flip if the face came out turned over.
-        GProp_GProps g;
-        BRepGProp::VolumeProperties(solid, g);
-        gp_Vec rel(w.cone ? skin_apex : loc, g.CentreOfMass());
-        double off = (rel - z * rel.Dot(z)).Magnitude();
-        double surf_r = w.cone ? rel.Dot(z) * std::tan(w.angle) : skin_r;
-        if ((depth > 0) != (off > surf_r)) {
+        // Raised material sits outside the face, an engraving inside: flip if the face came out turned over. Which
+        // side it went is read from its corners' distance off the skin (the centre of mass of a profile reaching
+        // most of the way round lies inside the face whichever side the material is on).
+        double furthest = 0;
+        for (TopExp_Explorer vx(solid, TopAbs_VERTEX); vx.More(); vx.Next()) {
+          gp_Vec rel(w.cone ? skin_apex : loc, BRep_Tool::Pnt(TopoDS::Vertex(vx.Current())));
+          double a = rel.Dot(z), r = (rel - z * a).Magnitude();
+          double off = w.cone ? r * std::cos(w.angle) - a * std::sin(w.angle) : r - skin_r;
+          if (std::abs(off) > std::abs(furthest)) furthest = off;
+        }
+        if ((depth > 0) != (furthest > 0)) {
           solid = thicken(-thick);
           if (solid.IsNull()) return fail("couldn't raise the wrapped profile");
         }

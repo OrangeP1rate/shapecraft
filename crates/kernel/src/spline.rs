@@ -21,7 +21,6 @@ pub fn fit(points: &[DVec3]) -> Option<Fit> {
     if !(2..=1000).contains(&n) || points.iter().any(|p| !p.is_finite()) {
         return None;
     }
-    let p = (n - 1).min(3);
     let mut w: Vec<f64> = points.windows(2).map(|s| s[0].distance(s[1]).sqrt()).collect();
     if w.iter().any(|&x| x < 1e-9) {
         return None;
@@ -39,6 +38,23 @@ pub fn fit(points: &[DVec3]) -> Option<Fit> {
         params.push(at);
     }
     params[n - 1] = 1.0;
+    fit_with(points, params)
+}
+
+/// The spline through `points` passing each at the parameter given (0 to 1, rising): two point sets fitted at the same
+/// parameters share their knots, so a ruled surface can run between them pole for pole.
+pub fn fit_with(points: &[DVec3], params: Vec<f64>) -> Option<Fit> {
+    let n = points.len();
+    if !(2..=1000).contains(&n) || params.len() != n || points.iter().any(|p| !p.is_finite()) {
+        return None;
+    }
+    if params.first() != Some(&0.0)
+        || params.last() != Some(&1.0)
+        || params.windows(2).any(|w| w[1].partial_cmp(&w[0]) != Some(std::cmp::Ordering::Greater))
+    {
+        return None;
+    }
+    let p = (n - 1).min(3);
     let mut knots = vec![0.0; p + 1];
     knots.extend((1..n - p).map(|j| params[j..j + p].iter().sum::<f64>() / p as f64));
     knots.extend(std::iter::repeat_n(1.0, p + 1));

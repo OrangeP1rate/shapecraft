@@ -680,3 +680,75 @@ fn an_extrude_cut_works_on_the_bodies_named_in_from() {
     assert!(cut(&mut named, json!({"from": []})).is_err());
     assert!(cut(&mut named, json!({"from": [9999]})).is_err());
 }
+
+/// Wrap & Emboss beyond one plain profile: a strip running past the face's rim (raised off the skin all along, so
+/// 0.2 · (11² − 9.75²) · 5 more above the top), two profiles at once, an engraving into an earlier emboss, profiles
+/// a ring with the disc in its hole, profiles reaching most of the way round (264° and 172° on an r10 cylinder: 2.3 · ½ · (11² − 10²) · 10 = 483 raised,
+/// 2.3 · ½ · (10² − 9²) · 10 = 437 engraved), and two engravings on a cone. Both kernels give these.
+#[test]
+fn wrap_emboss_wide_past_the_rim_and_again() {
+    use std::f64::consts::PI;
+    let cylinder = |s: &mut crate::Session| {
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("circle", &json!({"center": [0, 0], "radius": 10})).unwrap();
+        s.execute("extrude", &json!({"sketch": 1, "region": 0, "distance": 20})).unwrap();
+        s.execute("sketch", &json!({"plane": "xz"})).unwrap();
+    };
+    let added = |s: &mut crate::Session| volume(s) - 2000.0 * PI;
+
+    let mut s = session();
+    cylinder(&mut s);
+    s.execute("rectangle", &json!({"corner": [-2, 10], "opposite": [2, 25]})).unwrap();
+    s.execute("wrap_emboss", &json!({"sketch": 3, "region": 0, "body": 2, "depth": 1})).unwrap();
+    assert!((added(&mut s) - (42.0 + 25.9375)).abs() < 0.01, "{}", added(&mut s));
+
+    let mut s = session();
+    cylinder(&mut s);
+    s.execute("rectangle", &json!({"corner": [-6, 5], "opposite": [-2, 15]})).unwrap();
+    s.execute("rectangle", &json!({"corner": [2, 5], "opposite": [6, 15]})).unwrap();
+    s.execute("wrap_emboss", &json!({"sketch": 3, "regions": [0, 1], "body": 2, "depth": 1})).unwrap();
+    assert!((added(&mut s) - 84.0).abs() < 0.01, "{}", added(&mut s));
+    // Into the first raised one (its face at r11 is the nearest), then across that one's edge.
+    s.execute("sketch", &json!({"plane": "xz"})).unwrap();
+    let sk = s.active_sketch.unwrap().0;
+    s.execute("rectangle", &json!({"corner": [-1, 8], "opposite": [1, 12]})).unwrap();
+    s.execute("wrap_emboss", &json!({"sketch": sk, "region": 0, "body": 2, "depth": -0.5})).unwrap();
+    assert!((added(&mut s) - 80.1).abs() < 0.01, "{}", added(&mut s));
+    s.execute("sketch", &json!({"plane": "xz"})).unwrap();
+    let sk = s.active_sketch.unwrap().0;
+    s.execute("rectangle", &json!({"corner": [-3, 14], "opposite": [3, 17]})).unwrap();
+    s.execute("wrap_emboss", &json!({"sketch": sk, "region": 0, "body": 2, "depth": -0.5})).unwrap();
+    assert!((added(&mut s) - 71.0734).abs() < 0.01, "{}", added(&mut s));
+
+    // A ring and the disc in its hole, picked together: one disc of radius 2, ≈ 4π · (1 + 1/20).
+    let mut s = session();
+    cylinder(&mut s);
+    s.execute("circle", &json!({"center": [0, 10], "radius": 2})).unwrap();
+    s.execute("circle", &json!({"center": [0, 10], "radius": 1})).unwrap();
+    s.execute("wrap_emboss", &json!({"sketch": 3, "regions": [0, 1], "body": 2, "depth": 1})).unwrap();
+    assert!((added(&mut s) - 4.0 * PI * 1.05).abs() < 0.01, "{}", added(&mut s));
+
+    for (width, depth, want) in [(46.0, 1.0, 483.0), (46.0, -1.0, -437.0), (30.0, 1.0, 315.0)] {
+        let mut s = session();
+        cylinder(&mut s);
+        s.execute("rectangle", &json!({"corner": [-width / 2.0, 5], "opposite": [width / 2.0, 15]})).unwrap();
+        s.execute("wrap_emboss", &json!({"sketch": 3, "region": 0, "body": 2, "depth": depth})).unwrap();
+        assert!((added(&mut s) - want).abs() < 0.01, "{width} {depth}: {}", added(&mut s));
+    }
+
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xz"})).unwrap();
+    s.execute("line", &json!({"a": [0, 0], "b": [10, 0]})).unwrap();
+    s.execute("line", &json!({"a": [10, 0], "b": [5, 20]})).unwrap();
+    s.execute("line", &json!({"a": [5, 20], "b": [0, 20]})).unwrap();
+    s.execute("line", &json!({"a": [0, 20], "b": [0, 0]})).unwrap();
+    s.execute("revolve", &json!({"sketch": 1, "region": 0, "axis": "v"})).unwrap();
+    s.execute("sketch", &json!({"plane": "xz"})).unwrap();
+    let sk = s.active_sketch.unwrap().0;
+    s.execute("rectangle", &json!({"corner": [-3, 5], "opposite": [-1, 8]})).unwrap();
+    s.execute("rectangle", &json!({"corner": [1, 5], "opposite": [3, 8]})).unwrap();
+    let before = volume(&mut s);
+    let body = s.doc.bodies[0].id.0;
+    s.execute("wrap_emboss", &json!({"sketch": sk, "regions": [0, 1], "body": body, "depth": -0.5})).unwrap();
+    assert!((before - volume(&mut s) - 5.8264).abs() < 0.01, "{}", before - volume(&mut s));
+}

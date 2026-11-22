@@ -46,7 +46,7 @@ fn open(s: &ArShape, picks: &[u32]) -> Result<Opened> {
 }
 
 /// The shape with body `at` replaced by `brep` built again.
-fn rebuild(s: &ArShape, at: usize, brep: &Brep) -> Result<Shape> {
+pub(crate) fn rebuild(s: &ArShape, at: usize, brep: &Brep) -> Result<Shape> {
     let made = RustKernel.from_brep(brep)?;
     let made = crate::exact(&made)?;
     let mut m = Model::default();
@@ -596,58 +596,73 @@ const IMPRINT: &str =
 
 /// One piece of a closed outline: its curve, whether the walk runs against the curve's own direction, its ends,
 /// and points along it in walking order.
-struct Piece {
-    curve: Curve,
-    against: bool,
-    from: DVec3,
-    to: DVec3,
-    pts: Vec<DVec3>,
+pub(crate) struct Piece {
+    pub(crate) curve: Curve,
+    pub(crate) against: bool,
+    pub(crate) from: DVec3,
+    pub(crate) to: DVec3,
+    pub(crate) pts: Vec<DVec3>,
+}
+
+/// One edge of an outline sampled at `n + 1` points in walking order (`reversed`: the loop walks it backwards).
+fn piece_of(m: &Model, eid: EdgeId, reversed: bool, why: &str, n: usize) -> Result<Piece> {
+    let e = m.edge(eid).map_err(|x| bad(x.to_string()))?;
+    let (cid, range) = e.curve().ok_or_else(|| bad(why))?;
+    let c = m.curve(cid).map_err(|x| bad(x.to_string()))?;
+    let mut pts: Vec<DVec3> = (0..=n)
+        .map(|k| {
+            let p = c.point(range.lo() + (range.hi() - range.lo()) * k as f64 / n as f64);
+            DVec3::new(p.x, p.y, p.z)
+        })
+        .collect();
+    let start = m.vertex(e.start()).map(|v| v.point()).map_err(|x| bad(x.to_string()))?;
+    let start = DVec3::new(start.x, start.y, start.z);
+    // The edge may run against its curve; then the walk along the edge does too.
+    let edge_against = pts.first().is_some_and(|p| p.distance(start) > pts.last().map_or(0.0, |q| q.distance(start)) + 1e-9);
+    let against = edge_against != reversed;
+    if against {
+        pts.reverse();
+    }
+    let (Some(&from), Some(&to)) = (pts.first(), pts.last()) else { return Err(bad(why)) };
+    Ok(Piece { curve: crate::brep_io::curve(c), against, from, to, pts })
 }
 
 /// The closed outlines of a tool: every loop of its face(s), or the one closed edge named.
 fn outlines(tool: &Shape, edge: Option<u32>) -> Result<Vec<Vec<Piece>>> {
     let t = crate::exact(tool)?;
-    let m = &t.model;
-    let piece = |eid: EdgeId, reversed: bool| -> Result<Piece> {
-        let e = m.edge(eid).map_err(|x| bad(x.to_string()))?;
-        let (cid, range) = e.curve().ok_or_else(|| bad(IMPRINT))?;
-        let c = m.curve(cid).map_err(|x| bad(x.to_string()))?;
-        let mut pts: Vec<DVec3> = (0..=32)
-            .map(|k| {
-                let p = c.point(range.lo() + (range.hi() - range.lo()) * k as f64 / 32.0);
-                DVec3::new(p.x, p.y, p.z)
-            })
-            .collect();
-        let start = m.vertex(e.start()).map(|v| v.point()).map_err(|x| bad(x.to_string()))?;
-        let start = DVec3::new(start.x, start.y, start.z);
-        // The edge may run against its curve; then the walk along the edge does too.
-        let edge_against = pts.first().is_some_and(|p| p.distance(start) > pts.last().map_or(0.0, |q| q.distance(start)) + 1e-9);
-        let against = edge_against != reversed;
-        if against {
-            pts.reverse();
-        }
-        let (Some(&from), Some(&to)) = (pts.first(), pts.last()) else { return Err(bad(IMPRINT)) };
-        Ok(Piece { curve: crate::brep_io::curve(c), against, from, to, pts })
-    };
     if let Some(i) = edge {
         let (_, e) = crate::edge_at(t, i)?;
-        let p = piece(e.id, false)?;
+        let p = piece_of(&t.model, e.id, false, IMPRINT, 32)?;
         if p.from.distance(p.to) > 1e-7 {
             return Err(bad(IMPRINT));
         }
         return Ok(vec![vec![p]]);
     }
+    Ok(face_outlines_of(t, IMPRINT, 32)?.into_iter().flatten().collect())
+}
+
+/// Each face's closed loops (outline and holes, in no set order), each piece at `n + 1` points.
+pub(crate) fn face_outlines(tool: &Shape, n: usize) -> Result<Vec<Vec<Vec<Piece>>>> {
+    face_outlines_of(crate::exact(tool)?, "a profile edge has no curve", n)
+}
+
+fn face_outlines_of(t: &ArShape, why: &str, n: usize) -> Result<Vec<Vec<Vec<Piece>>>> {
+    let m = &t.model;
     let mut out = Vec::new();
     for (_, f) in crate::faces_of(t) {
         let face = m.face(f.id).map_err(|x| bad(x.to_string()))?;
+        let mut loops = Vec::new();
         for l in face.loops() {
             let mut ps = Vec::new();
             for c in l.coedges() {
-                ps.push(piece(c.edge(), c.orientation() == arris::topo::Orientation::Reversed)?);
+                ps.push(piece_of(m, c.edge(), c.orientation() == arris::topo::Orientation::Reversed, why, n)?);
             }
             if !ps.is_empty() {
-                out.push(ps);
+                loops.push(ps);
             }
+        }
+        if !loops.is_empty() {
+            out.push(loops);
         }
     }
     Ok(out)
@@ -688,7 +703,7 @@ fn flatten(c: &Curve, o: DVec3, n: DVec3) -> Option<Curve> {
 /// A face in the plane's 2D: its number, its outline and its holes.
 type Region = (usize, Vec<(f64, f64)>, Vec<Vec<(f64, f64)>>);
 
-fn inside_2d(q: (f64, f64), poly: &[(f64, f64)]) -> bool {
+pub(crate) fn inside_2d(q: (f64, f64), poly: &[(f64, f64)]) -> bool {
     let mut inside = false;
     let mut j = poly.len().wrapping_sub(1);
     for i in 0..poly.len() {

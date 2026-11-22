@@ -1680,7 +1680,7 @@ impl ShapeCraftApp {
                 Ok(Value::Null)
             }
             "ui.toggle" if self.ws.is_none() && params.get("panel").and_then(Value::as_str) == Some("preferences") => {
-                self.home_prefs = Some(params.get("tab").and_then(Value::as_u64).unwrap_or(0).min(4) as usize);
+                self.home_prefs = Some(params.get("tab").and_then(Value::as_u64).unwrap_or(0).min(5) as usize);
                 Ok(Value::Null)
             }
             // Help ▸ Report a Problem… / Suggest an Idea… / Your Reports…, or a failed step's Report… (`error`,

@@ -11,6 +11,7 @@
 mod brep_io;
 mod brep_step;
 mod hlr;
+mod iges;
 mod offset2d;
 pub mod poly;
 mod profile;
@@ -653,7 +654,7 @@ impl Kernel for RustKernel {
             F::Fill => Limited("flat openings (any opening on a mesh body)"),
             F::VariableFillet | F::SetbackCorners | F::WrapEmboss => Missing,
             F::ProjectAsEdge => Limited("closed outlines that land inside one flat face"),
-            F::Iges => Missing,
+            F::Iges => Limited("solids and shells (B-rep); files of loose trimmed surfaces need Open CASCADE"),
             F::Extrude | F::DraftAngles | F::Loft | F::PushPull | F::Chamfer | F::Shell | F::SplitBody => Full,
             F::Drawings | F::Measure | F::MeshBodies | F::StepFiles | F::ExactImports => Full,
         }
@@ -1438,16 +1439,16 @@ impl Kernel for RustKernel {
 
     fn write_step(&self, shapes: &[Shape], path: &Path) -> Result<()> {
         let parts: Vec<(Shape, PartInfo)> = shapes.iter().map(|s| (s.clone(), PartInfo::default())).collect();
-        step::write_parts(&parts, path)
+        step::write_parts(&parts, path, 214)
     }
 
-    /// Arris writes AP214 whatever the protocol asked (AP242 readers take it).
-    fn write_step_ap(&self, shapes: &[Shape], path: &Path, _protocol: u32) -> Result<()> {
-        self.write_step(shapes, path)
+    fn write_step_ap(&self, shapes: &[Shape], path: &Path, protocol: u32) -> Result<()> {
+        let parts: Vec<(Shape, PartInfo)> = shapes.iter().map(|s| (s.clone(), PartInfo::default())).collect();
+        step::write_parts(&parts, path, protocol)
     }
 
-    fn write_step_parts(&self, parts: &[(Shape, PartInfo)], path: &Path, _protocol: u32) -> Result<()> {
-        step::write_parts(parts, path)
+    fn write_step_parts(&self, parts: &[(Shape, PartInfo)], path: &Path, protocol: u32) -> Result<()> {
+        step::write_parts(parts, path, protocol)
     }
 
     fn read_step(&self, path: &Path) -> Result<Vec<Shape>> {
@@ -1458,12 +1459,31 @@ impl Kernel for RustKernel {
         step::read_parts(path)
     }
 
-    fn write_iges(&self, _shapes: &[Shape], _path: &Path) -> Result<()> {
-        Err(not_yet("IGES files"))
+    /// B-rep solids (type 186), as Open CASCADE writes them; mesh bodies go as flat-faced solids.
+    fn write_iges(&self, shapes: &[Shape], path: &Path) -> Result<()> {
+        let mut breps = Vec::new();
+        for shape in shapes {
+            let s = exact_or_faceted(shape)?;
+            for b in &s.bodies {
+                let solid = s.model.body(b.id).is_ok_and(|x| x.kind() == arris::topo::entity::BodyKind::Solid);
+                breps.push(brep_io::body(&s.model, *b, solid)?);
+            }
+        }
+        if breps.is_empty() {
+            return Err(bad("nothing to write"));
+        }
+        let text = iges::write(&breps)?;
+        std::fs::write(path, text).map_err(|e| KernelError::Operation { op: "write IGES", message: e.to_string() })
     }
 
-    fn read_iges(&self, _path: &Path) -> Result<Vec<Shape>> {
-        Err(not_yet("IGES files"))
+    /// B-rep solids and shells; files of loose trimmed surfaces say they need Open CASCADE.
+    fn read_iges(&self, path: &Path) -> Result<Vec<Shape>> {
+        let bytes = std::fs::read(path).map_err(|e| KernelError::Operation { op: "read IGES", message: e.to_string() })?;
+        if bytes.len() > 512 * 1024 * 1024 {
+            return Err(bad("the IGES file is too big"));
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        iges::read(&text)?.iter().map(|b| self.from_brep(b)).collect()
     }
 
     fn empty(&self) -> Result<Shape> {

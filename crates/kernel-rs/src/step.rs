@@ -40,7 +40,10 @@ fn occurrence(name: String, solids: Vec<usize>, colour: Option<Rgb>) -> Occurren
 }
 
 /// Writes each part as a product of its own (named, coloured), inside assemblies named by its path.
-pub fn write_parts(parts: &[(Shape, PartInfo)], path: &Path) -> Result<()> {
+pub fn write_parts(parts: &[(Shape, PartInfo)], path: &Path, protocol: u32) -> Result<()> {
+    if ![203, 214, 242].contains(&protocol) {
+        return Err(KernelError::InvalidInput(format!("STEP AP{protocol} isn't a protocol (AP203, AP214 or AP242)")));
+    }
     let mut m = Model::default();
     let mut bodies: Vec<Body> = Vec::new();
     let mut tree = ProductTree::default();
@@ -61,8 +64,33 @@ pub fn write_parts(parts: &[(Shape, PartInfo)], path: &Path) -> Result<()> {
         let part = occurrence(name, solids, info.color.map(rgb));
         assembly(&mut tree.roots, &info.path).push(part);
     }
-    let text = arris::io::step::write_products(&m, &bodies, &tree, C).map_err(step_error)?;
+    let text = relabel(arris::io::step::write_products(&m, &bodies, &tree, C).map_err(step_error)?, protocol);
     std::fs::write(path, text).map_err(|e| KernelError::Io(e.to_string()))
+}
+
+/// Arris writes AP214; the solids, products and colours it writes are the same in AP242 and AP203 files, so another
+/// protocol only changes the schema and the protocol named.
+fn relabel(text: String, protocol: u32) -> String {
+    let (schema, name, year) = match protocol {
+        242 => {
+            ("AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 }", "ap242_managed_model_based_3d_engineering", 2014)
+        }
+        203 => ("CONFIG_CONTROL_DESIGN", "config_control_design", 1994),
+        _ => return text,
+    };
+    let mut out = String::with_capacity(text.len() + 64);
+    for line in text.lines() {
+        if line.starts_with("FILE_SCHEMA(") {
+            out.push_str(&format!("FILE_SCHEMA(('{schema}'));"));
+        } else if let Some(i) = line.find("APPLICATION_PROTOCOL_DEFINITION(") {
+            let tail = line.rsplit_once(',').map_or(");", |(_, t)| t);
+            out.push_str(&format!("{}APPLICATION_PROTOCOL_DEFINITION('international standard','{name}',{year},{tail}", &line[..i]));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
 }
 
 /// Every solid of the file Arris can read, with its part's name, colour and assembly path, in the file's order.

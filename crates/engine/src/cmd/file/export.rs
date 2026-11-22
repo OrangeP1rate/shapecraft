@@ -93,6 +93,40 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             run: export_glb,
         },
         CommandSpec {
+            id: "export_fbx",
+            label: "FBX…",
+            menu: "File/Export to/FBX…",
+            shortcut: None,
+            help: "Export bodies as a binary FBX file (Blender, Unity, Unreal) with their colors",
+            params: r#"{"path": "/out.fbx", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "colors": true}"#,
+            modifies: false,
+            enabled: |s| !s.doc.bodies.is_empty(),
+            run: |s, p| {
+                let path = path_param(p, "path")?;
+                let bodies = export_bodies(s, p)?;
+                let bytes =
+                    formats::write_fbx(&bodies).ok_or_else(|| EngineError::BadParams("the model is too large for an FBX file".into()))?;
+                write_file(&path, &bytes)?;
+                Ok(json!({ "path": path, "bodies": bodies.len() }))
+            },
+        },
+        CommandSpec {
+            id: "export_vrml",
+            label: "VRML…",
+            menu: "File/Export to/VRML…",
+            shortcut: None,
+            help: "Export bodies as a VRML 2.0 file (.wrl) with their colors",
+            params: r#"{"path": "/out.wrl", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "colors": true}"#,
+            modifies: false,
+            enabled: |s| !s.doc.bodies.is_empty(),
+            run: |s, p| {
+                let path = path_param(p, "path")?;
+                let bodies = export_bodies(s, p)?;
+                write_file(&path, formats::write_vrml(&bodies).as_bytes())?;
+                Ok(json!({ "path": path, "bodies": bodies.len() }))
+            },
+        },
+        CommandSpec {
             id: "export_usdz",
             label: "USDZ…",
             menu: "File/Export to/USDZ…",

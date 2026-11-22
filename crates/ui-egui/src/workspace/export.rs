@@ -24,6 +24,8 @@ pub enum Format {
     Glb,
     Obj,
     Usdz,
+    Fbx,
+    Vrml,
     Svg,
     Pdf,
     Image,
@@ -55,6 +57,8 @@ const FORMATS: &[(Format, &str, &str, &str, &str)] = &[
     (Format::Glb, "GLB", "GLB", "Binary glTF", "Meshes with their materials for the web, game engines and AR viewers."),
     (Format::Obj, "OBJ", "OBJ", "Wavefront OBJ", "Meshes with a material file of the body colors."),
     (Format::Usdz, "USDZ", "USDZ", "Universal Scene Description", "Meshes with their materials for AR Quick Look and USD viewers."),
+    (Format::Fbx, "FBX", "FBX", "FBX (binary)", "Meshes with their colors for Blender, Unity, Unreal and animation tools."),
+    (Format::Vrml, "VRML", "WRL", "VRML 2.0", "Meshes with their colors for older viewers, simulators and VR tools."),
     (Format::DwgSketch, "DWG from Sketch", "DWG", "DWG from Sketch", "A sketch's curves, flat in its plane, as an AutoCAD drawing."),
     (Format::DwgDrawing, "DWG from Drawing", "DWG", "DWG from Drawing", "The drawing sheet's views and annotations as an AutoCAD drawing."),
     (Format::Svg, "SVG", "SVG", "Scalable Vector Graphics", "Sketches as a vector image for laser cutters, CNC and drawing apps."),
@@ -77,6 +81,8 @@ impl Format {
             Format::Parasolid => ("x_b", Some("export_parasolid")),
             Format::ThreeMf | Format::Slicer => ("3mf", Some("export_3mf")),
             Format::Usdz => ("usdz", Some("export_usdz")),
+            Format::Fbx => ("fbx", Some("export_fbx")),
+            Format::Vrml => ("wrl", Some("export_vrml")),
             Format::Step => ("step", Some("export_step")),
             Format::DxfSketch => ("dxf", Some("export_sketch")),
             Format::DxfDrawing => ("dxf", Some("export_drawing")),
@@ -94,7 +100,18 @@ impl Format {
 
     /// Mesh formats export each body on its own when "Save Each 1st-Level Item Separately" is on.
     pub fn per_body(self) -> bool {
-        matches!(self, Format::ThreeMf | Format::Step | Format::Iges | Format::Stl | Format::Glb | Format::Obj | Format::Usdz)
+        matches!(
+            self,
+            Format::ThreeMf
+                | Format::Step
+                | Format::Iges
+                | Format::Stl
+                | Format::Glb
+                | Format::Obj
+                | Format::Usdz
+                | Format::Fbx
+                | Format::Vrml
+        )
     }
 
     /// Its name in the list ("STEP", "DXF from Sketch").
@@ -118,6 +135,8 @@ impl Format {
             "glb" => Format::Glb,
             "obj" => Format::Obj,
             "usdz" => Format::Usdz,
+            "fbx" => Format::Fbx,
+            "wrl" | "vrml" => Format::Vrml,
             "dwg" => Format::DwgDrawing,
             "svg" => Format::Svg,
             "pdf" => Format::Pdf,
@@ -237,7 +256,10 @@ impl ExportDialog {
     /// The engine parameters every chosen format shares (the path and items are added per file).
     pub fn params(&self, f: Format) -> serde_json::Value {
         let mut p = serde_json::json!({ "hidden": self.hidden });
-        if matches!(f, Format::ThreeMf | Format::Slicer | Format::Stl | Format::Glb | Format::Obj | Format::Usdz) {
+        if matches!(
+            f,
+            Format::ThreeMf | Format::Slicer | Format::Stl | Format::Glb | Format::Obj | Format::Usdz | Format::Fbx | Format::Vrml
+        ) {
             p["resolution"] = serde_json::json!(if self.high { "high" } else { "low" });
             p["colors"] = serde_json::json!(self.colors);
         }
@@ -379,7 +401,8 @@ fn settings(d: &mut ExportDialog, ui: &mut Ui, p: &egui::Painter, f: Format, k: 
             }
         }
     }
-    let mesh = matches!(f, Format::ThreeMf | Format::Slicer | Format::Stl | Format::Glb | Format::Obj | Format::Usdz);
+    let mesh =
+        matches!(f, Format::ThreeMf | Format::Slicer | Format::Stl | Format::Glb | Format::Obj | Format::Usdz | Format::Fbx | Format::Vrml);
     if mesh {
         let r = row(&mut y, CARD_H);
         if paint {

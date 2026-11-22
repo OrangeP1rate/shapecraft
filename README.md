@@ -106,7 +106,7 @@ It's an **alpha**, so keep backups of anything precious, and tell us when someth
   wrap and emboss.
 - **History:** every step stays editable on its Parameter Card; change a number and the model rebuilds.
 - **Files:** projects are folders (`project.json` plus STEP). Open and save STEP, IGES, Parasolid XT, STL, 3MF, OBJ
-  and `.shapr`; open SolidWorks parts (`.sldprt`); export glTF, and 2D drawings to PDF, SVG, DXF and DWG.
+  and `.shapr`; open SolidWorks parts (`.sldprt`); export glTF, FBX, VRML, and 2D drawings to PDF, SVG, DXF and DWG.
 - **Visualize:** materials you drag onto bodies, HDR panoramas, display modes, section views.
 - **Plugins:** add only what you want from Preferences ▸ Plugins. **Generative Render** puts your model in any
   scene you describe, using your own OpenRouter, OpenAI or Gemini account or a ComfyUI on your computer, with no

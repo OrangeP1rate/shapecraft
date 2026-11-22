@@ -79,6 +79,13 @@ fn mesh_and_iges_exports_round_trip() {
     assert!(std::fs::read_to_string(dir.join("p242.step")).unwrap().contains("AP242"));
     assert!(s.execute("export_step", &json!({"path": path("x.step"), "protocol": "AP999"})).is_err());
     s.execute("export_stl", &json!({"path": path("p.stl")})).unwrap();
+    s.execute("export_fbx", &json!({"path": path("p.fbx")})).unwrap();
+    let f = std::fs::read(dir.join("p.fbx")).unwrap();
+    assert!(f.starts_with(b"Kaydara FBX Binary  \0\x1a\0") && u32::from_le_bytes([f[23], f[24], f[25], f[26]]) == 7400);
+    assert!(fbx_nodes_end_where_they_say(&f));
+    s.execute("export_vrml", &json!({"path": path("p.wrl")})).unwrap();
+    let w = std::fs::read_to_string(dir.join("p.wrl")).unwrap();
+    assert!(w.starts_with("#VRML V2.0 utf8") && w.matches(", -1,").count() >= 12 && w.contains("scale 0.001"));
     // Each comes back as a closed body of the same volume: IGES exact, STL and OBJ as mesh bodies, each in a folder named after its file.
     for (n, file) in ["p.igs", "p.stl", "p.obj"].iter().enumerate() {
         let out = s.execute("import_file", &json!({"path": path(file)})).unwrap().value;
@@ -370,4 +377,48 @@ fn real_solidworks_parts() {
         }
     }
     println!("{failed} failed");
+}
+
+/// Walks a binary FBX's top-level records: each end offset lands on the next record, ending at the null record.
+fn fbx_nodes_end_where_they_say(f: &[u8]) -> bool {
+    let u = |at: usize| u32::from_le_bytes([f[at], f[at + 1], f[at + 2], f[at + 3]]) as usize;
+    let mut at = 27;
+    let mut names = Vec::new();
+    loop {
+        let end = u(at);
+        if end == 0 {
+            return names == ["FBXHeaderExtension", "Creator", "GlobalSettings", "Definitions", "Objects", "Connections"];
+        }
+        if end <= at || end > f.len() {
+            return false;
+        }
+        let len = f[at + 12] as usize;
+        names.push(String::from_utf8_lossy(&f[at + 13..at + 13 + len]).into_owned());
+        at = end;
+    }
+}
+
+/// Writes a two-body, two-colour model as FBX and VRML for checking in other apps:
+/// `SHAPECRAFT_EXPORT_DIR=folder cargo test -p shapecraft-engine sample_mesh_exports -- --ignored`.
+#[test]
+#[ignore]
+fn sample_mesh_exports() {
+    let Ok(dir) = std::env::var("SHAPECRAFT_EXPORT_DIR") else { return };
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("rectangle", &json!({"corner": [0, 0], "opposite": [40, 20]})).unwrap();
+    let sk = s.active_sketch.unwrap();
+    s.execute("extrude", &json!({"sketch": sk.0, "region": 0, "distance": 10})).unwrap();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("circle", &json!({"center": [80, 10], "radius": 10})).unwrap();
+    let sk = s.active_sketch.unwrap();
+    s.execute("extrude", &json!({"sketch": sk.0, "region": 0, "distance": 30})).unwrap();
+    let ids: Vec<u64> = s.doc.bodies.iter().map(|b| b.id.0).collect();
+    for (id, c) in [(ids[0], [0.8, 0.2, 0.1]), (ids[1], [0.1, 0.4, 0.8])] {
+        s.execute("set_appearance", &json!({"items": [id], "appearance": {"name": "Paint", "color": c, "metal": 0, "gloss": 0.5}}))
+            .unwrap();
+    }
+    for (cmd, f) in [("export_fbx", "sample.fbx"), ("export_vrml", "sample.wrl"), ("export_glb", "sample.glb")] {
+        s.execute(cmd, &json!({"path": format!("{dir}/{f}")})).unwrap();
+    }
 }

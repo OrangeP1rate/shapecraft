@@ -16,6 +16,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 log = "0.4"
+miniz_oxide = "0.8"
 # Mesh bodies' booleans and splits (a pure-Rust port of Manifold, Apache-2.0).
 manifold-rust = { version = "0.19.2", default-features = false }
 

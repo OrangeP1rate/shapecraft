@@ -1,12 +1,14 @@
-//! File formats written and read in Rust: mesh exports (OBJ, 3MF, GLB), mesh imports (STL, OBJ) and 2D sketch
+//! File formats written and read in Rust: mesh exports (OBJ, 3MF, GLB, FBX, VRML), mesh imports (STL, OBJ) and 2D sketch
 //! imports (DXF, SVG). B-rep formats (STEP, IGES) go through the kernel.
 
+mod fbx;
 mod mesh_in;
 mod mesh_out;
 mod sketch_in;
 mod sketch_out;
 mod zip;
 
+pub use fbx::{write_fbx, write_vrml};
 pub use mesh_in::{read_obj, read_stl};
 pub use mesh_out::{ExportBody, write_3mf, write_glb, write_obj, write_stl_ascii, write_usdz};
 pub use sketch_in::{read_dxf, read_svg};

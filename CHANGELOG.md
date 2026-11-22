@@ -8,6 +8,9 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
   as if it were a STEP file: same faces, same sizes, ready to model on. A part with several configurations comes in
   as the first one. Parts saved from SolidWorks 2015 on read best; some older ones don't open yet and say why.
   No SolidWorks needed.
+- **Export to FBX and VRML.** File ▸ Export to ▸ FBX… writes a binary FBX that Blender, Unity and Unreal open with
+  each body as its own object, in its color, the right way up and at its real size. VRML… writes a `.wrl` for older
+  viewers and simulators.
 
 ## 0.11.2-alpha
 **Sketches you can shape by dragging, and a fillet's edges you can change afterwards.**

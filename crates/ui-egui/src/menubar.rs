@@ -222,6 +222,8 @@ pub fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                         item("IGES…", None, App(ExportAs(Format::Iges)), Bodies),
                         item("STL…", None, App(ExportAs(Format::Stl)), Bodies),
                         item("USDZ…", None, App(ExportAs(Format::Usdz)), Bodies),
+                        item("FBX…", None, App(ExportAs(Format::Fbx)), Bodies),
+                        item("VRML…", None, App(ExportAs(Format::Vrml)), Bodies),
                         soon("JT…"),
                         item("GLB…", None, App(ExportAs(Format::Glb)), Bodies),
                         item("OBJ…", None, App(ExportAs(Format::Obj)), Bodies),

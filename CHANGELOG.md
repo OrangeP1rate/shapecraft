@@ -24,7 +24,7 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
   variable-radius fillets ease from one radius to the other the same way, on straight edges between flat faces.
   Fill, Project as Edge, moving or scaling an edge on its own and two-distance chamfers work in the common cases
   (flat openings, outlines that land inside a face, round rims and straight edges, chamfers on outside edges) and
-  explain the rest. The Advanced tab lists what it does the same, what works with limits, and what still needs Open
+  explain the rest. The Advanced tab says what each kernel is the better pick for and why ShapeCraft keeps two (no single point of failure), and lists what Arris does the same, what works with limits, and what still needs Open
   CASCADE; while it runs, setback corners are greyed out and say why. IGES files of loose trimmed surfaces still need Open CASCADE to open, and say so. Most modeling runs
   as fast or faster than on Open CASCADE (fillets, chamfers, shells and lofts several times faster); cuts into faces
   full of holes and threads are slower. Projects made with it live in a folder of their own, so your work stays on

@@ -569,8 +569,8 @@ fn advanced_tab(ui: &mut Ui, r: Rect, s: &mut Settings) -> bool {
     }
     y += tallest + 12.0;
     // Why a second kernel at all (and, while trying Arris, where its projects live).
-    let mut why = "Why a choice? Two kernels check each other: a shape one gets wrong, the other can catch. And no \
-                   single library decides what ShapeCraft can become."
+    let mut why = "Why a choice? No single point of failure: if one kernel stalls, breaks or changes course, ShapeCraft \
+                   carries on with the other. And no one library decides what ShapeCraft can become."
         .to_string();
     if running == "rust" {
         why.push_str(" Arris keeps its projects in a folder of their own, so your Open CASCADE work stays put.");

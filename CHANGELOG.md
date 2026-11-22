@@ -2,7 +2,8 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
-## Next
+## 0.12.0-alpha
+**Open the parts other CAD systems save: SolidWorks, NX, Solid Edge and JT. Export FBX and VRML.**
 ### New
 - **Open SolidWorks parts.** File ▸ Import File takes `.sldprt` files and brings in the part's solid bodies exactly,
   as if it were a STEP file: same faces, same sizes, ready to model on. A part with several configurations comes in

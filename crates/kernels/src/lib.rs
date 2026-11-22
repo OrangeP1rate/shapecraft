@@ -5,7 +5,9 @@
 //! this build has it, the pure-Rust kernel otherwise).
 //!
 //! - `occt`: Open CASCADE, the full modeler (needs the `occt` feature, on by default).
-//! - `rust`: the pure-Rust kernel; flat-faced solids so far, everything else says "not in the Rust kernel yet".
+//! - `rust`: the pure-Rust kernel (on Arris); what it does and doesn't yet is its `Kernel::support` table.
+//!
+//! `cargo run --release -p shapecraft-kernels --example speed` times the same work on every kernel side by side.
 
 use std::sync::Arc;
 

@@ -60,6 +60,20 @@ pub struct ArShape {
     pub face: Option<AFace>,
     /// The planar profile this face was made from, when it came from a sketch.
     pub profile: Option<Profile>,
+    /// What's been measured of it: a shape never changes, and the engine asks again and again.
+    memo: Arc<Memo>,
+}
+
+#[derive(Debug, Default)]
+struct Memo {
+    bounds: std::sync::OnceLock<Aabb>,
+    mass: std::sync::OnceLock<MassProps>,
+}
+
+impl ArShape {
+    pub fn new(model: Arc<Model>, bodies: Vec<Body>, face: Option<AFace>) -> Self {
+        Self { model, bodies, face, profile: None, memo: Arc::default() }
+    }
 }
 
 impl ShapeData for ArShape {
@@ -246,6 +260,130 @@ fn normal_along_edge(m: &Model, f: AFace, edge: arris::topo::EdgeId, at: f64) ->
     Some(dv(&n.into_inner()) * sign(f.orientation))
 }
 
+/// Volume, area and centroid, exactly (Arris integrates over the B-rep): a sheet or a face has area only.
+fn mass_of(s: &ArShape) -> Result<MassProps> {
+    mass_with(s, C)
+}
+
+/// [`mass_of`] under `control`: a poll stops it early (an `Operation` error).
+fn mass_with(s: &ArShape, control: &Control<'_>) -> Result<MassProps> {
+    if let Some(f) = s.face {
+        let p = arris::ops::measure::face_surface_properties(&s.model, f, control).map_err(op("measure"))?;
+        return Ok(MassProps { volume: 0.0, area: p.area, centroid: dp(p.centroid) });
+    }
+    let (mut vol, mut area, mut c_v, mut c_a) = (0.0, 0.0, DVec3::ZERO, DVec3::ZERO);
+    for b in &s.bodies {
+        match arris::ops::measure::mass_properties(&s.model, *b, control) {
+            Ok(p) => {
+                vol += p.volume;
+                area += p.area;
+                c_v += dp(p.centroid) * p.volume;
+                c_a += dp(p.centroid) * p.area;
+            }
+            Err(_) => {
+                let p = arris::ops::measure::surface_properties(&s.model, *b, control).map_err(op("measure"))?;
+                area += p.area;
+                c_a += dp(p.centroid) * p.area;
+            }
+        }
+    }
+    let centroid = if vol.abs() > 0.0 {
+        c_v / vol
+    } else if area > 0.0 {
+        c_a / area
+    } else {
+        DVec3::ZERO
+    };
+    Ok(MassProps { volume: vol, area, centroid })
+}
+
+/// A box grown to hold what's added to it.
+#[derive(Clone, Copy)]
+struct Bounds {
+    lo: DVec3,
+    hi: DVec3,
+}
+
+impl Bounds {
+    const EMPTY: Bounds = Bounds { lo: DVec3::INFINITY, hi: DVec3::NEG_INFINITY };
+
+    fn add(&mut self, bb: arris::math::Aabb) {
+        self.lo = self.lo.min(DVec3::from_array(bb.min));
+        self.hi = self.hi.max(DVec3::from_array(bb.max));
+    }
+
+    /// The edge's curve over its range.
+    fn edge(&mut self, m: &Model, e: arris::topo::EdgeId) {
+        let Some((cid, range)) = m.edge(e).ok().and_then(|x| x.curve()) else { return };
+        if let Some(bb) = m.curve(cid).ok().and_then(|c| c.bounds(range)) {
+            self.add(bb);
+        }
+    }
+
+    /// A curved face's surface over the stretch of (u, v) its loops span (a sphere's bulge between its edges); a
+    /// spline face, whose surface only knows its control points' box, from a coarse mesh of it. A flat face adds
+    /// nothing its edges don't.
+    fn face(&mut self, m: &Model, b: Body, f: AFace) {
+        let Ok(face) = m.face(f.id) else { return };
+        let Ok(surface) = m.surface(face.surface()) else { return };
+        match surface {
+            Surface::Plane { .. } => {}
+            Surface::Nurbs(_) => {
+                let request = arris::mesh::MeshRequest::new(0.05);
+                if let Ok(tm) = arris::mesh::tessellate_faces(m, b, &[f.id], &request, C) {
+                    tm.positions().iter().for_each(|p| self.add(arris::math::Aabb::of_point(arris::math::Point3::from(*p))));
+                }
+            }
+            _ => {
+                let mut uv: Vec<arris::math::Point2> = Vec::new();
+                for c in face.loops().iter().flat_map(|l| l.coedges()) {
+                    let (Ok(edge), Ok(p)) = (m.edge(c.edge()), m.curve2(c.pcurve())) else { continue };
+                    let Some((_, range)) = edge.curve() else { continue };
+                    uv.extend((0..=8).map(|i| p.point(range.lo() + (range.hi() - range.lo()) * i as f64 / 8.0)));
+                }
+                let span = |k: usize| {
+                    let (a, b) = uv.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), q| (a.min(q[k]), b.max(q[k])));
+                    arris::math::Interval::new(a, b).ok()
+                };
+                if let (Some(u), Some(v)) = (span(0), span(1))
+                    && let Some(bb) = surface.bounds([u, v])
+                {
+                    self.add(bb);
+                }
+            }
+        }
+    }
+
+    /// One body of a model, whole.
+    fn body(m: &Model, b: Body) -> Bounds {
+        let mut bb = Bounds::EMPTY;
+        m.edges(b).unwrap_or_default().iter().for_each(|e| bb.edge(m, e.id));
+        m.faces(b).unwrap_or_default().iter().for_each(|f| bb.face(m, b, *f));
+        bb
+    }
+
+    fn aabb(self) -> Option<Aabb> {
+        (self.lo.is_finite() && self.hi.is_finite()).then_some(Aabb { min: self.lo, max: self.hi })
+    }
+}
+
+/// The box around a shape, exact (see [`Bounds`]).
+fn bounds_of(s: &ArShape) -> Result<Aabb> {
+    let mut bb = Bounds::EMPTY;
+    edges_of(s).iter().for_each(|(_, e)| bb.edge(&s.model, e.id));
+    faces_of(s).iter().for_each(|(b, f)| bb.face(&s.model, *b, *f));
+    bb.aabb().ok_or_else(|| bad("an empty shape has no bounds"))
+}
+
+/// What `slot` holds, worked out by `make` the first time.
+fn remembered<T: Copy>(slot: &std::sync::OnceLock<T>, make: impl FnOnce() -> Result<T>) -> Result<T> {
+    if let Some(v) = slot.get() {
+        return Ok(*v);
+    }
+    let v = make()?;
+    Ok(*slot.get_or_init(|| v))
+}
+
 /// A flat face (a sheet of one face) from a profile, keeping the profile for extruding it exactly.
 fn profile_face(profile: Profile) -> Result<Shape> {
     let mut m = Model::default();
@@ -262,7 +400,7 @@ pub(crate) fn pack(m: &Model, bodies: &[Body]) -> Result<ArShape> {
     for b in bodies {
         out.push(fresh.import(m, *b).map_err(|e| KernelError::Operation { op: "copy", message: e.to_string() })?.0);
     }
-    Ok(ArShape { model: Arc::new(fresh), bodies: out, face: None, profile: None })
+    Ok(ArShape::new(Arc::new(fresh), out, None))
 }
 
 pub(crate) fn wrap(a: ArShape) -> Shape {
@@ -530,6 +668,10 @@ impl Kernel for RustKernel {
         extrude_profile(&circle_profile(center, dir, radius)?, dir)
     }
 
+    /// Only bodies whose boxes meet are handed to Arris together: a cut takes each body with just the tools that
+    /// reach it (all of them in one pass), a union keeps bodies that touch nothing as bodies of their own, and an
+    /// intersection skips pairs that can't share anything. Arris's booleans cost with every face in them, so a
+    /// plate cut by forty pins is one pass instead of forty.
     fn boolean(&self, bop: BoolOp, a: &Shape, b: &Shape) -> Result<Shape> {
         let (a, b) = (exact(a)?, exact(b)?);
         let mut m = Model::default();
@@ -537,36 +679,92 @@ impl Kernel for RustKernel {
         if ta.is_empty() {
             return Err(bad("nothing to combine"));
         }
-        let mut out = match bop {
+        let boxes: HashMap<Body, Option<Aabb>> = ta.iter().chain(&tb).map(|x| (*x, Bounds::body(&m, *x).aabb())).collect();
+        let meet = |x: &Body, y: &Body| match (boxes.get(x).copied().flatten(), boxes.get(y).copied().flatten()) {
+            (Some(p), Some(q)) => p.overlaps(&q),
+            _ => true,
+        };
+        // OCCT's booleans leave one face where two pieces of one flat side meet; so do these.
+        let tidy = |m: &mut Model, r: std::result::Result<(Body, arris::topo::Provenance), OpError>| -> Result<Body> {
+            Ok(unify::planar_faces(m, r.map_err(op("boolean"))?.0))
+        };
+        let mut out = Vec::new();
+        match bop {
             BoolOp::Subtract => {
-                if tb.is_empty() {
-                    ta
-                } else {
-                    ta.iter()
-                        .map(|t| arris::ops::cut_many(&mut m, *t, &tb, C).map(|r| r.0))
-                        .collect::<std::result::Result<Vec<_>, _>>()
-                        .map_err(op("boolean"))?
+                for t in &ta {
+                    let tools: Vec<Body> = tb.iter().filter(|x| meet(t, x)).copied().collect();
+                    if tools.is_empty() {
+                        out.push(*t);
+                    } else {
+                        let cut = arris::ops::cut_many(&mut m, *t, &tools, C);
+                        out.push(tidy(&mut m, cut)?);
+                    }
                 }
             }
             BoolOp::Union => {
+                // Groups of bodies joined through boxes that meet; each group of two or more is fused.
                 let all: Vec<Body> = ta.iter().chain(&tb).copied().collect();
-                if all.len() == 1 { all } else { vec![arris::ops::fuse_many(&mut m, &all, C).map_err(op("boolean"))?.0] }
-            }
-            BoolOp::Intersect => {
-                let mut out = Vec::new();
-                for x in &ta {
-                    for y in &tb {
-                        out.push(arris::ops::common(&mut m, *x, *y, C).map_err(op("boolean"))?.0);
+                let mut group: Vec<usize> = (0..all.len()).collect();
+                fn root(g: &mut [usize], x: usize) -> usize {
+                    let mut r = x;
+                    while g[r] != r {
+                        r = g[r];
+                    }
+                    g[x] = r;
+                    r
+                }
+                for i in 0..all.len() {
+                    for j in i + 1..all.len() {
+                        if meet(&all[i], &all[j]) {
+                            let (ri, rj) = (root(&mut group, i), root(&mut group, j));
+                            group[ri] = rj;
+                        }
                     }
                 }
-                out
+                let mut groups: Vec<Vec<Body>> = Vec::new();
+                let mut at: HashMap<usize, usize> = HashMap::new();
+                for (i, body) in all.iter().enumerate() {
+                    let r = root(&mut group, i);
+                    let k = *at.entry(r).or_insert_with(|| {
+                        groups.push(Vec::new());
+                        groups.len() - 1
+                    });
+                    groups[k].push(*body);
+                }
+                for g in groups {
+                    match g.as_slice() {
+                        [one] => out.push(*one),
+                        _ => {
+                            let fused = arris::ops::fuse_many(&mut m, &g, C);
+                            out.push(tidy(&mut m, fused)?);
+                        }
+                    }
+                }
             }
-        };
-        // OCCT's booleans leave one face where two pieces of one flat side meet; so do these.
-        for b in &mut out {
-            *b = unify::planar_faces(&mut m, *b);
+            BoolOp::Intersect => {
+                for x in &ta {
+                    for y in tb.iter().filter(|y| meet(x, y)) {
+                        let common = arris::ops::common(&mut m, *x, *y, C);
+                        out.push(tidy(&mut m, common)?);
+                    }
+                }
+            }
         }
         Ok(wrap(pack(&m, &out)?))
+    }
+
+    /// A cut or a union with every tool in one pass (A − t1 − t2 is A − (t1 ∪ t2)); an intersection, where the order
+    /// matters, one tool at a time.
+    fn boolean_many(&self, op: BoolOp, target: &Shape, tools: &[Shape]) -> Result<Shape> {
+        if op == BoolOp::Intersect || tools.len() < 2 {
+            return tools.iter().try_fold(target.clone(), |acc, t| self.boolean(op, &acc, t));
+        }
+        let mut m = Model::default();
+        let mut all = Vec::new();
+        for t in tools {
+            all.extend(bring(&mut m, exact(t)?)?);
+        }
+        self.boolean(op, target, &wrap(pack(&m, &all)?))
     }
 
     fn fillet_all_edges(&self, shape: &Shape, radius: f64) -> Result<Shape> {
@@ -582,38 +780,47 @@ impl Kernel for RustKernel {
     }
 
     fn mass_props(&self, shape: &Shape) -> Result<MassProps> {
+        match data(shape)? {
+            Data::Mesh => PolyKernel.mass_props(shape),
+            Data::Exact(s) => remembered(&s.memo.mass, || mass_of(s)),
+        }
+    }
+
+    /// From the display triangles (a chord of a thousandth of the shape's size): quick on any shape, and the same
+    /// every time.
+    fn mass_props_mesh(&self, shape: &Shape) -> Result<MassProps> {
         let s = match data(shape)? {
             Data::Mesh => return PolyKernel.mass_props(shape),
             Data::Exact(s) => s,
         };
-        if let Some(f) = s.face {
-            let p = arris::ops::measure::face_surface_properties(&s.model, f, C).map_err(op("measure"))?;
-            return Ok(MassProps { volume: 0.0, area: p.area, centroid: dp(p.centroid) });
+        let bb = self.bounds(shape)?;
+        let chord = ((bb.max - bb.min).length() * 1e-3).clamp(1e-3, 0.1);
+        let mut m = mesh_of(s, chord)?.mass_props();
+        if s.face.is_some() || s.bodies.iter().all(|b| s.model.body(b.id).is_ok_and(|x| x.kind() != arris::topo::entity::BodyKind::Solid)) {
+            m.volume = 0.0;
         }
-        let (mut vol, mut area, mut c_v, mut c_a) = (0.0, 0.0, DVec3::ZERO, DVec3::ZERO);
-        for b in &s.bodies {
-            match arris::ops::measure::mass_properties(&s.model, *b, C) {
-                Ok(p) => {
-                    vol += p.volume;
-                    area += p.area;
-                    c_v += dp(p.centroid) * p.volume;
-                    c_a += dp(p.centroid) * p.area;
-                }
-                Err(_) => {
-                    let p = arris::ops::measure::surface_properties(&s.model, *b, C).map_err(op("measure"))?;
-                    area += p.area;
-                    c_a += dp(p.centroid) * p.area;
-                }
-            }
-        }
-        let centroid = if vol.abs() > 0.0 {
-            c_v / vol
-        } else if area > 0.0 {
-            c_a / area
-        } else {
-            DVec3::ZERO
+        Ok(m)
+    }
+
+    /// Exact when Arris gets there within `budget` seconds (it stops at the deadline), else from the triangles.
+    fn mass_props_within(&self, shape: &Shape, budget: f64) -> Result<(MassProps, bool)> {
+        let s = match data(shape)? {
+            Data::Mesh => return Ok((PolyKernel.mass_props(shape)?, false)),
+            Data::Exact(s) => s,
         };
-        Ok(MassProps { volume: vol, area, centroid })
+        if let Some(m) = s.memo.mass.get() {
+            return Ok((*m, false));
+        }
+        if !(budget.is_finite() && budget > 0.0) {
+            return Ok((self.mass_props(shape)?, false));
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(budget.min(3600.0));
+        let late = move || std::time::Instant::now() > deadline;
+        match mass_with(s, &Control::poll(&late)) {
+            Ok(m) => Ok((*s.memo.mass.get_or_init(|| m), false)),
+            Err(_) if std::time::Instant::now() > deadline => Ok((self.mass_props_mesh(shape)?, true)),
+            Err(e) => Err(e),
+        }
     }
 
     fn bounds(&self, shape: &Shape) -> Result<Aabb> {
@@ -622,35 +829,10 @@ impl Kernel for RustKernel {
             let (lo, hi) = pts.iter().fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(l, h), p| (l.min(*p), h.max(*p)));
             return if lo.is_finite() { Ok(Aabb { min: lo, max: hi }) } else { Err(bad("no curves")) };
         }
-        let s = match data(shape)? {
-            Data::Mesh => return PolyKernel.bounds(shape),
-            Data::Exact(s) => s,
-        };
-        // Exact along the edges (lines, arcs, curves), the surface mesh's own points (on the surface, f64) for any
-        // bulge between them (a sphere's equator).
-        let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
-        for (_, e) in edges_of(s) {
-            let Ok(edge) = s.model.edge(e.id) else { continue };
-            let Some((cid, range)) = edge.curve() else { continue };
-            if let Some(bb) = s.model.curve(cid).ok().and_then(|c| c.bounds(range)) {
-                lo = lo.min(DVec3::from_array(bb.min));
-                hi = hi.max(DVec3::from_array(bb.max));
-            }
+        match data(shape)? {
+            Data::Mesh => PolyKernel.bounds(shape),
+            Data::Exact(s) => remembered(&s.memo.bounds, || bounds_of(s)),
         }
-        for b in &s.bodies {
-            let tm = match s.face {
-                Some(f) => arris::mesh::tessellate_faces(&s.model, *b, &[f.id], &arris::mesh::MeshRequest::new(0.01), C),
-                None => arris::mesh::tessellate(&s.model, *b, 0.01, C),
-            };
-            for p in tm.iter().flat_map(|t| t.positions().iter()) {
-                lo = lo.min(DVec3::from_array(*p));
-                hi = hi.max(DVec3::from_array(*p));
-            }
-        }
-        if !(lo.is_finite() && hi.is_finite()) {
-            return Err(bad("an empty shape has no bounds"));
-        }
-        Ok(Aabb { min: lo, max: hi })
     }
 
     fn tessellate(&self, shape: &Shape, deflection: f64) -> Result<Mesh> {
@@ -895,7 +1077,11 @@ impl Kernel for RustKernel {
         let start = self.mass_props(face)?.centroid;
         let ax = AAxis::new(p3(axis.origin), v3(axis.dir)).map_err(|e| bad(format!("axis: {e}")))?;
         let pitch = height * std::f64::consts::TAU / angle;
-        let path = APath { start: p3(start), segments: vec![PathSegment::Helix { axis: ax, pitch, angle }] };
+        // A turn a segment, so each face of the coil winds once: what cuts it to length or joins it to a shank then
+        // meets only the turns it reaches (box culling), not one face wound round many times.
+        let turns = (angle.abs() / std::f64::consts::TAU).ceil().clamp(1.0, 10_000.0);
+        let segments = (0..turns as usize).map(|_| PathSegment::Helix { axis: ax, pitch, angle: angle / turns }).collect();
+        let path = APath { start: p3(start), segments };
         let law = FrameLaw::FixedBinormal(ax.direction);
         solid_from("helical revolve", |m| arris::ops::sweep(m, &p, &path, law, C))
     }
@@ -1197,7 +1383,7 @@ impl Kernel for RustKernel {
         };
         let (b, f) = face_at(s, face)?;
         let profile = profile_of(&s.model, f).ok();
-        Ok(wrap(ArShape { model: s.model.clone(), bodies: vec![b], face: Some(f), profile }))
+        Ok(wrap(ArShape { profile, ..ArShape::new(s.model.clone(), vec![b], Some(f)) }))
     }
 
     fn imprint(&self, _shape: &Shape, _face: u32, _tools: &[(Shape, Option<u32>)]) -> Result<Shape> {
@@ -1251,7 +1437,7 @@ impl Kernel for RustKernel {
     }
 
     fn empty(&self) -> Result<Shape> {
-        Ok(wrap(ArShape { model: Arc::new(Model::default()), bodies: Vec::new(), face: None, profile: None }))
+        Ok(wrap(ArShape::new(Arc::new(Model::default()), Vec::new(), None)))
     }
 
     fn shape_from_mesh(&self, positions: &[DVec3], indices: &[u32]) -> Result<Shape> {
@@ -1271,7 +1457,7 @@ impl Kernel for RustKernel {
             .map_err(|e| KernelError::Operation { op: "from_brep", message: e.to_string() })?;
         let solid = read.solids.into_iter().next().ok_or_else(|| bad("the body has no faces"))?;
         let body = solid.result.map_err(|e| KernelError::Operation { op: "from_brep", message: e.to_string() })?;
-        let shape = ArShape { model: Arc::new(m), bodies: vec![body.body], face: None, profile: None };
+        let shape = ArShape::new(Arc::new(m), vec![body.body], None);
         let index: HashMap<arris::topo::FaceId, u32> = faces_of(&shape).iter().enumerate().map(|(i, (_, f))| (f.id, i as u32)).collect();
         let faces = written
             .faces

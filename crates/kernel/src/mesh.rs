@@ -37,6 +37,31 @@ impl Mesh {
         })
     }
 
+    /// Volume (closed triangles), area and centroid of the triangles, summed in f64: signed tetrahedra from the
+    /// origin for the volume. The centroid is the volume's, or the surface's when nothing is enclosed.
+    pub fn mass_props(&self) -> crate::MassProps {
+        let p =
+            |i: u32| self.positions.get(i as usize).map_or(glam::DVec3::ZERO, |v| glam::DVec3::new(v[0].into(), v[1].into(), v[2].into()));
+        let (mut volume, mut area, mut moment, mut area_moment) = (0.0, 0.0, glam::DVec3::ZERO, glam::DVec3::ZERO);
+        for tri in self.indices.as_chunks::<3>().0 {
+            let (a, b, c) = (p(tri[0]), p(tri[1]), p(tri[2]));
+            let v = a.dot(b.cross(c)) / 6.0;
+            volume += v;
+            moment += v * (a + b + c) / 4.0;
+            let t = 0.5 * (b - a).cross(c - a).length();
+            area += t;
+            area_moment += t * (a + b + c) / 3.0;
+        }
+        let centroid = if volume.abs() > 1e-12 * area.max(1.0).powf(1.5) {
+            moment / volume
+        } else if area > 0.0 {
+            area_moment / area
+        } else {
+            glam::DVec3::ZERO
+        };
+        crate::MassProps { volume, area, centroid }
+    }
+
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
     }

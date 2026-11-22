@@ -480,7 +480,7 @@ pub(super) fn pattern_circular(s: &mut Session, p: &Params) -> Result<Value> {
         }
         let b = s.doc.body(*id).ok_or_else(|| EngineError::BadParams(format!("no body {}", id.0)))?;
         let original = b.shape.clone();
-        let mut merged = original.clone();
+        let mut copies = Vec::new();
         let bb = s.kernel.bounds(&original)?;
         let center = (bb.min + bb.max) / 2.0;
         for i in 1..n {
@@ -494,11 +494,12 @@ pub(super) fn pattern_circular(s: &mut Session, p: &Params) -> Result<Value> {
                 s.kernel.rotate(&original, axis, turn)?
             };
             match op {
-                Some(op) => merged = s.kernel.boolean(op, &merged, &copy)?,
+                Some(_) => copies.push(copy),
                 None => made.push(add_body(s, copy)?.0),
             }
         }
-        if op.is_some() {
+        if let Some(op) = op {
+            let merged = s.kernel.boolean_many(op, &original, &copies)?;
             set_body_shape(s, *id, merged)?;
         }
     }
@@ -792,15 +793,16 @@ pub(super) fn pattern(s: &mut Session, p: &Params) -> Result<Value> {
         }
         let b = s.doc.body(*id).ok_or_else(|| EngineError::BadParams(format!("no body {}", id.0)))?;
         let original = b.shape.clone();
-        let mut merged = original.clone();
+        let mut copies = Vec::new();
         for i in 1..count as usize {
             let copy = s.kernel.translate(&original, dir * spacing * i as f64)?;
             match op {
-                Some(op) => merged = s.kernel.boolean(op, &merged, &copy)?,
+                Some(_) => copies.push(copy),
                 None => made.push(add_body(s, copy)?.0),
             }
         }
-        if op.is_some() {
+        if let Some(op) = op {
+            let merged = s.kernel.boolean_many(op, &original, &copies)?;
             set_body_shape(s, *id, merged)?;
         }
     }

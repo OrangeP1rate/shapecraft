@@ -400,6 +400,12 @@ pub trait Kernel: Send + Sync {
 
     fn boolean(&self, op: BoolOp, a: &Shape, b: &Shape) -> Result<Shape>;
 
+    /// `target` combined with each of `tools` in turn. A kernel that cuts or joins with all the tools at once (the
+    /// same shape, much quicker for many tools) does that instead.
+    fn boolean_many(&self, op: BoolOp, target: &Shape, tools: &[Shape]) -> Result<Shape> {
+        tools.iter().try_fold(target.clone(), |acc, t| self.boolean(op, &acc, t))
+    }
+
     /// Rounds every edge of the shape. Per-edge selection comes with topology naming.
     fn fillet_all_edges(&self, shape: &Shape, radius: f64) -> Result<Shape>;
 

@@ -52,14 +52,8 @@ fn boolean(s: &mut Session, p: &Params, op: BoolOp) -> Result<Value> {
     if mesh {
         return mesh_boolean(s, p, op, target, &tools);
     }
-    let mut shape = working_shape(s, target, true)?;
-    for t in &tools {
-        if *t == target {
-            continue;
-        }
-        let tool = working_shape(s, *t, true)?;
-        shape = s.kernel.boolean(op, &shape, &tool)?;
-    }
+    let tool_shapes = tools.iter().filter(|t| **t != target).map(|t| working_shape(s, *t, true)).collect::<Result<Vec<_>>>()?;
+    let shape = s.kernel.boolean_many(op, &working_shape(s, target, true)?, &tool_shapes)?;
     // Keep Originals (observed 380, 383): "target" and/or "tools" stay as they were and the result is a new body.
     let keep = p.opt_str("keep").unwrap_or(if p.bool_or("keep", false) { "all" } else { "none" }).to_string();
     let (keep_target, keep_tools) = match keep.as_str() {

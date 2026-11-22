@@ -190,6 +190,7 @@ pub struct ShapeCraftApp {
 
 impl ShapeCraftApp {
     pub fn new(kernel: Arc<dyn Kernel>, opts: Options, ctx: &egui::Context) -> Self {
+        let _ = crate::settings::RUNNING_KERNEL.set(kernel.name());
         let tablet_opts = (opts.native_menu && !opts.hosted).then(|| opts.clone());
         // Android goes through the system's file picker the same way (#7): a pick asked for now, the file later; a
         // save written to a scratch folder in the app's own storage, then copied where the picker says.

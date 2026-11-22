@@ -202,6 +202,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "approx"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -242,6 +251,110 @@ name = "arrayvec"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+
+[[package]]
+name = "arris"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0157a16927fb4678633e72fbcedd7153521816922cbaf70c67ce53c17c22ad27"
+dependencies = [
+ "arris-check",
+ "arris-geom",
+ "arris-io",
+ "arris-math",
+ "arris-mesh",
+ "arris-ops",
+ "arris-topo",
+]
+
+[[package]]
+name = "arris-check"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87750cc6d2c2d1942c8c611bc2c4ab3c391dc6692796d45546a40df503591375"
+dependencies = [
+ "arris-geom",
+ "arris-math",
+ "arris-topo",
+]
+
+[[package]]
+name = "arris-geom"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d77657c731ec0d6d6c3ea70a69ad5c82605229748c4b1e04d23a83f639bde8c0"
+dependencies = [
+ "arris-math",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "arris-io"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43e046e12cbe225a2b4c8b8811ffb7840a7ea7bbc27fa694981bc78b34484d08"
+dependencies = [
+ "arris-check",
+ "arris-geom",
+ "arris-math",
+ "arris-mesh",
+ "arris-topo",
+ "postcard",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "arris-math"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57d97f627f7bb2818f222376db156e29b2be5f4c80100e08f0abbfee769931bb"
+dependencies = [
+ "libm",
+ "nalgebra",
+ "robust",
+ "serde",
+]
+
+[[package]]
+name = "arris-mesh"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c58597beb9b63f218fdae64385ee4a68b769fef12a9223f8c13e5133c6120747"
+dependencies = [
+ "arris-check",
+ "arris-geom",
+ "arris-math",
+ "arris-topo",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "arris-ops"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c811c03aea7aae6205bc8718c3796b9d238ad594fa1e3f53c9def331b8648992"
+dependencies = [
+ "arris-check",
+ "arris-geom",
+ "arris-math",
+ "arris-topo",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "arris-topo"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "622e1985dc9149b7d8ad242b25ff2db39d1f578eab249240ddf0b228dbc84bac"
+dependencies = [
+ "arris-geom",
+ "arris-math",
+ "serde",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "as-raw-xcb-connection"
@@ -1867,6 +1980,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "glam"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "556f6b2ea90b8d15a74e0e7bb41671c9bdf38cd9f78c284d750b9ce58a2b5be7"
+
+[[package]]
+name = "glam"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f70749695b063ecbf6b62949ccccde2e733ec3ecbbd71d467dca4e5c6c97cca0"
+
+[[package]]
+name = "glam"
+version = "0.33.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37bfe73dc8ec21f54d181e5a60554327ec3f1c600c455a75ccbfc65d2106a6c4"
+
+[[package]]
 name = "glifo"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2463,6 +2594,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "matrixmultiply"
+version = "0.3.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f607c237553f086e7043417a51df26b2eb899d3caff94e6a67592ff992fedc7"
+dependencies = [
+ "autocfg",
+ "rawpointer",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2588,6 +2729,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "nalgebra"
+version = "0.35.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adc43a60c217b0c6ff46e47f26911015ad8d2e5a8be1af668c67e370d99a4346"
+dependencies = [
+ "approx",
+ "glam 0.30.10",
+ "glam 0.31.1",
+ "glam 0.32.1",
+ "glam 0.33.12",
+ "matrixmultiply",
+ "num-complex",
+ "num-rational",
+ "num-traits",
+ "serde",
+ "simba",
+ "typenum",
+]
+
+[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2633,12 +2794,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-bigint"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
 name = "num-complex"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495"
 dependencies = [
  "bytemuck",
+ "num-traits",
+ "serde",
+]
+
+[[package]]
+name = "num-integer"
+version = "0.1.47"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
+dependencies = [
  "num-traits",
 ]
 
@@ -2647,6 +2828,17 @@ name = "num-modular"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd8e500409e6cd603b03e477c26a6caecdc27ac58979a53e881c75eafc079f44"
+
+[[package]]
+name = "num-rational"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
+dependencies = [
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+]
 
 [[package]]
 name = "num-traits"
@@ -3486,6 +3678,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rawpointer"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
+
+[[package]]
 name = "read-fonts"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3643,6 +3841,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "robust"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
+
+[[package]]
 name = "roxmltree"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3794,6 +3998,15 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+
+[[package]]
+name = "safe_arch"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42c6efa15875e6ecb39ca61fb0b0c1a40b84fac5a5ffe71eef7d1000c8eb3f5f"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "same-file"
@@ -4003,7 +4216,7 @@ version = "0.12.0"
 dependencies = [
  "chrono",
  "fontdb",
- "glam",
+ "glam 0.30.10",
  "image",
  "serde",
  "serde_json",
@@ -4023,7 +4236,7 @@ dependencies = [
 name = "shapecraft-engine"
 version = "0.12.0"
 dependencies = [
- "glam",
+ "glam 0.30.10",
  "image",
  "log",
  "manifold-rust",
@@ -4034,6 +4247,7 @@ dependencies = [
  "shapecraft-dwg",
  "shapecraft-kernel",
  "shapecraft-kernel-occt",
+ "shapecraft-kernel-rs",
  "shapecraft-shapr",
  "shapecraft-xt",
  "thiserror 2.0.21",
@@ -4060,7 +4274,7 @@ dependencies = [
 name = "shapecraft-kernel"
 version = "0.12.0"
 dependencies = [
- "glam",
+ "glam 0.30.10",
  "thiserror 2.0.21",
 ]
 
@@ -4076,6 +4290,8 @@ dependencies = [
 name = "shapecraft-kernel-rs"
 version = "0.12.0"
 dependencies = [
+ "arris",
+ "glam 0.30.10",
  "serde_json",
  "shapecraft-engine",
  "shapecraft-kernel",
@@ -4128,7 +4344,7 @@ name = "shapecraft-render"
 version = "0.12.0"
 dependencies = [
  "bytemuck",
- "glam",
+ "glam 0.30.10",
  "pollster 1.0.1",
  "shapecraft-doc",
  "shapecraft-kernel",
@@ -4150,7 +4366,7 @@ dependencies = [
 name = "shapecraft-shapr"
 version = "0.12.0"
 dependencies = [
- "glam",
+ "glam 0.30.10",
  "miniz_oxide 0.8.9",
  "rmpv",
  "rusqlite",
@@ -4169,7 +4385,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_kittest",
- "glam",
+ "glam 0.30.10",
  "image",
  "serde_json",
  "shapecraft-kernel-occt",
@@ -4184,7 +4400,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui-wgpu",
- "glam",
+ "glam 0.30.10",
  "jpeg-encoder",
  "log",
  "muda",
@@ -4246,6 +4462,19 @@ checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
  "errno",
  "libc",
+]
+
+[[package]]
+name = "simba"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1a7200d82ff1c7b4235efd12f11e2537a402c91cf83a5cb97ce80eef787fde7"
+dependencies = [
+ "approx",
+ "libm",
+ "num-complex",
+ "num-traits",
+ "wide",
 ]
 
 [[package]]
@@ -5550,6 +5779,16 @@ dependencies = [
  "raw-window-handle",
  "static_assertions",
  "web-sys",
+]
+
+[[package]]
+name = "wide"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d920ac99c3c8edce110cb8d07dbb324d6d026011dce85b1e9355b70f0adacc4f"
+dependencies = [
+ "bytemuck",
+ "safe_arch",
 ]
 
 [[package]]

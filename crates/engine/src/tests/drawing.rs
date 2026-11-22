@@ -1,7 +1,6 @@
 //! Drawings: sheets, views, annotations, pictures and drawing export.
 
 use serde_json::json;
-use shapecraft_kernel_occt::OcctKernel;
 
 use super::session;
 use crate::Session;
@@ -249,7 +248,7 @@ fn pictures_on_a_drawing_sheet() {
     // Saved with the project.
     let proj = dir.join("proj");
     s.execute("save", &json!({"path": proj.to_string_lossy()})).unwrap();
-    let doc = shapecraft_doc::project::load(&OcctKernel::new(), &proj).unwrap();
+    let doc = shapecraft_doc::project::load(&*crate::tests::kernel(), &proj).unwrap();
     assert!(doc.decal_images[0].sheet && doc.decal_images[0].pixels.0 == 4);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -372,6 +372,7 @@ fn window_in(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings, shortcu
         ("Tablet", Icon::Tablet, true),
         ("Plugins", Icon::Insert, true),
         ("Sync", Icon::Cloud, true),
+        ("Advanced", Icon::Construct, true),
     ];
     let middle = (tabs.len() as f32 - 1.0) / 2.0;
     for (k, (label, icon, enabled)) in tabs.into_iter().enumerate() {
@@ -401,6 +402,7 @@ fn window_in(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings, shortcu
         2 => tablet_tab(ui, r, s),
         3 => plugins_tab(ui, r),
         4 => sync_tab(ui, r, s, picks),
+        5 => advanced_tab(ui, r, s),
         _ => (customize, presets) = general_tab(ui, r, s, shortcuts),
     }
     let footer = Rect::from_min_max(pos2(r.left(), r.bottom() - 52.0), r.max);
@@ -502,6 +504,56 @@ fn shapecraft_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
     row_label(&p, col, y, "When Closing:");
     popup(ui, pos2(col, y), 140.0, "pref-upd-close", &mut s.update_on_close, &crate::updates::ON_CLOSE);
     p.text(pos2(col + 150.0, y), Align2::LEFT_CENTER, "with an update downloaded", theme::body(10.5), Tokens::text_dim());
+}
+
+/// How many of the engine's modeling checks (crates/engine/src/tests) pass on the pure-Rust kernel, out of all of
+/// them: `SHAPECRAFT_TEST_KERNEL=rust cargo test -p shapecraft-engine`. Kept current when the kernel grows.
+pub(crate) const RUST_KERNEL_CHECKS: (u32, u32) = (130, 188);
+
+/// Settings for those who want to look under the hood: which geometry kernel models.
+fn advanced_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
+    let p = ui.painter().clone();
+    let col = r.left() + 170.0;
+    let mut y = r.top() + 92.0;
+    p.text(
+        pos2(r.center().x, y),
+        Align2::CENTER_CENTER,
+        "For the curious. The defaults are what most people want.",
+        theme::body(11.0),
+        Tokens::text_dim(),
+    );
+    y += 22.0;
+    p.line_segment([pos2(r.left() + 20.0, y), pos2(r.right() - 20.0, y)], Stroke::new(1.0, Tokens::chip_border()));
+    y += 24.0;
+    row_label(&p, col, y, "Geometry Kernel:");
+    let (pass, all) = RUST_KERNEL_CHECKS;
+    let rust_detail = format!("Pure Rust (Arris), in testing: {pass} of {all} modeling checks pass");
+    let choices = [("occt", "Open CASCADE", "The full kernel. Recommended"), ("rust", "Rust", rust_detail.as_str())];
+    for (key, name, detail) in choices {
+        if radio(ui, pos2(col, y), &format!("pref-kernel-{key}"), s.kernel == key, true, name, detail) {
+            s.kernel = key.to_string();
+        }
+        y += 38.0;
+    }
+    let running = crate::settings::RUNNING_KERNEL.get().copied().unwrap_or("occt");
+    let mut note = |text: &str, strong: bool| {
+        p.text(
+            pos2(col, y - 4.0),
+            Align2::LEFT_CENTER,
+            text,
+            theme::body(10.0),
+            if strong { Tokens::text_strong() } else { Tokens::text_dim() },
+        );
+        y += 16.0;
+    };
+    if s.kernel != running {
+        note("Restart ShapeCraft to apply.", true);
+    }
+    if s.kernel == "rust" || running == "rust" {
+        note("With Rust, projects live in their own folder (\"ShapeCraft (Rust kernel)\"),", false);
+        note("so your work stays on Open CASCADE while you try it. Anything it", false);
+        note("can't do yet says so instead of guessing.", false);
+    }
 }
 
 /// Tablet access is early: said plainly so nobody takes it for finished.

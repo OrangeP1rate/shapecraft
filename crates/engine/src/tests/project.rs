@@ -1,11 +1,8 @@
 //! The project as a document: save and reload, appearances, materials, decals, reference images, folders and
 //! saved views.
 
-use std::sync::Arc;
-
 use serde_json::json;
 use shapecraft_doc::Pick;
-use shapecraft_kernel_occt::OcctKernel;
 
 use super::{face_facing, session, volume};
 use crate::Session;
@@ -18,7 +15,7 @@ fn save_and_reload_round_trip() {
     s.execute("rectangle", &json!({"center": [0, 0], "size": [4, 6]})).unwrap();
     s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 3})).unwrap();
     s.execute("save", &json!({"path": dir.to_string_lossy()})).unwrap();
-    let kernel = Arc::new(OcctKernel::new());
+    let kernel = crate::tests::kernel();
     let doc = shapecraft_doc::project::load(kernel.as_ref(), &dir).unwrap();
     assert_eq!(doc.bodies.len(), 1);
     assert_eq!(doc.sketches.len(), 1);
@@ -42,12 +39,12 @@ fn a_save_cut_short_leaves_the_last_project_openable() {
     let save = json!({"path": dir.to_string_lossy()});
     body(&mut s, 0.0);
     s.execute("save", &save).unwrap();
-    let kernel = OcctKernel::new();
+    let kernel = crate::tests::kernel();
 
     // What a save dying partway leaves: new bodies under the other name, project.json not yet swapped.
     std::fs::write(dir.join("bodies-next.step"), b"half a file").unwrap();
     std::fs::write(dir.join(".~project.json.tmp"), b"{").unwrap();
-    assert_eq!(shapecraft_doc::project::load(&kernel, &dir).unwrap().bodies.len(), 1);
+    assert_eq!(shapecraft_doc::project::load(&*kernel, &dir).unwrap().bodies.len(), 1);
 
     // The next saves take turns and clean up after themselves.
     body(&mut s, 10.0);
@@ -55,14 +52,14 @@ fn a_save_cut_short_leaves_the_last_project_openable() {
         s.execute("save", &save).unwrap();
         assert!(dir.join(name).exists(), "{name}");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "{name}");
-        assert_eq!(shapecraft_doc::project::load(&kernel, &dir).unwrap().bodies.len(), 2);
+        assert_eq!(shapecraft_doc::project::load(&*kernel, &dir).unwrap().bodies.len(), 2);
     }
 
     // The name comes from a file, so it can't point anywhere else.
     let json = std::fs::read_to_string(dir.join("project.json")).unwrap();
     std::fs::write(dir.join("project.json"), json.replace("\"bodies_file\": \"bodies.step\"", "\"bodies_file\": \"../secret.step\""))
         .unwrap();
-    assert!(shapecraft_doc::project::load(&kernel, &dir).is_err());
+    assert!(shapecraft_doc::project::load(&*kernel, &dir).is_err());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -86,7 +83,7 @@ fn appearances_apply_undo_and_save() {
     assert!(s.execute("set_appearance", &json!({"items": [id], "appearance": "unobtainium"})).is_err());
     let dir = std::env::temp_dir().join(format!("shapecraft-look-{}", std::process::id()));
     s.execute("save", &json!({"path": dir.to_string_lossy()})).unwrap();
-    let doc = shapecraft_doc::project::load(&OcctKernel::new(), &dir).unwrap();
+    let doc = shapecraft_doc::project::load(&*crate::tests::kernel(), &dir).unwrap();
     assert_eq!(doc.bodies[0].appearance.as_ref().unwrap().name, "Mine");
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -114,7 +111,7 @@ fn reference_images_insert_resize_save_and_undo() {
     assert!(s.execute("image_settings", &json!({"image": id, "width": -1})).is_err());
     let proj = dir.join("proj");
     s.execute("save", &json!({"path": proj.to_string_lossy()})).unwrap();
-    let doc = shapecraft_doc::project::load(&OcctKernel::new(), &proj).unwrap();
+    let doc = shapecraft_doc::project::load(&*crate::tests::kernel(), &proj).unwrap();
     assert_eq!(doc.images.len(), 1);
     assert_eq!(doc.images[0].pixels.0, 4);
     assert_eq!(doc.images[0].opacity, 0.5);
@@ -135,7 +132,7 @@ fn saved_views_are_kept_with_the_project() {
     assert!(s.execute("save_view", &json!({"slot": 9, "view": view})).is_err());
     assert!(s.execute("save_view", &json!({"slot": 1, "view": {"target": [0, 0, 0], "yaw": 0, "pitch": 0, "distance": -1}})).is_err());
     s.execute("save", &json!({"path": dir.to_string_lossy()})).unwrap();
-    let doc = shapecraft_doc::project::load(&OcctKernel::new(), &dir).unwrap();
+    let doc = shapecraft_doc::project::load(&*crate::tests::kernel(), &dir).unwrap();
     assert_eq!(doc.saved_views[2].map(|v| v.distance), Some(80.0));
     s.execute("undo", &json!({})).unwrap();
     assert!(s.doc.saved_views[2].is_none());
@@ -250,7 +247,7 @@ fn decals_place_move_save_and_stay_out_of_history() {
     // Saved and loaded.
     let proj = dir.join("proj");
     s.execute("save", &json!({"path": proj.to_string_lossy()})).unwrap();
-    let doc = shapecraft_doc::project::load(&OcctKernel::new(), &proj).unwrap();
+    let doc = shapecraft_doc::project::load(&*crate::tests::kernel(), &proj).unwrap();
     assert_eq!((doc.decal_images.len(), doc.decals.len()), (1, 1));
     assert_eq!(doc.decal_images[0].pixels.0, 4);
     assert_eq!(doc.decals[0], s.doc.decals[0]);
@@ -339,7 +336,7 @@ fn custom_materials_from_a_picture() {
     // Saved and loaded with the flag and the picture.
     let proj = dir.join("proj");
     s.execute("save", &json!({"path": proj.to_string_lossy()})).unwrap();
-    let doc = shapecraft_doc::project::load(&OcctKernel::new(), &proj).unwrap();
+    let doc = shapecraft_doc::project::load(&*crate::tests::kernel(), &proj).unwrap();
     assert!(doc.decal_images[0].material && doc.decal_images[0].pixels.0 == 4);
     assert_eq!(doc.bodies[0].appearance.as_ref().and_then(|a| a.texture), Some(shapecraft_doc::ItemId(image)));
     // Deleting the material puts its bodies back to grey.
@@ -393,7 +390,7 @@ fn copies_of_a_body_save_and_reopen() {
         s.execute("translate", &json!({"items": [body], "by": by, "copy": true, "linked": linked})).unwrap();
         assert_eq!(s.doc.bodies.len(), 2, "case {n}");
         s.execute("save", &json!({"path": dir.to_string_lossy()})).unwrap();
-        let doc = shapecraft_doc::project::load(&OcctKernel::new(), &dir);
+        let doc = shapecraft_doc::project::load(&*crate::tests::kernel(), &dir);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(doc.map(|d| d.bodies.len()).map_err(|e| e.to_string()), Ok(2), "case {n}");
     }

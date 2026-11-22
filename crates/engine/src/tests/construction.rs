@@ -2,7 +2,6 @@
 
 use serde_json::json;
 use shapecraft_doc::Pick;
-use shapecraft_kernel_occt::OcctKernel;
 
 use super::{face_facing, session, volume};
 
@@ -79,7 +78,7 @@ fn construction_planes() {
     s.execute("show_hide", &json!({"items": [p]})).unwrap();
     let dir = std::env::temp_dir().join(format!("shapecraft-planes-{}", std::process::id()));
     s.execute("save", &json!({"path": dir.to_string_lossy()})).unwrap();
-    let doc = shapecraft_doc::project::load(&OcctKernel::new(), &dir).unwrap();
+    let doc = shapecraft_doc::project::load(&*crate::tests::kernel(), &dir).unwrap();
     assert_eq!(doc.planes.len(), 3);
     assert_eq!(doc.planes[0].name, "Lid");
     assert!(!doc.planes[0].visible);

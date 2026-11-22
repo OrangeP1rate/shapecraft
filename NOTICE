@@ -12,6 +12,10 @@ you may replace those libraries with your own build of the same version. Its sou
 address above. Only the crates/kernel-occt crate (a C++ shim plus FFI) touches it; the rest of ShapeCraft
 reaches geometry through the kernel-neutral traits in crates/kernel.
 
+Arris (https://github.com/arris-labs/arris), a B-rep kernel in pure Rust under the MIT or Apache-2.0 licence,
+is the exact geometry behind the optional pure-Rust kernel (crates/kernel-rs, Preferences > Advanced). It is
+an ordinary Cargo dependency, used unmodified.
+
 Software dependencies are listed in Cargo.lock, each under its own licence.
 
 Icons are drawn in code. Every file asset (images, fonts, materials) is listed with its author, source and

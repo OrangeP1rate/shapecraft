@@ -1,12 +1,14 @@
 [package]
 name = "shapecraft-kernel-rs"
-description = "A pure-Rust geometry kernel behind the same Kernel trait as OCCT: flat-faced solids for now"
+description = "A pure-Rust geometry kernel behind the same Kernel trait as OCCT, on Arris for exact B-rep modelling"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 shapecraft-kernel.workspace = true
+glam.workspace = true
+arris.workspace = true
 
 [dev-dependencies]
 shapecraft-engine.workspace = true

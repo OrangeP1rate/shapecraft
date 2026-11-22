@@ -120,7 +120,12 @@ pub struct Settings {
     pub setup_done: bool,
     /// Preferences ▸ Tablet: a quick round pen stroke with Line draws a circle.
     pub pen_circles: bool,
+    /// Preferences ▸ Advanced ▸ Geometry Kernel: "occt" or "rust". Read at startup.
+    pub kernel: String,
 }
+
+/// The geometry kernel this run is using (set once at startup), so Preferences can say when a restart is needed.
+pub static RUNNING_KERNEL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
 
 impl Default for Settings {
     fn default() -> Self {
@@ -186,6 +191,7 @@ impl Default for Settings {
             backup_after_change: false,
             setup_done: false,
             pen_circles: true,
+            kernel: "occt".into(),
             import_mode: "Quality".into(),
             import_custom: [true; 4],
             import_skip_prefs: false,

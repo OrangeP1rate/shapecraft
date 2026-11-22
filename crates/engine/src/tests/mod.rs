@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use serde_json::json;
-use shapecraft_kernel_occt::OcctKernel;
 
 use crate::Session;
 
@@ -24,8 +23,17 @@ mod sketch;
 mod thread;
 mod transform;
 
+/// The kernel the tests run on: OCCT, or the one named by `SHAPECRAFT_TEST_KERNEL` (`rust`), so the same suite
+/// measures how far another kernel is from OCCT.
+pub(crate) fn kernel() -> Arc<dyn shapecraft_kernel::Kernel> {
+    match std::env::var("SHAPECRAFT_TEST_KERNEL").as_deref() {
+        Ok("rust") => Arc::new(shapecraft_kernel_rs::RustKernel),
+        _ => Arc::new(shapecraft_kernel_occt::OcctKernel::new()),
+    }
+}
+
 fn session() -> Session {
-    Session::new(Arc::new(OcctKernel::new()), "Test")
+    Session::new(kernel(), "Test")
 }
 
 fn volume(s: &mut Session) -> f64 {

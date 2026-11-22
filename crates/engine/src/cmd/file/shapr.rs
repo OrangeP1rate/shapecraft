@@ -1265,7 +1265,7 @@ mod tree_tests {
     /// instead of nesting a hundred levels deep (or doubling at every level).
     #[test]
     fn a_folder_tree_with_cycles_makes_each_folder_once() {
-        let mut s = Session::new(std::sync::Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "t");
+        let mut s = Session::new(crate::tests::kernel(), "t");
         let mut project = shapecraft_shapr::Project::default();
         project.folders = vec![
             folder("r", "root", &[("a", 0), ("a", 0)]),
@@ -1287,7 +1287,7 @@ mod tree_tests {
     /// Without a root folder the bodies' own folder paths still make the tree.
     #[test]
     fn without_a_root_folder_bodies_keep_their_paths() {
-        let mut s = Session::new(std::sync::Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "t");
+        let mut s = Session::new(crate::tests::kernel(), "t");
         let mut project = shapecraft_shapr::Project::default();
         let body = s.doc.alloc_id();
         project.bodies.push(shapecraft_shapr::Body {

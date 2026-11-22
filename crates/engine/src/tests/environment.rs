@@ -2,7 +2,6 @@
 
 use serde_json::json;
 use shapecraft_doc::{BUILTIN_ENVIRONMENTS, HdrPixels};
-use shapecraft_kernel_occt::OcctKernel;
 
 use super::session;
 use crate::Session;
@@ -95,13 +94,13 @@ fn panoramas_import_select_save_undo_and_delete() {
     s.execute("save", &json!({"path": proj.to_string_lossy()})).unwrap();
     let id = s.doc.visual.panoramas[0].id.0;
     assert!(proj.join("images").join(format!("{id}.hdr")).is_file());
-    let doc = shapecraft_doc::project::load(&OcctKernel::new(), &proj).unwrap();
+    let doc = shapecraft_doc::project::load(&*crate::tests::kernel(), &proj).unwrap();
     assert_eq!(doc.visual, s.doc.visual);
     assert_eq!(doc.visual.panoramas[0].pixels, s.doc.visual.panoramas[0].pixels);
     assert_eq!(doc.visual.panoramas[2].name, "Square");
     // A lost file drops that environment; the selected one stays selected.
     std::fs::remove_file(proj.join("images").join(format!("{}.png", s.doc.visual.panoramas[1].id.0))).unwrap();
-    let doc = shapecraft_doc::project::load(&OcctKernel::new(), &proj).unwrap();
+    let doc = shapecraft_doc::project::load(&*crate::tests::kernel(), &proj).unwrap();
     assert_eq!(doc.visual.panoramas.len(), 2);
     assert_eq!(doc.visual.panorama().unwrap().name, "courtyard");
 
@@ -175,7 +174,7 @@ fn hostile_panoramas_are_refused() {
     s.execute("save", &json!({"path": proj.to_string_lossy()})).unwrap();
     let id = s.doc.visual.panoramas[0].id.0;
     std::fs::write(proj.join("images").join(format!("{id}.hdr")), b"garbage").unwrap();
-    let doc = shapecraft_doc::project::load(&OcctKernel::new(), &proj).unwrap();
+    let doc = shapecraft_doc::project::load(&*crate::tests::kernel(), &proj).unwrap();
     assert!(doc.visual.panoramas.is_empty());
     assert_eq!(doc.visual.environment, 0);
     let _ = std::fs::remove_dir_all(&dir);

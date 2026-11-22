@@ -22,6 +22,7 @@ manifold-rust = { version = "0.19.2", default-features = false }
 
 [dev-dependencies]
 shapecraft-kernel-occt.workspace = true
+shapecraft-kernel-rs.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints]

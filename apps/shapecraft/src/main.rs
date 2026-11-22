@@ -27,13 +27,25 @@ fn run() -> anyhow::Result<()> {
     shapecraft_ui::app_log::install();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
-    // --kernel rust (or SHAPECRAFT_KERNEL): the pure-Rust kernel, for trying it out. It can't read or write the
-    // bodies of saved projects yet, so unless --projects says otherwise it gets a projects folder of its own and
-    // never touches real work.
-    let kernel = shapecraft_kernels::chosen(&args).map_err(anyhow::Error::msg)?;
+    // The geometry kernel: --kernel (or SHAPECRAFT_KERNEL), else Preferences ▸ Advanced. The pure-Rust one is in
+    // testing, so unless --projects says otherwise it gets a projects folder of its own and never touches real work.
+    let settings_file = Settings::default_path();
+    let saved = settings_file.as_deref().map(Settings::load).unwrap_or_default();
+    let from_prefs = (!args.iter().any(|a| a == "--kernel" || a.starts_with("--kernel=")) && std::env::var("SHAPECRAFT_KERNEL").is_err())
+        .then(|| saved.kernel.clone());
+    let kernel = match from_prefs {
+        Some(name) => shapecraft_kernels::make(&name).or_else(|_| shapecraft_kernels::make(shapecraft_kernels::names()[0])),
+        None => shapecraft_kernels::chosen(&args),
+    }
+    .map_err(anyhow::Error::msg)?;
     let trial = kernel.name() != shapecraft_kernels::names()[0];
     let projects_root = value("--projects").map(PathBuf::from).unwrap_or_else(|| {
-        if trial { std::env::temp_dir().join(format!("ShapeCraft {} kernel", kernel.name())) } else { Options::default_root() }
+        let root = Options::default_root();
+        if trial {
+            root.with_file_name(format!("ShapeCraft ({} kernel)", kernel.name().to_uppercase().replace("RUST", "Rust")))
+        } else {
+            root
+        }
     });
     let opts = Options {
         projects_root,
@@ -41,10 +53,9 @@ fn run() -> anyhow::Result<()> {
         open: value("--open").map(PathBuf::from),
         new_project: args.iter().any(|a| a == "--new"),
         native_menu: true,
-        settings_file: Settings::default_path(),
+        settings_file,
         hosted: false,
     };
-    let saved = opts.settings_file.as_deref().map(Settings::load).unwrap_or_default();
     if let Some(i) = args.iter().position(|a| a == "--serve") {
         let spec = args.get(i + 1).filter(|a| !a.starts_with("--")).cloned().unwrap_or_default();
         return serve(&spec, opts, &saved, kernel);

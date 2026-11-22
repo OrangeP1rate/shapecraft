@@ -34,7 +34,7 @@ const ROWS: [(&str, &str); 4] = [
 /// Files the sheet comes up for: the ones carrying exact geometry that may need repair.
 pub fn wants_sheet(path: &std::path::Path) -> bool {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    matches!(ext.as_str(), "step" | "stp" | "iges" | "igs" | "x_t" | "x_b")
+    matches!(ext.as_str(), "step" | "stp" | "iges" | "igs" | "x_t" | "x_b" | "sldprt")
 }
 
 /// The import command's "heal" for a mode and Custom's switches.

@@ -87,8 +87,8 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             label: "Import File…",
             menu: "File/Import File…",
             shortcut: Some("⇧⌘I"),
-            help: "Import STEP or IGES bodies, STL or OBJ meshes as bodies, or DXF or SVG drawings as a sketch",
-            params: r#"{"path": "/in.step|.stp|.iges|.igs|.stl|.obj|.dxf|.svg", "plane": "top"|"front"|"right"? (DXF/SVG: the sketch plane, default top), "units": "mm"|"cm"|"m"|"in"|"ft"? (STL/OBJ: what the file's numbers are in, default mm), "heal": "quality"|"speed"|{"repair": bool, "edges": bool, "sew": bool, "simplify": bool}? (STEP/IGES/Parasolid clean-up, default speed = none)}"#,
+            help: "Import STEP, IGES, Parasolid or SolidWorks part bodies, STL or OBJ meshes as bodies, or DXF or SVG drawings as a sketch",
+            params: r#"{"path": "/in.step|.stp|.iges|.igs|.x_t|.x_b|.sldprt|.stl|.obj|.dxf|.svg", "config": n? (SolidWorks: which configuration, default the first), "plane": "top"|"front"|"right"? (DXF/SVG: the sketch plane, default top), "units": "mm"|"cm"|"m"|"in"|"ft"? (STL/OBJ: what the file's numbers are in, default mm), "heal": "quality"|"speed"|{"repair": bool, "edges": bool, "sew": bool, "simplify": bool}? (STEP/IGES/Parasolid clean-up, default speed = none)}"#,
             modifies: true,
             enabled: always,
             run: import_file,
@@ -245,20 +245,60 @@ fn import_any(s: &mut Session, p: &Params) -> Result<Value> {
         "x_t" | "x_b" | "xmt_txt" | "xmt_bin" => {
             s.stage("Reading the file…", 0);
             let bytes = read_capped(&path)?;
-            let file = shapecraft_xt::parse(&bytes).map_err(|e| bad(e.to_string()))?;
-            let bodies = shapecraft_xt::bodies(&file).map_err(|e| bad(e.to_string()))?;
-            let mut ids = Vec::new();
-            let mut cut = 0;
-            s.stage("Building the bodies…", bodies.len() as u64);
-            for (k, b) in bodies.into_iter().enumerate() {
-                s.progress_step();
-                let shape = healed(s, &s.kernel.from_brep(&b.brep)?, heal_options(p)?, &mut cut)?;
-                let name = b.name.unwrap_or_else(|| format!("Imported {:02}", k + 1));
-                ids.extend(add_bodies(s, vec![shape], Some(&name))?);
+            import_parasolid(s, p, &path, &bytes, None, true, false)
+        }
+        "sldprt" => {
+            s.stage("Reading the SolidWorks part…", 0);
+            let bytes = read_capped(&path)?;
+            use shapecraft_xt::sldprt::{PartitionKind, is_solidworks, partitions};
+            if !is_solidworks(&bytes) {
+                return Err(bad(format!("{stem} isn't a SolidWorks part")));
             }
-            let folder = file_folder(s, &path, &ids);
+            let all = partitions(&bytes);
+            let mut configs: Vec<u32> = all.iter().filter(|m| m.kind == PartitionKind::Model).filter_map(|m| m.config).collect();
+            configs.dedup();
+            let config = if p.has("config") { Some(p.f64("config")? as u32) } else { configs.first().copied() };
+            if let Some(c) = config
+                && !configs.contains(&c)
+            {
+                return Err(bad(format!("{stem} has no configuration {c} (it has {configs:?})")));
+            }
+            // The configuration's model, or when that's empty (bodies from an imported file), its local bodies (older
+            // versions: the bodies packed in its feature data).
+            let of =
+                |k: PartitionKind| all.iter().filter(|m| m.kind == k && m.config == config).map(|m| m.bytes.as_slice()).collect::<Vec<_>>();
+            let model = of(PartitionKind::Model);
+            let local = match of(PartitionKind::Local) {
+                l if l.is_empty() => of(PartitionKind::Resolved),
+                l => l,
+            };
+            // Only a model that reads and is empty falls back: one we can't read reports why instead.
+            let empty = |ps: &[u8]| {
+                shapecraft_xt::parse(ps).and_then(|f| shapecraft_xt::bodies(&f)).is_ok_and(|b| b.iter().all(|b| b.brep.faces.is_empty()))
+            };
+            let fallback = !local.is_empty() && model.iter().all(|m| empty(m));
+            let sources = if fallback { local } else { model };
+            if sources.is_empty() {
+                return Err(bad(format!(
+                    "{stem} has no solid model saved in it (a SolidWorks assembly or drawing, or a part saved without its geometry)"
+                )));
+            }
+            let mut out = json!({"bodies": [], "folder": null, "repair_cut": 0});
+            let mut ids = Vec::new();
+            for ps in sources {
+                let got = import_parasolid(s, p, &path, ps, config, false, fallback)?;
+                ids.extend(got["bodies"].as_array().into_iter().flatten().filter_map(Value::as_u64));
+                out["repair_cut"] = json!(out["repair_cut"].as_u64().unwrap_or(0) + got["repair_cut"].as_u64().unwrap_or(0));
+            }
+            if ids.is_empty() {
+                return Err(bad(format!("{stem} has no solid bodies in it")));
+            }
+            let items: Vec<_> = ids.iter().map(|&i| shapecraft_doc::ItemId(i)).collect();
+            out["folder"] = json!(file_folder(s, &path, &items));
+            out["bodies"] = json!(ids);
+            out["configurations"] = json!(configs);
             s.selection.clear();
-            Ok(json!({ "bodies": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "folder": folder, "repair_cut": cut }))
+            Ok(out)
         }
         "iges" | "igs" => {
             s.stage("Reading the IGES file…", 0);
@@ -314,6 +354,44 @@ fn import_any(s: &mut Session, p: &Params) -> Result<Value> {
     }
 }
 
+/// Bodies from a Parasolid transmit file (a `.x_t`/`.x_b`, or the partition inside a SolidWorks part), in a
+/// folder named after the file. Bodies without faces (a part's hidden working bodies) are left out.
+/// `solids_only` also leaves out sheets and wires (a part's feature data carries them beside its solids).
+fn import_parasolid(
+    s: &mut Session,
+    p: &Params,
+    path: &std::path::Path,
+    bytes: &[u8],
+    config: Option<u32>,
+    folder: bool,
+    solids_only: bool,
+) -> Result<Value> {
+    let bad = |e: String| EngineError::BadParams(e);
+    let file = shapecraft_xt::parse(bytes).map_err(|e| bad(e.to_string()))?;
+    let bodies: Vec<_> = shapecraft_xt::bodies(&file)
+        .map_err(|e| bad(e.to_string()))?
+        .into_iter()
+        .filter(|b| !b.brep.faces.is_empty() && (!solids_only || b.brep.kind == shapecraft_kernel::brep::BodyKind::Solid))
+        .collect();
+    let mut ids = Vec::new();
+    let mut cut = 0;
+    s.stage("Building the bodies…", bodies.len() as u64);
+    let stem = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let solo = bodies.len() == 1;
+    for (k, b) in bodies.into_iter().enumerate() {
+        s.progress_step();
+        let shape = healed(s, &s.kernel.from_brep(&b.brep)?, heal_options(p)?, &mut cut)?;
+        let name = b.name.unwrap_or_else(|| match (config, solo) {
+            (Some(_), true) => stem.clone(),
+            _ => format!("Imported {:02}", k + 1),
+        });
+        ids.extend(add_bodies(s, vec![shape], Some(&name))?);
+    }
+    let folder = if folder { file_folder(s, path, &ids) } else { None };
+    s.selection.clear();
+    Ok(json!({ "bodies": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "folder": folder, "repair_cut": cut }))
+}
+
 /// Import Preferences: "heal" is "quality" (every clean-up), "speed" (none, the default for
 /// scripts) or an object picking them: {"repair", "edges", "sew", "simplify"}.
 fn heal_options(p: &Params) -> Result<shapecraft_kernel::HealOptions> {
@@ -343,7 +421,8 @@ fn file_folder(s: &mut Session, path: &std::path::Path, items: &[shapecraft_doc:
     Some(id.0)
 }
 
-const KNOWN_IMPORTS: &[&str] = &["step", "stp", "shapr", "x_t", "x_b", "xmt_txt", "xmt_bin", "iges", "igs", "stl", "obj", "dxf", "svg"];
+const KNOWN_IMPORTS: &[&str] =
+    &["step", "stp", "shapr", "x_t", "x_b", "xmt_txt", "xmt_bin", "sldprt", "iges", "igs", "stl", "obj", "dxf", "svg"];
 
 /// The import kind of a file from its first bytes: a Shapr3D project (a ZIP holding `workspace`), Parasolid
 /// (binary "PS", or the text header), STEP or IGES.
@@ -355,6 +434,8 @@ fn sniff(path: &std::path::Path) -> Option<String> {
     let has = |needle: &[u8]| head.windows(needle.len()).any(|w| w == needle);
     let kind = if head.starts_with(b"PK\x03\x04") && (has(b"workspace") || has(b".metadata")) {
         "shapr"
+    } else if shapecraft_xt::sldprt::is_solidworks(head) {
+        "sldprt"
     } else if head.starts_with(b"PS\0\0") {
         "x_b"
     } else if head.starts_with(b"**ABCDEFGHIJKLMNOPQRSTUVWXYZ") || has(b"**PARASOLID") {

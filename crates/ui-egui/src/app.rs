@@ -873,11 +873,12 @@ impl ShapeCraftApp {
     }
 
     fn import_dialog(&mut self) {
-        let filters: [(&str, &[&str]); 7] = [
-            ("All Supported Files", &["shapr", "step", "stp", "x_t", "x_b", "iges", "igs", "stl", "obj", "dxf", "svg"]),
+        let filters: [(&str, &[&str]); 8] = [
+            ("All Supported Files", &["shapr", "step", "stp", "x_t", "x_b", "sldprt", "SLDPRT", "iges", "igs", "stl", "obj", "dxf", "svg"]),
             (".shapr project", &["shapr"]),
             ("STEP", &["step", "stp"]),
             ("Parasolid", &["x_t", "x_b"]),
+            ("SolidWorks part", &["sldprt", "SLDPRT"]),
             ("IGES", &["iges", "igs"]),
             ("Meshes (STL, OBJ)", &["stl", "obj"]),
             ("2D (DXF, SVG)", &["dxf", "svg"]),

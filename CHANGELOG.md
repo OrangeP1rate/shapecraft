@@ -2,6 +2,13 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## Next
+### New
+- **Open SolidWorks parts.** File ▸ Import File takes `.sldprt` files and brings in the part's solid bodies exactly,
+  as if it were a STEP file: same faces, same sizes, ready to model on. A part with several configurations comes in
+  as the first one. Parts saved from SolidWorks 2015 on read best; some older ones don't open yet and say why.
+  No SolidWorks needed.
+
 ## 0.11.2-alpha
 **Sketches you can shape by dragging, and a fillet's edges you can change afterwards.**
 ### New

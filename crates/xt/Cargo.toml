@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 shapecraft-kernel.workspace = true
 thiserror.workspace = true
+miniz_oxide = "0.8"
+cfb = "0.10"
 
 [dev-dependencies]
 shapecraft-kernel-occt.workspace = true

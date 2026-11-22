@@ -5,6 +5,7 @@ pub mod blend;
 pub mod model;
 pub mod read;
 pub mod schema;
+pub mod sldprt;
 pub mod write;
 
 pub use model::{Body, Mesh, bodies};

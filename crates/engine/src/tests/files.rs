@@ -5,6 +5,56 @@ use serde_json::json;
 
 use super::{session, volume};
 
+/// A SolidWorks part: the first configuration's model partition comes in as one body named after the file;
+/// hidden faceless bodies and other configurations stay out, and `config` picks another one.
+#[test]
+fn solidworks_part_imports_its_model_partition() {
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("rectangle", &json!({"corner": [0, 0], "opposite": [20, 10]})).unwrap();
+    let sketch = s.active_sketch.unwrap();
+    s.execute("extrude", &json!({"sketch": sketch.0, "region": 0, "distance": 5})).unwrap();
+    let dir = std::env::temp_dir().join(format!("shapecraft-sw-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let xb = dir.join("box.x_b");
+    s.execute("export_parasolid", &json!({"path": xb.to_string_lossy()})).unwrap();
+    let ps = std::fs::read(&xb).unwrap();
+    // Config 1 is twice as tall: export it from a second session.
+    let mut t = session();
+    t.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    t.execute("rectangle", &json!({"corner": [0, 0], "opposite": [20, 10]})).unwrap();
+    let sk = t.active_sketch.unwrap();
+    t.execute("extrude", &json!({"sketch": sk.0, "region": 0, "distance": 10})).unwrap();
+    let tall = dir.join("tall.x_b");
+    t.execute("export_parasolid", &json!({"path": tall.to_string_lossy()})).unwrap();
+    let tall = std::fs::read(&tall).unwrap();
+    let part = dir.join("Bracket.SLDPRT");
+    std::fs::write(
+        &part,
+        shapecraft_xt::sldprt::container(&[("Contents/Config-1-Partition", &tall), ("Contents/Config-0-Partition", &ps)]),
+    )
+    .unwrap();
+    let before = s.doc.bodies.len();
+    let out = s.execute("import_file", &json!({"path": part.to_string_lossy()})).unwrap().value;
+    assert_eq!(out["bodies"].as_array().unwrap().len(), 1);
+    assert_eq!(out["configurations"], json!([0, 1]));
+    assert_eq!(s.doc.bodies.len(), before + 1);
+    assert_eq!(s.doc.bodies.last().unwrap().name, "Bracket");
+    let last = |s: &mut crate::Session| {
+        let id = s.doc.bodies.last().unwrap().id.0;
+        s.execute("inspect", &json!({"body": id, "faces": false})).unwrap().value["bodies"][0]["volume_mm3"].as_f64().unwrap()
+    };
+    assert!((last(&mut s) - 1000.0).abs() < 1e-3);
+    s.execute("import_file", &json!({"path": part.to_string_lossy(), "config": 1})).unwrap();
+    assert!((last(&mut s) - 2000.0).abs() < 1e-3);
+    assert!(s.execute("import_file", &json!({"path": part.to_string_lossy(), "config": 7})).is_err());
+    // Without the extension it's still told apart by its contents.
+    let bare = dir.join("Bracket");
+    std::fs::copy(&part, &bare).unwrap();
+    s.execute("import_file", &json!({"path": bare.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn mesh_and_iges_exports_round_trip() {
     let mut s = session();
@@ -282,4 +332,42 @@ fn an_import_reports_its_stages() {
     assert_eq!(text, "Repairing and adding the parts…");
     assert_eq!((done, total), (2, 2), "both parts counted");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Real SolidWorks parts (not in the repo: their licences vary). `SHAPECRAFT_SLDPRT_DIR=folder cargo test -p
+/// shapecraft-engine real_solidworks -- --ignored --nocapture` imports each and prints what came in.
+#[test]
+#[ignore]
+fn real_solidworks_parts() {
+    let Ok(dir) = std::env::var("SHAPECRAFT_SLDPRT_DIR") else { return };
+    let mut failed = 0;
+    for f in std::fs::read_dir(dir).unwrap().flatten() {
+        let path = f.path();
+        if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("sldprt")) {
+            continue;
+        }
+        let mut s = session();
+        match s.execute("import_file", &json!({"path": path.to_string_lossy()})) {
+            Ok(out) => {
+                let info = s.execute("inspect", &json!({"faces": false})).unwrap().value;
+                let v: Vec<String> = info["bodies"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|b| format!("{:.4} mm³ ({} faces)", b["volume_mm3"].as_f64().unwrap_or(0.0), b["face_count"]))
+                    .collect();
+                println!(
+                    "{}: {} configs {}: {v:?}",
+                    path.display(),
+                    out.value["bodies"].as_array().unwrap().len(),
+                    out.value["configurations"]
+                );
+            }
+            Err(e) => {
+                failed += 1;
+                println!("{}: FAILED {e}", path.display());
+            }
+        }
+    }
+    println!("{failed} failed");
 }

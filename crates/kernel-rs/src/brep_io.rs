@@ -84,7 +84,7 @@ fn surface(s: &Surface) -> brep::Surface {
     }
 }
 
-fn curve(c: &Curve) -> brep::Curve {
+pub(crate) fn curve(c: &Curve) -> brep::Curve {
     match c {
         Curve::Line { origin, direction } => {
             brep::Curve::Line { origin: d(*origin), dir: DVec3::new(direction.x, direction.y, direction.z) }
@@ -113,6 +113,16 @@ fn curve(c: &Curve) -> brep::Curve {
 
 /// One body as a [`Brep`].
 pub fn body(m: &Model, b: Body, solid: bool) -> Result<Brep> {
+    Ok(body_mapped(m, b, solid)?.0)
+}
+
+/// Where each Arris edge and face went among a [`Brep`]'s.
+pub type Index = (HashMap<arris::topo::EdgeId, usize>, HashMap<arris::topo::FaceId, usize>);
+
+/// [`body`], with the index each Arris edge and face got in the [`Brep`] (for work that edits the neutral form
+/// around edges a person picked).
+pub fn body_mapped(m: &Model, b: Body, solid: bool) -> Result<(Brep, Index)> {
+    let mut face_index = HashMap::new();
     let err = |e: &dyn std::fmt::Display| KernelError::Operation { op: "to_brep", message: e.to_string() };
     let mut out = Brep { kind: if solid { brep::BodyKind::Solid } else { brep::BodyKind::Sheet }, ..Default::default() };
     let (mut surfaces, mut curves, mut verts, mut edges) = (HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new());
@@ -190,8 +200,9 @@ pub fn body(m: &Model, b: Body, solid: bool) -> Result<Brep> {
             }
             out.faces.push(brep::Face { surface: sid, flip: f.orientation == Orientation::Reversed, loops, color: None });
             faces.push(out.faces.len() - 1);
+            face_index.insert(f.id, out.faces.len() - 1);
         }
         out.shells.push(faces);
     }
-    Ok(out)
+    Ok((out, (edges, face_index)))
 }

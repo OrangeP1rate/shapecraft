@@ -17,6 +17,7 @@ mod profile;
 pub mod regions;
 mod remove;
 mod step;
+mod surgery;
 mod unify;
 
 use std::collections::HashMap;
@@ -422,7 +423,7 @@ pub(crate) fn faces_of(s: &ArShape) -> Vec<(Body, AFace)> {
     s.bodies.iter().flat_map(|b| s.model.faces(*b).unwrap_or_default().into_iter().map(move |f| (*b, f))).collect()
 }
 
-fn edges_of(s: &ArShape) -> Vec<(Body, AEdge)> {
+pub(crate) fn edges_of(s: &ArShape) -> Vec<(Body, AEdge)> {
     if let Some(f) = s.face {
         let Ok(face) = s.model.face(f.id) else { return Vec::new() };
         let mut out: Vec<(Body, AEdge)> = Vec::new();
@@ -436,11 +437,11 @@ fn edges_of(s: &ArShape) -> Vec<(Body, AEdge)> {
     s.bodies.iter().flat_map(|b| s.model.edges(*b).unwrap_or_default().into_iter().map(move |e| (*b, e))).collect()
 }
 
-fn face_at(s: &ArShape, i: u32) -> Result<(Body, AFace)> {
+pub(crate) fn face_at(s: &ArShape, i: u32) -> Result<(Body, AFace)> {
     faces_of(s).get(i as usize).copied().ok_or_else(|| bad(format!("no face {i}")))
 }
 
-fn edge_at(s: &ArShape, i: u32) -> Result<(Body, AEdge)> {
+pub(crate) fn edge_at(s: &ArShape, i: u32) -> Result<(Body, AEdge)> {
     edges_of(s).get(i as usize).copied().ok_or_else(|| bad(format!("no edge {i}")))
 }
 
@@ -647,8 +648,12 @@ impl Kernel for RustKernel {
             F::Fillet => Limited("some corners where three rounds meet are refused"),
             F::ChordalFillet => Limited("where the faces meet at one angle along the edge"),
             F::Scale => Limited("uneven scaling of cones, spheres and tori"),
-            F::VariableFillet | F::SetbackCorners | F::TwoDistanceChamfer | F::MoveEdge | F::Fill | F::WrapEmboss => Missing,
-            F::ProjectAsEdge | F::Iges => Missing,
+            F::TwoDistanceChamfer => Limited("outside edges: straight ones between flat faces, circles on cylinders and cones"),
+            F::MoveEdge => Limited("circles round a flat face, and straight edges between flat faces"),
+            F::Fill => Limited("flat openings (any opening on a mesh body)"),
+            F::VariableFillet | F::SetbackCorners | F::WrapEmboss => Missing,
+            F::ProjectAsEdge => Limited("closed outlines that land inside one flat face"),
+            F::Iges => Missing,
             F::Extrude | F::DraftAngles | F::Loft | F::PushPull | F::Chamfer | F::Shell | F::SplitBody => Full,
             F::Drawings | F::Measure | F::MeshBodies | F::StepFiles | F::ExactImports => Full,
         }
@@ -1102,6 +1107,27 @@ impl Kernel for RustKernel {
         })
     }
 
+    fn fill(&self, shape: &Shape, edges: &[u32]) -> Result<Shape> {
+        if edges.is_empty() || edges.len() > 10_000 {
+            return Err(bad("fill needs the edges around an opening"));
+        }
+        match data(shape)? {
+            Data::Mesh => poly::fill(shape, edges),
+            Data::Exact(s) => surgery::fill(s, edges),
+        }
+    }
+
+    fn chamfer_edges_two(&self, shape: &Shape, edges: &[u32], d1: f64, d2: f64, on_face: Option<u32>) -> Result<Shape> {
+        if d1.is_finite() && (d1 - d2).abs() < 1e-12 * d1.abs().max(1.0) {
+            return self.chamfer_edges(shape, edges, d1);
+        }
+        surgery::chamfer_two(shape, exact(shape)?, edges, d1, d2, on_face)
+    }
+
+    fn map_edge(&self, shape: &Shape, edge: u32, linear: shapecraft_kernel::DMat3, offset: DVec3) -> Result<Shape> {
+        surgery::map_edge(exact(shape)?, edge, linear, offset)
+    }
+
     fn chamfer_edges(&self, shape: &Shape, edges: &[u32], distance: f64) -> Result<Shape> {
         let s = exact(shape)?;
         per_body(s, &edges_of(s), edges, |m, b, es| Ok(arris::ops::chamfer(m, b, &es, distance, C).map_err(op("chamfer"))?.0))
@@ -1387,8 +1413,11 @@ impl Kernel for RustKernel {
         Ok(wrap(ArShape { profile, ..ArShape::new(s.model.clone(), vec![b], Some(f)) }))
     }
 
-    fn imprint(&self, _shape: &Shape, _face: u32, _tools: &[(Shape, Option<u32>)]) -> Result<Shape> {
-        Err(not_yet("imprint"))
+    fn imprint(&self, shape: &Shape, face: u32, tools: &[(Shape, Option<u32>)]) -> Result<Shape> {
+        if tools.is_empty() {
+            return Err(bad("nothing to project"));
+        }
+        surgery::imprint(exact(shape)?, face, tools)
     }
 
     fn loft(&self, sections: &[Shape]) -> Result<Shape> {

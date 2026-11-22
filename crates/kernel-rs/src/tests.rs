@@ -68,7 +68,7 @@ fn closed_meshes_are_solids() {
 #[test]
 fn what_it_cant_do_yet_says_so() {
     let b = K.make_box(DVec3::ZERO, DVec3::ONE).unwrap();
-    let e = K.imprint(&b, 0, &[]).unwrap_err().to_string();
+    let e = K.fillet_edges_variable(&b, &[0], 0.1, 0.2).unwrap_err().to_string();
     assert!(e.contains("not in the Rust kernel yet"), "{e}");
     let occt_made = shapecraft_kernel::Shape::new(Foreign);
     assert!(K.mass_props(&occt_made).is_err(), "another kernel's shape is refused, not misread");
@@ -254,4 +254,140 @@ fn what_the_table_calls_missing_is_refused() {
             assert!(refused(f), "{f:?} is listed missing but works: list it as Full or Limited");
         }
     }
+}
+
+/// The edge of `s` whose middle is nearest `p`.
+fn edge_near(s: &shapecraft_kernel::Shape, p: DVec3) -> u32 {
+    (0..K.edge_count(s).unwrap())
+        .min_by(|a, b| {
+            let d = |e: u32| K.measure(s, SubShape::Edge(e)).unwrap().1.distance(p);
+            d(*a).total_cmp(&d(*b))
+        })
+        .unwrap()
+}
+
+#[test]
+fn fill_closes_an_exact_open_box() {
+    let cube = K.make_box(DVec3::ZERO, DVec3::splat(10.0)).unwrap();
+    let mut b = K.to_brep(&cube).unwrap().remove(0);
+    // Take the top away: an open box (a sheet).
+    let top = (0..b.faces.len()).find(|f| matches!(b.surfaces[b.faces[*f].surface], shapecraft_kernel::brep::Surface::Plane { origin, normal, .. } if normal.z.abs() > 0.9 && origin.z > 5.0)).unwrap();
+    b.faces.remove(top);
+    b.shells = vec![(0..b.faces.len()).collect()];
+    b.kind = shapecraft_kernel::brep::BodyKind::Sheet;
+    let cup = K.from_brep(&b).unwrap();
+    let rim: Vec<u32> =
+        (0..K.edge_count(&cup).unwrap()).filter(|e| (K.measure(&cup, SubShape::Edge(*e)).unwrap().1.z - 10.0).abs() < 1e-9).collect();
+    assert_eq!(rim.len(), 4);
+    let closed = K.fill(&cup, &rim).unwrap();
+    assert!(close(K.mass_props(&closed).unwrap().volume, 1000.0));
+    assert_eq!(K.face_count(&closed).unwrap(), 6);
+    // An edge with faces on both sides isn't round an opening.
+    assert!(K.fill(&cube, &[0]).is_err());
+}
+
+#[test]
+fn a_rim_moves_scales_and_turns_on_its_own() {
+    let pi = std::f64::consts::PI;
+    let post = K.extrude_circle(DVec3::ZERO, 4.0, DVec3::Z * 10.0).unwrap();
+    let top = edge_near(&post, DVec3::new(0.0, 0.0, 10.0));
+    let vol = |s: &shapecraft_kernel::Shape| K.mass_props(s).unwrap().volume;
+    // Lifted 5: a taller cylinder.
+    let taller = K.map_edge(&post, top, shapecraft_kernel::DMat3::IDENTITY, DVec3::Z * 5.0).unwrap();
+    assert!(close(vol(&taller), pi * 16.0 * 15.0), "{}", vol(&taller));
+    // Doubled about its centre: a frustum, still a cone.
+    let c = DVec3::new(0.0, 0.0, 10.0);
+    let frustum = K.scale_edge(&post, top, c, DVec3::splat(2.0)).unwrap();
+    assert!((vol(&frustum) / (pi * 10.0 / 3.0 * (16.0 + 32.0 + 64.0)) - 1.0).abs() < 1e-9, "{}", vol(&frustum));
+    // Wider one way only: the side ruled to an ellipse (π·4·(4+6)/2·10 = 200π).
+    let oval = K.scale_edge(&post, top, c, DVec3::new(1.5, 1.0, 1.0)).unwrap();
+    assert!((vol(&oval) / (200.0 * pi) - 1.0).abs() < 1e-4, "{}", vol(&oval));
+    let bb = K.bounds(&oval).unwrap();
+    assert!((bb.max.x - 6.0).abs() < 1e-6 && (bb.max.y - 4.0).abs() < 1e-6, "{bb:?}");
+    // Turned 15° about a line through its centre: same height on average, close to the same volume.
+    let turn = shapecraft_kernel::DMat3::from_axis_angle(DVec3::X, 15f64.to_radians());
+    let tilted = K.map_edge(&post, top, turn, c - turn * c).unwrap();
+    assert!((vol(&tilted) / (pi * 160.0) - 1.0).abs() < 0.02, "{}", vol(&tilted));
+    // A boss on a plate: its top scaled down, the plate stays.
+    let plate = K.make_box(DVec3::new(-10.0, -10.0, -2.0), DVec3::new(20.0, 20.0, 2.0)).unwrap();
+    let boss = K.boolean(shapecraft_kernel::BoolOp::Union, &plate, &post).unwrap();
+    let top = edge_near(&boss, c);
+    let tapered = K.scale_edge(&boss, top, c, DVec3::splat(0.5)).unwrap();
+    let cone = pi * 10.0 / 3.0 * (16.0 + 8.0 + 4.0);
+    assert!((vol(&tapered) / (800.0 + cone) - 1.0).abs() < 1e-9, "{}", vol(&tapered));
+    // A straight edge isn't a rim; a fold is refused.
+    assert!(K.map_edge(&post, top, shapecraft_kernel::DMat3::ZERO, DVec3::ZERO).is_err());
+}
+
+#[test]
+fn two_distance_chamfers_on_straight_edges_and_rims() {
+    let vol = |s: &shapecraft_kernel::Shape| K.mass_props(s).unwrap().volume;
+    // A 10 mm cube's top front edge: 1 along the top, 3 down the front (the cube's face 0..6 order decides "first").
+    let cube = K.make_box(DVec3::ZERO, DVec3::splat(10.0)).unwrap();
+    let e = edge_near(&cube, DVec3::new(5.0, 0.0, 10.0));
+    let top = (0..6).find(|f| K.face_plane(&cube, *f).unwrap().unwrap().normal.z > 0.9).unwrap();
+    let cut = K.chamfer_edges_two(&cube, &[e], 1.0, 3.0, Some(top)).unwrap();
+    assert!(close(vol(&cut), 985.0), "{}", vol(&cut));
+    assert_eq!(K.face_count(&cut).unwrap(), 7);
+    // The bevel runs from 1 back on the top to 3 down the front: its normal is (0, -3, 1) normalised.
+    let bevel = (0..7).filter_map(|f| K.face_plane(&cut, f).unwrap()).find(|p| p.normal.y < -0.1 && p.normal.z > 0.1).unwrap();
+    assert!((bevel.normal.y / bevel.normal.z - (-3.0)).abs() < 1e-9, "{:?}", bevel.normal);
+    // Two edges meeting at a corner.
+    let side = edge_near(&cube, DVec3::new(10.0, 5.0, 10.0));
+    let both = K.chamfer_edges_two(&cube, &[e, side], 1.0, 2.0, None).unwrap();
+    assert!(vol(&both) < 1000.0 - 2.0 * 9.0, "{}", vol(&both));
+    // A post's top rim: 1 across the top, 0.5 down the side (a ring of triangles: 2π·(3 − 1/3)·0.25).
+    let post = K.extrude_circle(DVec3::ZERO, 3.0, DVec3::Z * 6.0).unwrap();
+    let rim = edge_near(&post, DVec3::new(0.0, 0.0, 6.0));
+    let cap = (0..K.face_count(&post).unwrap()).find(|f| K.face_plane(&post, *f).unwrap().is_some_and(|p| p.normal.z > 0.9)).unwrap();
+    let ring = K.chamfer_edges_two(&post, &[rim], 1.0, 0.5, Some(cap)).unwrap();
+    let removed = std::f64::consts::TAU * (3.0 - 1.0 / 3.0) * 0.25;
+    assert!((vol(&post) - vol(&ring) - removed).abs() < 1e-9, "{}", vol(&post) - vol(&ring));
+    // An edge that runs into a wall (the top of a step) is refused, not cut into the wall.
+    let step = K
+        .boolean(
+            shapecraft_kernel::BoolOp::Union,
+            &K.make_box(DVec3::ZERO, DVec3::new(20.0, 10.0, 5.0)).unwrap(),
+            &K.make_box(DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 10.0, 10.0)).unwrap(),
+        )
+        .unwrap();
+    let low = edge_near(&step, DVec3::new(5.0, 0.0, 5.0));
+    assert!(K.chamfer_edges_two(&step, &[low], 1.0, 2.0, None).is_err());
+}
+
+#[test]
+fn outlines_projected_onto_a_face_split_it() {
+    use shapecraft_kernel::BoolOp;
+    let pi = std::f64::consts::PI;
+    let block = K.make_box(DVec3::ZERO, DVec3::new(20.0, 20.0, 10.0)).unwrap();
+    let top_of = |s: &shapecraft_kernel::Shape, z: f64| {
+        (0..K.face_count(s).unwrap())
+            .filter(|f| K.face_plane(s, *f).unwrap().is_some_and(|p| p.normal.z > 0.9 && (p.origin.z - z).abs() < 1e-9))
+            .collect::<Vec<u32>>()
+    };
+    let top = top_of(&block, 10.0)[0];
+    // A ring (a tube's end face) 20 mm above, over the middle of the top.
+    let tube = K
+        .boolean(
+            BoolOp::Subtract,
+            &K.extrude_circle(DVec3::new(10.0, 10.0, 25.0), 6.0, DVec3::Z * 5.0).unwrap(),
+            &K.extrude_circle(DVec3::new(10.0, 10.0, 24.0), 3.0, DVec3::Z * 7.0).unwrap(),
+        )
+        .unwrap();
+    let ring = K.face(&tube, top_of(&tube, 30.0)[0]).unwrap();
+    let split = K.imprint(&block, top, &[(ring.clone(), None)]).unwrap();
+    assert_eq!(K.face_count(&split).unwrap(), 8, "the top, the ring and the disc inside it");
+    assert!(close(K.mass_props(&split).unwrap().volume, 4000.0));
+    // The ring pulled up 2 mm stands on the block.
+    let ring_face =
+        top_of(&split, 10.0).into_iter().find(|f| (K.measure(&split, SubShape::Face(*f)).unwrap().0 - pi * 27.0).abs() < 1e-6).unwrap();
+    let raised = K.extrude_face(&split, ring_face, 2.0).unwrap();
+    assert!((K.mass_props(&raised).unwrap().volume - (4000.0 + 2.0 * pi * 27.0)).abs() < 1e-6);
+    // One that hangs over the edge is refused; one that misses the face lands nowhere.
+    let corner = K.extrude_circle(DVec3::new(0.0, 0.0, 25.0), 4.0, DVec3::Z).unwrap();
+    let over = K.face(&corner, top_of(&corner, 26.0)[0]).unwrap();
+    assert!(K.imprint(&block, top, &[(over, None)]).is_err());
+    let far = K.extrude_circle(DVec3::new(50.0, 50.0, 25.0), 4.0, DVec3::Z).unwrap();
+    let away = K.face(&far, top_of(&far, 26.0)[0]).unwrap();
+    assert!(K.imprint(&block, top, &[(away, None)]).is_err());
 }

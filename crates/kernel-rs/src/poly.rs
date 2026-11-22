@@ -653,3 +653,71 @@ fn find_edge(d: &RsShape, edge: u32) -> Result<(DVec3, DVec3)> {
     }
     Err(bad(format!("no edge {edge}")))
 }
+
+/// Fill on a mesh body: a face across each opening the edges (numbered as [`Kernel::tessellate`] lists them) go
+/// round, wound to match the faces beside it; the body becomes a solid when nothing is left open.
+pub fn fill(shape: &Shape, edges: &[u32]) -> Result<Shape> {
+    use std::collections::{BTreeMap, HashMap};
+    let mut parts = data(shape)?.parts.clone();
+    let lists: Vec<Vec<(u32, u32)>> = parts.iter().map(|(_, p)| p.edges()).collect();
+    let mut which = None;
+    let mut pairs = Vec::with_capacity(edges.len());
+    for &e in edges {
+        let mut base = 0u32;
+        let mut found = None;
+        for (k, l) in lists.iter().enumerate() {
+            if e < base + l.len() as u32 {
+                found = Some((k, l[(e - base) as usize]));
+                break;
+            }
+            base += l.len() as u32;
+        }
+        let (k, pair) = found.ok_or_else(|| bad(format!("no edge {e}")))?;
+        if which.is_some_and(|w| w != k) {
+            return Err(bad("the edges must all be on one body"));
+        }
+        which = Some(k);
+        pairs.push(pair);
+    }
+    let k = which.ok_or_else(|| bad("no edges picked"))?;
+    let directed = |p: &Poly| {
+        let mut used: HashMap<(u32, u32), u32> = HashMap::new();
+        for f in &p.faces {
+            for j in 0..f.len() {
+                *used.entry((f[j], f[(j + 1) % f.len()])).or_default() += 1;
+            }
+        }
+        used
+    };
+    let poly = &mut parts[k].1;
+    let used = directed(poly);
+    let mut next: BTreeMap<u32, u32> = BTreeMap::new();
+    for (a, b) in pairs {
+        let (ab, ba) = (used.get(&(a, b)).copied().unwrap_or(0), used.get(&(b, a)).copied().unwrap_or(0));
+        let (from, to) = match (ab, ba) {
+            (1, 0) => (b, a),
+            (0, 1) => (a, b),
+            _ => return Err(bad("those edges aren't round an opening (each must border one face only)")),
+        };
+        if next.insert(from, to).is_some() {
+            return Err(bad("the edges branch; pick one opening"));
+        }
+    }
+    while let Some((&start, &first)) = next.iter().next() {
+        next.remove(&start);
+        let mut l = vec![start];
+        let mut at = first;
+        while at != start {
+            l.push(at);
+            at = next.remove(&at).ok_or_else(|| bad("the edges don't go all the way round an opening"))?;
+        }
+        if l.len() < 3 {
+            return Err(bad("the opening has no area"));
+        }
+        poly.faces.push(l);
+    }
+    let used = directed(poly);
+    let closed = used.iter().all(|((a, b), n)| *n == 1 && used.get(&(*b, *a)) == Some(&1));
+    parts[k].0 = if closed { Kind::Solid } else { Kind::Sheet };
+    Ok(wrap(parts))
+}

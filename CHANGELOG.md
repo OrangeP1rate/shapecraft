@@ -19,10 +19,12 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
   Open CASCADE (the default) and a new kernel written entirely in Rust, built on the open-source Arris kernel. It
   models exactly (sketches, extrude with draft, revolve, loft, sweep, threads; booleans, fillets, chamfers, shells,
   offsets, Offset Edge, deleting holes and pockets; drawings; STEP with part names and colors, and every file
-  Open CASCADE opens except IGES) and passes 169 of the 188 modeling checks Open CASCADE does. The Advanced tab
-  lists what it does the same, what works with limits, and what still needs Open CASCADE; while it runs, those
-  tools and options (Fill, Wrap & Emboss, Project as Edge, two-distance chamfers, setback corners, IGES) are
-  greyed out and say why. Most modeling runs as fast or faster than on Open CASCADE (fillets, chamfers, shells
+  Open CASCADE opens except IGES) and passes 175 of the 188 modeling checks Open CASCADE does. Fill, Project as
+  Edge, moving or scaling an edge on its own and two-distance chamfers work in the common cases (flat openings,
+  outlines that land inside a face, round rims and straight edges, chamfers on outside edges) and explain the rest.
+  The Advanced tab lists what it does the same, what works with limits, and what still needs Open CASCADE; while it
+  runs, those tools and options (Wrap & Emboss, variable-radius fillets, setback corners, IGES) are greyed out and
+  say why. Most modeling runs as fast or faster than on Open CASCADE (fillets, chamfers, shells
   and lofts several times faster); cuts into faces full of holes and threads are slower. Projects made with it
   live in a folder of their own, so your work stays on Open CASCADE while you try it. Restart to switch. For
   developers: `--kernel rust` or `SHAPECRAFT_KERNEL=rust`, and the command-line tools build without Open CASCADE

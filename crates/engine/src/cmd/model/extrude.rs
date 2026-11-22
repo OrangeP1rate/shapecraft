@@ -138,7 +138,7 @@ fn reach_through_all(s: &Session, origin: DVec3, normal: DVec3) -> Result<f64> {
 /// The solid an extrude adds or cuts: each face pulled along `dir` (and back along it too when symmetric).
 pub(crate) fn extrude_block(s: &Session, faces: &[Shape], dir: DVec3, draft: f64, symmetric: bool) -> Result<Shape> {
     let mut block: Option<Shape> = None;
-    for face in faces {
+    for face in &s.kernel.merge_faces(faces)? {
         let sides: &[f64] = if symmetric { &[1.0, -1.0] } else { &[1.0] };
         for side in sides {
             let d = dir * *side;

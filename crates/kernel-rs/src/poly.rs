@@ -112,6 +112,44 @@ impl Poly {
         out
     }
 
+    /// The polyhedron as an exact boundary: a plane per face, a line per edge (what a mesh body becomes to be
+    /// written to STEP or measured against an exact body).
+    pub fn brep(&self, kind: Kind) -> shapecraft_kernel::brep::Brep {
+        use shapecraft_kernel::brep::{BodyKind, Brep, Curve, Edge, Face, Fin, Surface};
+        let edges = self.edges();
+        let index: std::collections::HashMap<(u32, u32), usize> = edges.iter().enumerate().map(|(i, e)| (*e, i)).collect();
+        let mut b = Brep {
+            kind: if kind == Kind::Solid { BodyKind::Solid } else { BodyKind::Sheet },
+            vertices: self.points.clone(),
+            ..Brep::default()
+        };
+        for &(a0, a1) in &edges {
+            let (p, q) = (self.points[a0 as usize], self.points[a1 as usize]);
+            b.curves.push(Curve::Line { origin: p, dir: q - p });
+            b.edges.push(Edge {
+                curve: Some(b.curves.len() - 1),
+                reversed: false,
+                start: Some(a0 as usize),
+                end: Some(a1 as usize),
+                tolerance: None,
+            });
+        }
+        for f in &self.faces {
+            let corners = self.corners(f);
+            let (Some(&origin), Some(&next)) = (corners.first(), corners.get(1)) else { continue };
+            b.surfaces.push(Surface::Plane { origin, normal: newell(&corners).normalize_or_zero(), x: next - origin });
+            let fins = (0..f.len())
+                .filter_map(|k| {
+                    let (a, c) = (f[k], f[(k + 1) % f.len()]);
+                    index.get(&(a.min(c), a.max(c))).map(|&edge| Fin { edge, forward: a < c, pcurve: None })
+                })
+                .collect();
+            b.faces.push(Face { surface: b.surfaces.len() - 1, flip: false, loops: vec![fins], color: None });
+        }
+        b.shells = vec![(0..b.faces.len()).collect()];
+        b
+    }
+
     fn map(&self, f: impl Fn(DVec3) -> DVec3, flip: bool) -> Poly {
         let faces = if flip { self.faces.iter().map(|l| l.iter().rev().copied().collect()).collect() } else { self.faces.clone() };
         Poly { points: self.points.iter().map(|&p| f(p)).collect(), faces }

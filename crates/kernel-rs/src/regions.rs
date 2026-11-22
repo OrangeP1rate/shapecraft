@@ -99,7 +99,7 @@ impl Seg {
     }
 
     /// The parameter of the point of this piece nearest `p`, and how far `p` is from it.
-    fn project(&self, p: DVec2) -> (f64, f64) {
+    pub fn project(&self, p: DVec2) -> (f64, f64) {
         match *self {
             Seg::Line { a, b } => {
                 let d = b - a;
@@ -192,6 +192,46 @@ fn bspline(poles: &[DVec2], n: usize) -> Vec<DVec2> {
 }
 
 /// The sketch curves as pieces in (u, v).
+/// How many straight pieces an ellipse is followed by in the arrangement.
+pub const ELLIPSE_PIECES: usize = 128;
+
+/// A whole ellipse of the sketch in (u, v): its centre, the unit direction of its long axis and its radii.
+#[derive(Clone, Copy, Debug)]
+pub struct Ellipse {
+    pub c: DVec2,
+    pub major: DVec2,
+    pub rx: f64,
+    pub ry: f64,
+}
+
+impl Ellipse {
+    /// The sketch's ellipses.
+    pub fn all(frame: &PlaneFrame, curves: &[PlanarCurve]) -> Vec<Ellipse> {
+        curves
+            .iter()
+            .filter_map(|c| match c {
+                PlanarCurve::Ellipse { center, major, rx, ry } => Some(Ellipse {
+                    c: to_local(frame, *center),
+                    major: DVec2::new(major.dot(frame.x), major.dot(frame.y)).normalize_or(DVec2::X),
+                    rx: *rx,
+                    ry: *ry,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether the loop is this whole ellipse, as [`pieces`] follows it, untouched by anything else.
+    pub fn is_traced_by(&self, c: &Cycle) -> bool {
+        let on = |p: DVec2| {
+            let d = p - self.c;
+            let (x, y) = (d.dot(self.major) / self.rx, d.dot(self.major.perp()) / self.ry);
+            (x * x + y * y - 1.0).abs() < 1e-9
+        };
+        c.len() == ELLIPSE_PIECES && c.iter().all(|s| matches!(s, Seg::Line { a, .. } if on(*a)))
+    }
+}
+
 pub fn pieces(frame: &PlaneFrame, curves: &[PlanarCurve]) -> Vec<Seg> {
     let l = |p: glam::DVec3| to_local(frame, p);
     let mut out = Vec::new();
@@ -203,9 +243,9 @@ pub fn pieces(frame: &PlaneFrame, curves: &[PlanarCurve]) -> Vec<Seg> {
             PlanarCurve::Ellipse { center, major, rx, ry } => {
                 let c = l(*center);
                 let mx = DVec2::new(major.dot(frame.x), major.dot(frame.y)).normalize_or(DVec2::X);
-                let pts: Vec<DVec2> = (0..128)
+                let pts: Vec<DVec2> = (0..ELLIPSE_PIECES)
                     .map(|i| {
-                        let t = i as f64 / 128.0 * TAU;
+                        let t = i as f64 / ELLIPSE_PIECES as f64 * TAU;
                         c + mx * rx * t.cos() + mx.perp() * ry * t.sin()
                     })
                     .collect();
@@ -488,6 +528,88 @@ pub fn regions(segs: &[Seg]) -> Vec<Region> {
         }
     }
     out.into_iter().map(|(r, _, _)| r).collect()
+}
+
+/// Whether two pieces are the same piece walked opposite ways.
+fn twins(a: &Seg, b: &Seg, tol: f64) -> bool {
+    let same_ends = a.start().distance(b.end()) < tol && a.end().distance(b.start()) < tol;
+    same_ends
+        && match (a, b) {
+            (Seg::Line { .. }, Seg::Line { .. }) => true,
+            (Seg::Arc { .. }, Seg::Arc { .. }) => a.at(0.5).distance(b.at(0.5)) < tol,
+            _ => false,
+        }
+}
+
+/// The piece `b` carries on from `a` along the same line or circle: the two as one.
+fn joined(a: &Seg, b: &Seg, tol: f64) -> Option<Seg> {
+    if a.end().distance(b.start()) >= tol {
+        return None;
+    }
+    match (*a, *b) {
+        (Seg::Line { a: p, b: q }, Seg::Line { b: r, .. }) => {
+            let (d, e) = (q - p, r - q);
+            (d.perp_dot(e).abs() <= tol * (d.length() + e.length()) && d.dot(e) > 0.0).then_some(Seg::Line { a: p, b: r })
+        }
+        (Seg::Arc { c, r, a0, sweep }, Seg::Arc { c: c2, r: r2, sweep: s2, .. }) => {
+            (c.distance(c2) < tol && (r - r2).abs() < tol && sweep * s2 > 0.0).then_some(Seg::Arc { c, r, a0, sweep: sweep + s2 })
+        }
+        _ => None,
+    }
+}
+
+/// A loop with pieces that carry on along one line or circle joined (a circle cut by a line no longer there is one
+/// circle again).
+fn simplified(mut c: Cycle, tol: f64) -> Cycle {
+    let mut i = 0;
+    while c.len() > 1 && i < c.len() {
+        let j = (i + 1) % c.len();
+        match joined(&c[i], &c[j], tol) {
+            Some(both) => {
+                c[i] = both;
+                c.remove(j);
+                if j < i {
+                    i -= 1;
+                }
+            }
+            None => i += 1,
+        }
+    }
+    c
+}
+
+/// The union of regions of one arrangement (each loop walked with its region on the left): the pieces two of them
+/// share cancel, and what is left is traced into regions again, with their holes. A face of what is left that the
+/// loops walk the other way round (the inside of a hole) isn't part of it.
+pub fn union(loops: &[Cycle]) -> Vec<Region> {
+    let all: Vec<Seg> = loops.iter().flatten().copied().collect();
+    let span = all.iter().flat_map(|s| [s.start(), s.end()]).fold(0.0f64, |m, p| m.max(p.abs().max_element()));
+    let tol = 1e-7 * span.max(1.0);
+    let mut gone = vec![false; all.len()];
+    for i in 0..all.len() {
+        if gone[i] {
+            continue;
+        }
+        if let Some(j) = (i + 1..all.len()).find(|&j| !gone[j] && twins(&all[i], &all[j], tol)) {
+            gone[i] = true;
+            gone[j] = true;
+        }
+    }
+    let left: Vec<Seg> = all.iter().zip(&gone).filter(|(_, g)| !**g).map(|(s, _)| *s).collect();
+    // A traced loop runs the way the pieces left run: its first piece's middle lies on one of them, heading along.
+    let walked_so = |c: &Cycle| {
+        let Some(s) = c.first() else { return false };
+        let (mid, along) = (s.at(0.5), s.at(0.51) - s.at(0.49));
+        left.iter().any(|t| {
+            let (u, d) = t.project(mid);
+            d < tol && (t.at((u + 0.01).min(1.0)) - t.at((u - 0.01).max(0.0))).dot(along) > 0.0
+        })
+    };
+    regions(&left)
+        .into_iter()
+        .filter(|r| walked_so(&r.outer))
+        .map(|r| Region { outer: simplified(r.outer, tol), holes: r.holes.into_iter().map(|h| simplified(h, tol)).collect(), area: r.area })
+        .collect()
 }
 
 fn inside(p: DVec2, poly: &[DVec2]) -> bool {

@@ -228,6 +228,89 @@ impl Brep {
         }
         self.vertices.iter_mut().for_each(p);
     }
+
+    /// Scales the body about `center` by a positive factor per world axis. A uniform scale is exact for every
+    /// surface; an uneven one keeps planes, lines and splines exact, turns circles into ellipses and cylinders into
+    /// elliptic extrusions, and refuses cones, spheres, tori and surfaces built on others (no exact form for those).
+    pub fn scale(&mut self, center: DVec3, factors: DVec3) -> Result<(), &'static str> {
+        if !(factors.is_finite() && center.is_finite()) || factors.min_element() <= 0.0 {
+            return Err("scale factors must be positive");
+        }
+        let s = factors.x;
+        let uniform = (factors - DVec3::splat(s)).abs().max_element() <= 1e-12 * s;
+        let p = |v: DVec3| center + (v - center) * factors;
+        let d = |v: DVec3| v * factors;
+        // A plane's normal maps by the inverse transpose.
+        let n = |v: DVec3| (v / factors).normalize_or_zero();
+        // The image of the circle or ellipse with semi-axes `a` along `x` and `b` along `normal × x`: an ellipse
+        // whose conjugate semi-diameters are the images of those two, turned to its principal axes (Rytz), the same
+        // way round.
+        let conic = |normal: DVec3, x: DVec3, a: f64, b: f64| -> (DVec3, DVec3, f64, f64) {
+            let (x, y) = (x.normalize_or_zero(), normal.normalize_or_zero().cross(x.normalize_or_zero()));
+            let (u, v) = (d(x) * a, d(y) * b);
+            let t = 0.5 * (2.0 * u.dot(v)).atan2(u.dot(u) - v.dot(v));
+            let (major, minor) = (u * t.cos() + v * t.sin(), v * t.cos() - u * t.sin());
+            (u.cross(v).normalize_or_zero(), major.normalize_or_zero(), major.length(), minor.length())
+        };
+        let mut extra: Vec<Curve> = Vec::new();
+        let curves = self.curves.len();
+        for surface in &mut self.surfaces {
+            *surface = match surface.clone() {
+                Surface::Plane { origin, normal, x } => Surface::Plane { origin: p(origin), normal: n(normal), x: d(x) },
+                Surface::BSpline(mut b) => {
+                    b.poles.iter_mut().for_each(|q| *q = p(*q));
+                    Surface::BSpline(b)
+                }
+                Surface::Extrusion { curve, dir } => Surface::Extrusion { curve, dir: d(dir) },
+                Surface::Cylinder { origin, axis, x, radius } if uniform => {
+                    Surface::Cylinder { origin: p(origin), axis, x, radius: radius * s }
+                }
+                Surface::Cylinder { origin, axis, x, radius } => {
+                    // The circle through the origin swept along the axis, mapped: an ellipse swept along the image.
+                    let (normal, x, major, minor) = conic(axis, x, radius, radius);
+                    extra.push(Curve::Ellipse { center: p(origin), normal, x, major, minor });
+                    Surface::Extrusion { curve: curves + extra.len() - 1, dir: d(axis) }
+                }
+                Surface::Cone { origin, axis, x, radius, half_angle } if uniform => {
+                    Surface::Cone { origin: p(origin), axis, x, radius: radius * s, half_angle }
+                }
+                Surface::Sphere { center: c, axis, x, radius } if uniform => Surface::Sphere { center: p(c), axis, x, radius: radius * s },
+                Surface::Torus { center: c, axis, x, major, minor } if uniform => {
+                    Surface::Torus { center: p(c), axis, x, major: major * s, minor: minor * s }
+                }
+                Surface::Offset { basis, distance } if uniform => Surface::Offset { basis, distance: distance * s },
+                Surface::Revolution { curve, origin, axis } if uniform => Surface::Revolution { curve, origin: p(origin), axis },
+                _ => return Err("scaling unevenly needs flat, cylindrical or spline faces here"),
+            };
+        }
+        for c in &mut self.curves {
+            *c = match c.clone() {
+                Curve::Line { origin, dir } => Curve::Line { origin: p(origin), dir: d(dir) },
+                Curve::Circle { center: c, normal, x, radius } if uniform => Curve::Circle { center: p(c), normal, x, radius: radius * s },
+                Curve::Circle { center: c, normal, x, radius } => {
+                    let (normal, x, major, minor) = conic(normal, x, radius, radius);
+                    Curve::Ellipse { center: p(c), normal, x, major, minor }
+                }
+                Curve::Ellipse { center: c, normal, x, major, minor } => {
+                    let (normal, x, major, minor) = conic(normal, x, major, minor);
+                    Curve::Ellipse { center: p(c), normal, x, major, minor }
+                }
+                Curve::BSpline(mut b) => {
+                    b.poles.iter_mut().for_each(|q| *q = p(*q));
+                    Curve::BSpline(b)
+                }
+                Curve::Through(pts) => Curve::Through(pts.into_iter().map(p).collect()),
+                // A curve in a surface's (u, v) means something else once the surface is scaled: fins drop theirs.
+                c @ Curve::OnSurface { .. } => c,
+            };
+        }
+        self.curves.extend(extra);
+        for f in &mut self.faces {
+            f.loops.iter_mut().flatten().for_each(|fin| fin.pcurve = None);
+        }
+        self.vertices.iter_mut().for_each(|v| *v = p(*v));
+        Ok(())
+    }
 }
 
 /// Flat `f64` stream used to hand a [`Brep`] across a C ABI. Integers are stored exactly as doubles.

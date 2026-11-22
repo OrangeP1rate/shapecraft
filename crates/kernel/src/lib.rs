@@ -303,6 +303,12 @@ pub trait Kernel: Send + Sync {
     /// radians (out when negative).
     fn prism_draft(&self, face: &Shape, dir: DVec3, angle: f64) -> Result<Shape>;
 
+    /// Flat faces on one plane that touch, merged into as few as cover them, so extruding several at once makes one
+    /// solid with no seams where they met. Kernels that join such seams after a union give them back as they are.
+    fn merge_faces(&self, faces: &[Shape]) -> Result<Vec<Shape>> {
+        Ok(faces.to_vec())
+    }
+
     /// Spins a planar face around an axis (radians).
     fn revolve(&self, face: &Shape, axis: Axis, angle: f64) -> Result<Shape>;
 

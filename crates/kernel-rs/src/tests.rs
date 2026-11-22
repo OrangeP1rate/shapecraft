@@ -47,7 +47,8 @@ fn an_l_shape_extrudes_and_moves() {
     assert!(close(K.mass_props(&mirrored).unwrap().volume, 3.0), "a mirror keeps the volume positive");
     let turned = K.rotate(&s, Axis::new(DVec3::ZERO, DVec3::Z), std::f64::consts::FRAC_PI_2).unwrap();
     assert!(K.bounds(&turned).unwrap().max.x.abs() < 1e-12);
-    assert!(K.scale(&s, DVec3::ZERO, DVec3::new(2.0, 1.0, 3.0)).is_err(), "scaling is not in it yet, and says so");
+    let scaled = K.scale(&s, DVec3::ZERO, DVec3::new(2.0, 1.0, 3.0)).unwrap();
+    assert!(close(K.mass_props(&scaled).unwrap().volume, 18.0), "flat faces scale unevenly and stay exact");
     let (len, mid) = K.measure(&s, SubShape::Edge(0)).unwrap();
     assert!(len > 0.0 && mid.is_finite());
 }
@@ -129,4 +130,89 @@ fn packing_keeps_the_face_order() {
         .collect();
     let before: Vec<_> = before.iter().map(|s| a.model.surface(*s).unwrap().clone()).collect();
     assert_eq!(before, after);
+}
+
+#[test]
+fn an_uneven_scale_makes_a_cylinder_elliptic_and_keeps_it_exact() {
+    let c = K.extrude_circle(DVec3::new(1.0, 0.0, 0.0), 2.0, DVec3::Z * 5.0).unwrap();
+    let s = K.scale(&c, DVec3::ZERO, DVec3::new(2.0, 1.0, 3.0)).unwrap();
+    let v = K.mass_props(&s).unwrap().volume;
+    assert!(close(v, std::f64::consts::PI * 4.0 * 5.0 * 6.0), "{v}");
+    let bb = K.bounds(&s).unwrap();
+    assert!(bb.min.distance(DVec3::new(-2.0, -2.0, 0.0)) < 1e-6 && bb.max.distance(DVec3::new(6.0, 2.0, 15.0)) < 1e-6, "{bb:?}");
+    let sphere = K.revolve_circle(
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::Y,
+        1.0,
+        shapecraft_kernel::Axis::new(DVec3::ZERO, DVec3::Z),
+        std::f64::consts::PI,
+    );
+    if let Ok(sphere) = sphere {
+        assert!(K.scale(&sphere, DVec3::ZERO, DVec3::new(1.0, 2.0, 1.0)).is_err(), "an ellipsoid has no exact form here");
+        assert!(close(
+            K.mass_props(&K.scale(&sphere, DVec3::ZERO, DVec3::splat(2.0)).unwrap()).unwrap().volume,
+            32.0 / 3.0 * std::f64::consts::PI
+        ));
+    }
+}
+
+#[test]
+fn a_loft_lines_its_sections_up_whatever_corner_they_start_at() {
+    use shapecraft_kernel::{PlanarCurve, PlaneFrame};
+    let sq = |z: f64, h: f64, rot: usize| {
+        let mut p = vec![DVec3::new(-h, -h, z), DVec3::new(h, -h, z), DVec3::new(h, h, z), DVec3::new(-h, h, z)];
+        p.rotate_left(rot);
+        let curves: Vec<PlanarCurve> = (0..4).map(|i| PlanarCurve::Line { a: p[i], b: p[(i + 1) % 4] }).collect();
+        K.planar_regions(PlaneFrame { origin: DVec3::new(0.0, 0.0, z), x: DVec3::X, y: DVec3::Y }, &curves).unwrap().remove(0)
+    };
+    for rot in 0..4 {
+        let l = K.loft(&[sq(0.0, 5.0, 0), sq(10.0, 2.5, rot)]).unwrap();
+        let frustum = 10.0 / 3.0 * (100.0 + 25.0 + 50.0);
+        assert!(close(K.mass_props(&l).unwrap().volume, frustum), "started at corner {rot}");
+    }
+}
+
+#[test]
+fn two_boxes_side_by_side_fuse_into_one_box_of_six_faces() {
+    let a = K.make_box(DVec3::ZERO, DVec3::new(10.0, 10.0, 5.0)).unwrap();
+    let b = K.make_box(DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 10.0, 5.0)).unwrap();
+    let both = K.boolean(shapecraft_kernel::BoolOp::Union, &a, &b).unwrap();
+    assert!(close(K.mass_props(&both).unwrap().volume, 1000.0));
+    assert_eq!(K.face_count(&both).unwrap(), 6, "no seam where they met");
+}
+
+#[test]
+fn regions_split_by_a_line_merge_back_into_one_circle() {
+    use shapecraft_kernel::{PlanarCurve, PlaneFrame};
+    let frame = PlaneFrame { origin: DVec3::ZERO, x: DVec3::X, y: DVec3::Y };
+    let curves = [
+        PlanarCurve::Line { a: DVec3::new(-12.0, 3.0, 0.0), b: DVec3::new(12.0, 3.0, 0.0) },
+        PlanarCurve::Circle { center: DVec3::ZERO, radius: 5.0 },
+    ];
+    let regions = K.planar_regions(frame, &curves).unwrap();
+    assert_eq!(regions.len(), 2);
+    let merged = K.merge_faces(&regions).unwrap();
+    assert_eq!(merged.len(), 1);
+    let solid = K.prism(&merged[0], DVec3::Z * 2.0).unwrap();
+    assert_eq!(K.face_count(&solid).unwrap(), 3, "a plain cylinder");
+    assert!(close(K.mass_props(&solid).unwrap().volume, std::f64::consts::PI * 50.0));
+}
+
+#[test]
+fn a_rounded_edge_is_a_convex_blend_and_a_hole_wall_is_none() {
+    let b = K.make_box(DVec3::ZERO, DVec3::new(10.0, 10.0, 10.0)).unwrap();
+    let holed = K
+        .boolean(shapecraft_kernel::BoolOp::Subtract, &b, &K.extrude_circle(DVec3::new(5.0, 5.0, -1.0), 2.0, DVec3::Z * 12.0).unwrap())
+        .unwrap();
+    let blends = |s: &shapecraft_kernel::Shape| -> Vec<(f64, bool)> {
+        (0..K.face_count(s).unwrap()).filter_map(|f| K.blend_of(s, f).unwrap()).collect()
+    };
+    assert!(blends(&holed).is_empty(), "a hole's wall meets its neighbours square");
+    let edge = (0..K.edge_count(&holed).unwrap())
+        .find(|&e| matches!(K.edge_curve(&holed, e).unwrap(), shapecraft_kernel::EdgeCurve::Line { a, b } if a.z.max(b.z) > 9.9 && (a - b).length() > 9.0))
+        .unwrap();
+    let rounded = K.fillet_edges(&holed, &[edge], 1.0).unwrap();
+    let found = blends(&rounded);
+    assert_eq!(found.len(), 1);
+    assert!(close(found[0].0, 1.0) && found[0].1, "{found:?}");
 }

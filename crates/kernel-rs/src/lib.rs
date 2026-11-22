@@ -15,6 +15,7 @@ pub mod poly;
 mod profile;
 pub mod regions;
 mod step;
+mod unify;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -27,7 +28,7 @@ use arris::ops::{Control, OpError};
 use arris::topo::{Body, Model, Orientation};
 use glam::DVec2;
 pub use poly::{Kind, Poly, PolyKernel, RsShape};
-use profile::{circle_profile, cycle_loop, plane_frame, polygon_profile, profile_of, profile_of_shape};
+use profile::{circle_profile, plane_frame, polygon_profile, profile_of, profile_of_shape};
 use shapecraft_kernel::{
     Aabb, Axis, BoolOp, DVec3, Distance, EdgeCurve, FacePlane, Kernel, KernelError, MassProps, Mesh, PartInfo, PlanarCurve, PlaneFrame,
     Result, Shape, ShapeData, SubShape, ViewFrame, ViewLine,
@@ -170,6 +171,81 @@ pub(crate) fn exact(shape: &Shape) -> Result<&ArShape> {
         Data::Exact(a) => Ok(a),
         Data::Mesh => Err(bad("a mesh body has no exact surfaces for this; import it as STEP to model on it")),
     }
+}
+
+/// The shape as exact bodies: itself, or a mesh body's polyhedra as flat-faced solids (or sheets) for writing and
+/// measuring. Each triangle becomes a face, so this is for files and queries, never for modelling on.
+pub(crate) fn exact_or_faceted(shape: &Shape) -> Result<std::borrow::Cow<'_, ArShape>> {
+    match data(shape)? {
+        Data::Exact(a) => Ok(std::borrow::Cow::Borrowed(a)),
+        Data::Mesh => {
+            let parts = &shape.downcast::<RsShape>()?.parts;
+            let mut m = Model::default();
+            let mut bodies = Vec::new();
+            for (kind, poly) in parts {
+                let made = RustKernel.from_brep(&poly.brep(*kind))?;
+                bodies.extend(bring(&mut m, exact(&made)?)?);
+            }
+            Ok(std::borrow::Cow::Owned(pack(&m, &bodies)?))
+        }
+    }
+}
+
+/// A solid body's separate pieces (a cut that went right through), each with its voids, as bodies of their own.
+fn lumps_apart(m: &mut Model, b: Body) -> Result<Vec<Body>> {
+    use arris::topo::builder::{Assembly, Builder, FaceSpec};
+    let lumps = arris::check::lumps(m, b).map_err(|e| KernelError::Operation { op: "solids", message: format!("{e:?}") })?;
+    if lumps.len() < 2 {
+        return Ok(vec![b]);
+    }
+    let fail = |e: &dyn std::fmt::Display| KernelError::Operation { op: "solids", message: e.to_string() };
+    let mut out = Vec::with_capacity(lumps.len());
+    for lump in lumps {
+        let mut shells = Vec::new();
+        for shell in std::iter::once(lump.outer).chain(lump.voids) {
+            shells.push(m.shell(shell.id).map_err(|e| fail(&e))?.faces().iter().copied().map(FaceSpec::Keep).collect());
+        }
+        let assembly = Assembly { shells, ..Assembly::default() };
+        let (builder, _) = Builder::assemble(m, m.precision().default_tolerance, assembly).map_err(|e| fail(&e))?;
+        out.push(builder.finish(m, arris::topo::entity::BodyKind::Solid).map_err(|e| fail(&e))?.body);
+    }
+    Ok(out)
+}
+
+/// Whether every face across the edges of `f` stands square to it (a prism of it would run along them).
+fn walls_square_to(s: &ArShape, f: AFace) -> bool {
+    let m = &s.model;
+    let Ok(face) = m.face(f.id) else { return false };
+    let faces = faces_of(s);
+    let bordering = edge_faces(s);
+    face.loops().iter().flat_map(|l| l.coedges()).all(|c| {
+        let Some(n) = normal_at_edge(m, f, c.edge()) else { return false };
+        bordering
+            .get(&c.edge())
+            .into_iter()
+            .flatten()
+            .filter_map(|&g| faces.get(g as usize))
+            .all(|&(_, other)| other.id == f.id || normal_at_edge(m, other, c.edge()).is_some_and(|w| w.dot(n).abs() < 1e-9))
+    })
+}
+
+/// The face's outward normal at the middle of one of its edges, from the edge's curve in the face's (u, v).
+fn normal_at_edge(m: &Model, f: AFace, edge: arris::topo::EdgeId) -> Option<DVec3> {
+    let face = m.face(f.id).ok()?;
+    let c = face.loops().iter().flat_map(|l| l.coedges()).find(|c| c.edge() == edge)?;
+    let (_, range) = m.edge(edge).ok()?.curve()?;
+    let uv = m.curve2(c.pcurve()).ok()?.point((range.lo() + range.hi()) / 2.0);
+    let n = m.surface(face.surface()).ok()?.normal(uv.x, uv.y)?;
+    Some(dv(&n.into_inner()) * sign(f.orientation))
+}
+
+/// A flat face (a sheet of one face) from a profile, keeping the profile for extruding it exactly.
+fn profile_face(profile: Profile) -> Result<Shape> {
+    let mut m = Model::default();
+    let (b, _) = arris::ops::planar_face(&mut m, &profile, C).map_err(op("face"))?;
+    let mut a = pack(&m, &[b])?;
+    a.profile = Some(profile);
+    Ok(wrap(a))
 }
 
 /// Dense copies of `bodies` in a model of their own.
@@ -426,7 +502,7 @@ impl Kernel for RustKernel {
         if ta.is_empty() {
             return Err(bad("nothing to combine"));
         }
-        let out = match bop {
+        let mut out = match bop {
             BoolOp::Subtract => {
                 if tb.is_empty() {
                     ta
@@ -451,6 +527,10 @@ impl Kernel for RustKernel {
                 out
             }
         };
+        // OCCT's booleans leave one face where two pieces of one flat side meet; so do these.
+        for b in &mut out {
+            *b = unify::planar_faces(&mut m, *b);
+        }
         Ok(wrap(pack(&m, &out)?))
     }
 
@@ -577,6 +657,14 @@ impl Kernel for RustKernel {
     fn extrude_face(&self, shape: &Shape, face: u32, distance: f64) -> Result<Shape> {
         let s = exact(shape)?;
         let (_, f) = face_at(s, face)?;
+        // Every wall square to the face: moving the face makes what a prism fused on would (and avoids fusing two
+        // solids along whole coplanar walls).
+        if walls_square_to(s, f) {
+            let moved = self.offset_faces(shape, &[face], distance);
+            if moved.as_ref().is_ok_and(|m| self.mass_props(m).is_ok_and(|p| p.volume > 0.0)) {
+                return moved;
+            }
+        }
         let p = profile_of(&s.model, f)?;
         let n = dv(&p.plane.z().into_inner());
         let tool = extrude_profile(&p, n * distance)?;
@@ -609,15 +697,15 @@ impl Kernel for RustKernel {
             return Err(bad("too many sketch curves"));
         }
         let plane = plane_frame(&frame)?;
+        let ellipses = regions::Ellipse::all(&frame, curves);
+        let exact = |c: &regions::Cycle| profile::region_loop(c, &ellipses);
         let mut out = Vec::new();
         for r in regions::regions(&regions::pieces(&frame, curves)) {
-            let profile = Profile { plane, outer: cycle_loop(&r.outer), holes: r.holes.iter().map(cycle_loop).collect() };
-            let mut m = Model::default();
+            let profile = Profile { plane, outer: exact(&r.outer), holes: r.holes.iter().map(exact).collect() };
             // A region Arris can't make into a face (a sliver, a self-touching loop) is left out, as OCCT does.
-            let Ok((b, _)) = arris::ops::planar_face(&mut m, &profile, C) else { continue };
-            let mut a = pack(&m, &[b])?;
-            a.profile = Some(profile);
-            out.push(wrap(a));
+            if let Ok(face) = profile_face(profile) {
+                out.push(face);
+            }
         }
         Ok(out)
     }
@@ -651,7 +739,8 @@ impl Kernel for RustKernel {
     }
 
     fn distance(&self, a: &Shape, sa: SubShape, b: &Shape, sb: SubShape) -> Result<Distance> {
-        let (xa, xb) = (exact(a)?, exact(b)?);
+        let (xa, xb) = (exact_or_faceted(a)?, exact_or_faceted(b)?);
+        let (xa, xb) = (xa.as_ref(), xb.as_ref());
         let mut m = Model::default();
         let operand = |m: &mut Model, s: &ArShape, sub: SubShape| -> Result<arris::ops::query::Operand> {
             let (body, map) =
@@ -682,6 +771,15 @@ impl Kernel for RustKernel {
             return PolyKernel.prism(face, dir);
         }
         extrude_profile(&profile_of_shape(face)?, dir)
+    }
+
+    fn merge_faces(&self, faces: &[Shape]) -> Result<Vec<Shape>> {
+        if faces.len() < 2 {
+            return Ok(faces.to_vec());
+        }
+        let profiles = faces.iter().map(profile_of_shape).collect::<Result<Vec<_>>>();
+        let Some(merged) = profiles.ok().and_then(|p| profile::merged(&p)) else { return Ok(faces.to_vec()) };
+        merged.into_iter().map(profile_face).collect()
     }
 
     /// A ruled loft from the profile to itself moved `dir` and shrunk by `|dir|·tan(angle)`: straight walls stay
@@ -783,12 +881,24 @@ impl Kernel for RustKernel {
         map_bodies(s, "mirror", |m, b| arris::ops::mirror(m, b, &plane, C))
     }
 
+    /// Arris moves bodies only rigidly: a scale goes through the neutral B-rep (exact for a uniform scale; see
+    /// [`brep::Brep::scale`](shapecraft_kernel::brep::Brep::scale) for an uneven one).
     fn scale(&self, shape: &Shape, center: DVec3, factors: DVec3) -> Result<Shape> {
-        match data(shape)? {
-            Data::Mesh => PolyKernel.scale(shape, center, factors),
-            Data::Exact(_) if (factors - DVec3::ONE).abs().max_element() < 1e-12 => Ok(shape.clone()),
-            Data::Exact(_) => Err(not_yet("scale")),
+        let s = match data(shape)? {
+            Data::Mesh => return PolyKernel.scale(shape, center, factors),
+            Data::Exact(_) if (factors - DVec3::ONE).abs().max_element() < 1e-12 => return Ok(shape.clone()),
+            Data::Exact(s) => s,
+        };
+        if s.face.is_some() {
+            return Err(not_yet("scale a single face"));
         }
+        let mut m = Model::default();
+        let mut bodies = Vec::new();
+        for mut b in self.to_brep(shape)? {
+            b.scale(center, factors).map_err(|e| KernelError::Operation { op: "scale", message: e.into() })?;
+            bodies.extend(bring(&mut m, exact(&self.from_brep(&b)?)?)?);
+        }
+        Ok(wrap(pack(&m, &bodies)?))
     }
 
     fn offset_faces(&self, shape: &Shape, faces: &[u32], distance: f64) -> Result<Shape> {
@@ -821,10 +931,14 @@ impl Kernel for RustKernel {
         if s.face.is_some() {
             return Ok(Vec::new());
         }
+        let mut m = (*s.model).clone();
         let mut out = Vec::new();
         for b in &s.bodies {
-            if arris::ops::measure::mass_properties(&s.model, *b, C).is_ok() {
-                out.push(wrap(pack(&s.model, &[*b])?));
+            if arris::ops::measure::mass_properties(&m, *b, C).is_err() {
+                continue;
+            }
+            for lump in lumps_apart(&mut m, *b)? {
+                out.push(wrap(pack(&m, &[lump])?));
             }
         }
         Ok(out)
@@ -858,8 +972,42 @@ impl Kernel for RustKernel {
         }
     }
 
-    fn blend_of(&self, _shape: &Shape, _face: u32) -> Result<Option<(f64, bool)>> {
-        Ok(None)
+    /// A cylinder or torus face smooth with two neighbours (a hole's wall or a boss isn't), as OCCT's kernel
+    /// decides it: convex when its outward normal points away from its centre of curvature.
+    fn blend_of(&self, shape: &Shape, face: u32) -> Result<Option<(f64, bool)>> {
+        let Data::Exact(s) = data(shape)? else { return Ok(None) };
+        let (_, f) = face_at(s, face)?;
+        let m = &s.model;
+        let entity = m.face(f.id).map_err(|e| bad(e.to_string()))?;
+        let (frame, radius, major) = match m.surface(entity.surface()) {
+            Ok(Surface::Cylinder { frame, radius }) => (*frame, *radius, None),
+            Ok(Surface::Torus { frame, major_radius, minor_radius }) => (*frame, *minor_radius, Some(*major_radius)),
+            _ => return Ok(None),
+        };
+        let faces = faces_of(s);
+        let bordering = edge_faces(s);
+        let mut smooth = 0;
+        let mut probe = None;
+        for c in entity.loops().iter().flat_map(|l| l.coedges()) {
+            let Some(n) = normal_at_edge(m, f, c.edge()) else { continue };
+            probe.get_or_insert((c.edge(), n));
+            for &g in bordering.get(&c.edge()).into_iter().flatten() {
+                let Some(&(_, other)) = faces.get(g as usize) else { continue };
+                if other.id != f.id && normal_at_edge(m, other, c.edge()).is_some_and(|n2| n.dot(n2) > 1.0 - 1e-6) {
+                    smooth += 1;
+                }
+            }
+        }
+        let Some((edge, n)) = probe.filter(|_| smooth >= 2) else { return Ok(None) };
+        let Some((curve, lo, hi)) = curve_of(m, AEdge::new(edge, Orientation::Forward)) else { return Ok(None) };
+        let p = dp(curve.point((lo + hi) / 2.0));
+        let (origin, axis) = (dp(frame.origin()), dv(&frame.z().into_inner()));
+        let on_axis = origin + axis * (p - origin).dot(axis);
+        let centre = match major {
+            None => on_axis,
+            Some(major) => origin + (p - on_axis).normalize_or_zero() * major,
+        };
+        Ok(Some((radius, n.dot(p - centre) > 0.0)))
     }
 
     fn edge_count(&self, shape: &Shape) -> Result<u32> {
@@ -963,7 +1111,7 @@ impl Kernel for RustKernel {
     }
 
     fn loft_ruled(&self, sections: &[Shape], ruled: bool) -> Result<Shape> {
-        let profiles = sections.iter().map(profile_of_shape).collect::<Result<Vec<_>>>()?;
+        let profiles = profile::aligned(&sections.iter().map(profile_of_shape).collect::<Result<Vec<_>>>()?);
         let kind = if ruled { arris::ops::LoftKind::Ruled } else { arris::ops::LoftKind::Smooth };
         solid_from("loft", |m| arris::ops::loft(m, &profiles, kind, false, C))
     }

@@ -8,7 +8,7 @@ use arris::math::Isometry;
 use arris::topo::{Body, Model};
 use shapecraft_kernel::{KernelError, PartInfo, Result, Shape};
 
-use crate::{C, bring, exact, pack, wrap};
+use crate::{C, bring, exact_or_faceted, pack, wrap};
 
 fn step_error(e: impl std::fmt::Display) -> KernelError {
     KernelError::Operation { op: "STEP files", message: e.to_string() }
@@ -45,9 +45,9 @@ pub fn write_parts(parts: &[(Shape, PartInfo)], path: &Path) -> Result<()> {
     let mut bodies: Vec<Body> = Vec::new();
     let mut tree = ProductTree::default();
     for (k, (shape, info)) in parts.iter().enumerate() {
-        let s = exact(shape)?;
+        let s = exact_or_faceted(shape)?;
         let first = bodies.len();
-        bodies.extend(bring(&mut m, s)?);
+        bodies.extend(bring(&mut m, &s)?);
         let solids: Vec<usize> = (first..bodies.len()).collect();
         // Faces coloured apart: the shape's face numbering is its bodies' faces in order, as they were copied.
         let faces: Vec<(usize, arris::topo::FaceId)> =

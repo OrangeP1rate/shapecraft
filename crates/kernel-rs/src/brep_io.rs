@@ -179,6 +179,11 @@ pub fn body(m: &Model, b: Body, solid: bool) -> Result<Brep> {
                     };
                     fins.push(Fin { edge: index, forward: c.orientation() == Orientation::Forward, pcurve: None });
                 }
+                // Arris walks a loop with the face on its left about the surface's normal; the neutral form, about
+                // the face's. A reversed face's loops are walked the other way round.
+                if f.orientation == Orientation::Reversed {
+                    fins = fins.into_iter().rev().map(|x| Fin { forward: !x.forward, ..x }).collect();
+                }
                 if !fins.is_empty() {
                     loops.push(fins);
                 }

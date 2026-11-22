@@ -109,6 +109,10 @@ tokens! {
     icon = 0xe0e0e0;
     icon_blue = 0x4f8cff;
     danger = 0xe5534b;
+    /// Done the same as the full kernel (Preferences ▸ Advanced's parity map).
+    good = 0x3fb950;
+    /// Works, with limits.
+    partial = 0xd8a23a;
 }
 
 impl Tokens {

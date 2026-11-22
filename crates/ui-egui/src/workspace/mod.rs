@@ -461,6 +461,8 @@ pub struct Workspace {
     pub toasts: Vec<Toast>,
     /// A failed step's Report… was pressed: the app opens the report sheet about it.
     pub report_request: Option<shapecraft_report::draft::Failure>,
+    /// Preferences ▸ Advanced's Report a Problem…: the app opens a blank problem report.
+    pub report_problem: bool,
     /// A tool's refusal shown in place of the hint banner for a while (Split Body, s12-004): text and until when.
     pub notice: Option<(String, f64)>,
     pub gpu: ViewportGpu,
@@ -824,6 +826,7 @@ impl Workspace {
             flyout: None,
             toasts: Vec::new(),
             report_request: None,
+            report_problem: false,
             notice: None,
             gpu: ViewportGpu::default(),
             viewport_rect: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),

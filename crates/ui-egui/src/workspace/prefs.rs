@@ -320,6 +320,10 @@ fn preferences(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
     if out.presets {
         ws.ui_action(UiAction::NavPresets);
     }
+    if out.report {
+        ws.prefs_open = false;
+        ws.report_problem = true;
+    }
     if out.done && ws.nav_presets.is_none() {
         ws.prefs_open = false;
     }
@@ -330,6 +334,8 @@ pub(crate) struct PrefsOut {
     pub done: bool,
     pub customize: bool,
     pub presets: bool,
+    /// Advanced's Report a Problem…: the window closes and the report sheet opens.
+    pub report: bool,
 }
 
 /// The Preferences window itself, with no Workspace behind it, so the projects screen can show it too.
@@ -339,7 +345,7 @@ pub(crate) fn window(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings,
         return window_in(ui, full, tab, s, shortcuts, picks);
     }
     // A short screen (a phone held sideways): the whole window scrolls, so every setting and Done stay in reach.
-    let mut out = PrefsOut { done: false, customize: false, presets: false };
+    let mut out = PrefsOut { done: false, customize: false, presets: false, report: false };
     ui.painter().rect_filled(full, 0.0, Color32::from_black_alpha(90));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(full));
     egui::ScrollArea::vertical().id_salt("prefs-scroll").auto_shrink([false, false]).show(&mut child, |ui| {
@@ -396,19 +402,19 @@ fn window_in(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings, shortcu
         p.text(c + vec2(0.0, 15.0), Align2::CENTER_CENTER, label, theme::body(9.5), col);
     }
     p.line_segment([pos2(r.left(), r.top() + 70.0), pos2(r.right(), r.top() + 70.0)], Stroke::new(1.0, Tokens::chip_border()));
-    let (mut customize, mut presets) = (false, false);
+    let (mut customize, mut presets, mut report) = (false, false, false);
     match *tab {
         1 => shapecraft_tab(ui, r, s),
         2 => tablet_tab(ui, r, s),
         3 => plugins_tab(ui, r),
         4 => sync_tab(ui, r, s, picks),
-        5 => advanced_tab(ui, r, s),
+        5 => report = advanced_tab(ui, r, s),
         _ => (customize, presets) = general_tab(ui, r, s, shortcuts),
     }
     let footer = Rect::from_min_max(pos2(r.left(), r.bottom() - 52.0), r.max);
     p.rect_filled(footer, egui::CornerRadius { nw: 0, ne: 0, sw: 11, se: 11 }, theme::c(0x232325));
     let done = button(ui, Rect::from_min_size(pos2(r.right() - 86.0, r.bottom() - 36.0), vec2(70.0, 20.0)), "Done", true, "pref-done");
-    PrefsOut { done: done || closed || close_on_escape(ui), customize, presets }
+    PrefsOut { done: done || closed || close_on_escape(ui), customize, presets, report }
 }
 
 /// A radio row: the name, and a line of detail under it. Disabled rows are shown but can't be picked.
@@ -510,8 +516,9 @@ fn shapecraft_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
 /// them: `SHAPECRAFT_TEST_KERNEL=rust cargo test -p shapecraft-engine`. Kept current when the kernel grows.
 pub(crate) const RUST_KERNEL_CHECKS: (u32, u32) = (169, 188);
 
-/// Settings for those who want to look under the hood: which geometry kernel models.
-fn advanced_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
+/// Settings for those who want to look under the hood: which geometry kernel models, and how close Arris is.
+/// True when its Report a Problem… button was clicked.
+fn advanced_tab(ui: &mut Ui, r: Rect, s: &mut Settings) -> bool {
     let p = ui.painter().clone();
     let col = r.left() + 170.0;
     let mut y = r.top() + 92.0;
@@ -527,8 +534,8 @@ fn advanced_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
     y += 24.0;
     row_label(&p, col, y, "Geometry Kernel:");
     let (pass, all) = RUST_KERNEL_CHECKS;
-    let rust_detail = format!("Pure Rust (Arris), in testing: {pass} of {all} modeling checks pass");
-    let choices = [("occt", "Open CASCADE", "The full kernel. Recommended"), ("rust", "Rust", rust_detail.as_str())];
+    let rust_detail = format!("Our own kernel, in testing: {pass} of {all} modeling checks pass");
+    let choices = [("occt", "Open CASCADE", "The full kernel. Recommended"), ("rust", "Arris (Rust)", rust_detail.as_str())];
     for (key, name, detail) in choices {
         if radio(ui, pos2(col, y), &format!("pref-kernel-{key}"), s.kernel == key, true, name, detail) {
             s.kernel = key.to_string();
@@ -541,54 +548,138 @@ fn advanced_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
             pos2(col, y - 4.0),
             Align2::LEFT_CENTER,
             text,
-            theme::body(10.0),
+            theme::body(11.0),
             if strong { Tokens::text_strong() } else { Tokens::text_dim() },
         );
-        y += 16.0;
+        y += 17.0;
     };
     if s.kernel != running {
         note("Restart ShapeCraft to apply.", true);
     }
     if s.kernel == "rust" || running == "rust" {
-        note("With Rust, projects live in their own folder (\"ShapeCraft (Rust kernel)\"),", false);
-        note("so your work stays on Open CASCADE while you try it. Anything it", false);
-        note("can't do yet says so instead of guessing.", false);
+        note("Arris keeps its projects in their own folder, so your", false);
+        note("Open CASCADE work stays put while you try it.", false);
     }
-    y += 10.0;
+    y += 8.0;
     p.line_segment([pos2(r.left() + 20.0, y), pos2(r.right() - 20.0, y)], Stroke::new(1.0, Tokens::chip_border()));
-    rust_kernel_parity(&p, r, y + 22.0);
+    arris_parity(ui, r, y + 20.0)
 }
 
-/// What the Rust kernel does next to Open CASCADE, from its own table ([`shapecraft_kernel::Kernel::support`]): the
-/// same, with limits, or not yet (those tools are greyed out while it runs).
-fn rust_kernel_parity(p: &egui::Painter, r: Rect, mut y: f32) {
+/// How close Arris is to Open CASCADE, from its own table ([`shapecraft_kernel::Kernel::support`]): a score and a
+/// bar, every feature as a chip (✓ the same, ~ with limits, ✕ not yet; hover for why), and a way to help.
+/// True when Report a Problem… was clicked.
+fn arris_parity(ui: &mut Ui, r: Rect, mut y: f32) -> bool {
     use shapecraft_kernel::{Feature, Support};
-    let Ok(rust) = shapecraft_kernels::make("rust") else { return };
-    let (left, width) = (r.left() + 32.0, r.width() - 64.0);
-    let mut para = |text: String, font: egui::FontId, color: Color32, gap: f32| {
-        let galley = p.layout(text, font, color, width);
-        let h = galley.size().y;
-        p.galley(pos2(left, y), galley, color);
-        y += h + gap;
-    };
+    let Ok(rust) = shapecraft_kernels::make("rust") else { return false };
+    let p = ui.painter().clone();
+    let (left, right) = (r.left() + 24.0, r.right() - 24.0);
     let support: Vec<(Feature, Support)> = Feature::ALL.into_iter().map(|f| (f, rust.support(f))).collect();
-    let names = |want: fn(&Support) -> bool| {
-        // A name never breaks across lines (no-break spaces inside it); the list breaks between names.
-        support.iter().filter(|(_, s)| want(s)).map(|(f, _)| f.label().replace(' ', "\u{a0}")).collect::<Vec<_>>().join("  ·  ")
-    };
-    para("What the Rust kernel does".into(), theme::strong(12.0), Tokens::text_strong(), 8.0);
-    para("The same as Open CASCADE".into(), theme::strong(10.5), Tokens::text_strong(), 3.0);
-    para(names(|s| *s == Support::Full), theme::body(10.5), Tokens::text_dim(), 10.0);
-    para("Works, with limits".into(), theme::strong(10.5), Tokens::text_strong(), 3.0);
-    let limited: Vec<String> = support
-        .iter()
-        .filter_map(|(f, s)| if let Support::Limited(why) = s { Some(format!("{}: {why}", f.label())) } else { None })
-        .collect();
-    for (i, line) in limited.iter().enumerate() {
-        para(line.clone(), theme::body(10.5), Tokens::text_dim(), if i + 1 == limited.len() { 10.0 } else { 2.0 });
+    let full = support.iter().filter(|(_, s)| *s == Support::Full).count();
+    let limited = support.iter().filter(|(_, s)| matches!(s, Support::Limited(_))).count();
+    let missing = support.len() - full - limited;
+    let total = support.len().max(1) as f32;
+    // A feature with limits counts half.
+    let score = (full as f32 + 0.5 * limited as f32) / total;
+
+    // Heading and score.
+    p.text(pos2(left, y), Align2::LEFT_TOP, "Arris parity", theme::strong(15.0), Tokens::text_strong());
+    p.text(pos2(left, y + 21.0), Align2::LEFT_TOP, "How close our Rust kernel is to Open CASCADE", theme::body(11.5), Tokens::text_dim());
+    p.text(pos2(right, y - 4.0), Align2::RIGHT_TOP, format!("{:.0}%", score * 100.0), theme::strong(28.0), Tokens::text_strong());
+    y += 46.0;
+
+    // The bar: green for the same, amber (at half) for with limits.
+    let bar = Rect::from_min_max(pos2(left, y), pos2(right, y + 8.0));
+    p.rect_filled(bar, radius(4), Tokens::field());
+    let w = bar.width();
+    let green_end = bar.left() + w * full as f32 / total;
+    let amber_end = bar.left() + w * score;
+    let r4 = 4;
+    if amber_end > green_end {
+        let cr = egui::CornerRadius { nw: 0, sw: 0, ne: r4, se: r4 };
+        p.rect_filled(Rect::from_min_max(pos2(green_end - 1.0, bar.top()), pos2(amber_end, bar.bottom())), cr, Tokens::partial());
     }
-    para("Needs Open CASCADE (greyed out while Rust runs)".into(), theme::strong(10.5), Tokens::text_strong(), 3.0);
-    para(names(|s| *s == Support::Missing), theme::body(10.5), Tokens::text_dim(), 0.0);
+    let cr = egui::CornerRadius { nw: r4, sw: r4, ne: 0, se: 0 };
+    p.rect_filled(Rect::from_min_max(bar.min, pos2(green_end, bar.bottom())), cr, Tokens::good());
+    y += 22.0;
+
+    // Legend, and the engine's checks on the right.
+    let mut x = left;
+    for (n, what, color) in
+        [(full, "match", Tokens::good()), (limited, "with limits", Tokens::partial()), (missing, "not yet", Tokens::danger())]
+    {
+        p.circle_filled(pos2(x + 4.0, y), 4.0, color);
+        let g = p.layout_no_wrap(format!("{n} {what}"), theme::body(11.5), Tokens::text_dim());
+        let gw = g.size().x;
+        p.galley(pos2(x + 13.0, y - g.size().y / 2.0), g, Tokens::text_dim());
+        x += 13.0 + gw + 16.0;
+    }
+    let (pass, all) = RUST_KERNEL_CHECKS;
+    p.text(pos2(right, y), Align2::RIGHT_CENTER, format!("{pass} of {all} modeling checks pass"), theme::body(11.5), Tokens::text_dim());
+    y += 22.0;
+
+    // Every feature as a chip, in the order the app goes through them.
+    let (h, gap) = (26.0, 6.0);
+    let mut x = left;
+    for (i, (f, s)) in support.iter().enumerate() {
+        let (color, text, tip) = match s {
+            Support::Full => (Tokens::good(), Tokens::text_strong(), "The same as Open CASCADE".to_string()),
+            Support::Limited(why) => (Tokens::partial(), Tokens::text_strong(), format!("Works, with limits: {why}")),
+            Support::Missing => (Tokens::danger(), Tokens::text_dim(), "Not yet: needs Open CASCADE for now".to_string()),
+        };
+        let g = p.layout_no_wrap(f.label().to_string(), theme::body(12.0), text);
+        let cw = 10.0 + 12.0 + 7.0 + g.size().x + 11.0;
+        if x + cw > right && x > left {
+            x = left;
+            y += h + gap;
+        }
+        let chip = Rect::from_min_size(pos2(x, y), vec2(cw, h));
+        let resp = ui.interact(chip, ui.scope_id().with(("arris-chip", i)), Sense::hover());
+        let fill = if resp.hovered() { Tokens::chip_hover() } else { Tokens::chip() };
+        p.rect(chip, radius(6), fill, Stroke::new(1.0, color.gamma_multiply(0.35)), egui::StrokeKind::Inside);
+        status_mark(&p, pos2(chip.left() + 16.0, chip.center().y), s, color);
+        p.galley(pos2(chip.left() + 29.0, chip.center().y - g.size().y / 2.0), g, text);
+        resp.on_hover_text(tip);
+        x += cw + gap;
+    }
+    y += h + 18.0;
+
+    // How to help.
+    let body = "Arris is written from scratch, in the open. Switch to it above and model the way you always do. \
+                When something is refused, comes out wrong or feels slow, send it in: every report becomes a test, \
+                and every test moves this bar.";
+    let g = p.layout(body.to_string(), theme::body(11.5), Tokens::text_dim(), right - left - 32.0);
+    let card = Rect::from_min_max(pos2(left, y), pos2(right, y + 16.0 + 20.0 + g.size().y + 12.0 + 24.0 + 16.0));
+    p.rect(
+        card,
+        radius(8),
+        Tokens::accent().gamma_multiply(0.10),
+        Stroke::new(1.0, Tokens::accent().gamma_multiply(0.45)),
+        egui::StrokeKind::Inside,
+    );
+    p.text(pos2(left + 16.0, y + 16.0), Align2::LEFT_TOP, "Help Arris get to 100%", theme::strong(13.0), Tokens::text_strong());
+    let gh = g.size().y;
+    p.galley(pos2(left + 16.0, y + 36.0), g, Tokens::text_dim());
+    let b = Rect::from_min_size(pos2(left + 16.0, y + 36.0 + gh + 12.0), vec2(150.0, 24.0));
+    button(ui, b, "Report a Problem…", true, "arris-report")
+}
+
+/// ✓, ~ or ✕ centred on `c`, in `color`.
+fn status_mark(p: &egui::Painter, c: Pos2, s: &shapecraft_kernel::Support, color: Color32) {
+    use shapecraft_kernel::Support;
+    p.circle_filled(c, 7.0, color.gamma_multiply(0.18));
+    let st = Stroke::new(1.6, color);
+    match s {
+        Support::Full => {
+            p.line(vec![c + vec2(-3.2, 0.2), c + vec2(-0.9, 2.5), c + vec2(3.4, -2.4)], st);
+        }
+        Support::Limited(_) => {
+            p.line_segment([c + vec2(-3.0, 0.0), c + vec2(3.0, 0.0)], st);
+        }
+        Support::Missing => {
+            p.line_segment([c + vec2(-2.6, -2.6), c + vec2(2.6, 2.6)], st);
+            p.line_segment([c + vec2(-2.6, 2.6), c + vec2(2.6, -2.6)], st);
+        }
+    }
 }
 
 /// Tablet access is early: said plainly so nobody takes it for finished.

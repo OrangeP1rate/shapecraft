@@ -1901,12 +1901,14 @@ impl ShapeCraftApp {
 
         let first_run_open = self.first_run_open();
         let mut report_failure = None;
+        let mut report_problem = false;
         match self.ws.as_deref_mut() {
             Some(ws) => {
                 // The first-run windows sit over the workspace: its keys wait until they're answered.
                 ws.keys_blocked = first_run_open || self.show_log || self.report.takes_keys() || crate::plugins::takes_keys();
                 ws.ui(ui, render_state);
                 report_failure = ws.report_request.take();
+                report_problem = std::mem::take(&mut ws.report_problem);
                 // Tutorials run on the default tool types and leave the remembered ones alone.
                 if ws.tutorial.is_none() {
                     ws.keep_variants();
@@ -1995,6 +1997,8 @@ impl ShapeCraftApp {
         }
         if let Some(f) = report_failure {
             self.open_report(&ctx, crate::report::Seed::Failure(f));
+        } else if report_problem {
+            self.open_report(&ctx, crate::report::Seed::Problem);
         }
         // Folded with a project open: the front screen is too small to model on.
         if crate::tablet::waits_to_unfold() && self.ws.is_some() && unfold_prompt(ui, None, None) {
@@ -2172,6 +2176,7 @@ impl ShapeCraftApp {
         let full = ui.max_rect();
         let mut s = self.settings.clone();
         let mut nav = self.home_nav;
+        let mut report = false;
         egui::Area::new(ui.scope_id().with("home-prefs")).order(egui::Order::Foreground).fixed_pos(full.min).show(ui.ctx(), |ui| {
             let _ = ui.allocate_rect(full, egui::Sense::click());
             let out = crate::workspace::prefs::window(ui, full, &mut tab, &mut s, false, &mut self.home_prefs_picks);
@@ -2180,8 +2185,12 @@ impl ShapeCraftApp {
             }
             let open = nav.is_some();
             crate::workspace::prefs::presets_window(ui, full, &mut nav, &mut s, false);
-            self.home_prefs = if out.done && !open { None } else { Some(tab) };
+            report = out.report;
+            self.home_prefs = if (out.done && !open) || report { None } else { Some(tab) };
         });
+        if report {
+            self.open_report(ui.ctx(), crate::report::Seed::Problem);
+        }
         self.home_nav = nav;
         if s != self.settings {
             self.settings = s;

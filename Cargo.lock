@@ -4388,7 +4388,7 @@ dependencies = [
  "glam 0.30.10",
  "image",
  "serde_json",
- "shapecraft-kernel-occt",
+ "shapecraft-kernels",
  "shapecraft-ui",
 ]
 
@@ -4416,6 +4416,7 @@ dependencies = [
  "shapecraft-engine",
  "shapecraft-kernel",
  "shapecraft-kernel-occt",
+ "shapecraft-kernels",
  "shapecraft-plugin-host",
  "shapecraft-render",
  "shapecraft-report",

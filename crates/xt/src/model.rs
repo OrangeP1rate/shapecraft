@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use shapecraft_kernel::brep::{BodyKind, Brep, Curve, Edge, Face, Fin, Nurbs, NurbsSurface, Surface};
-use shapecraft_kernel::{DMat3, DVec2, DVec3};
+use shapecraft_kernel::{DMat3, DVec2, DVec3, nurbs};
 
 use crate::blend::{self, Support};
 use crate::read::{Node, Val, XtFile};
@@ -919,7 +919,7 @@ fn checked_knots(n: &Nurbs<DVec3>) -> Option<Vec<f64>> {
     if n.mults.iter().any(|&m| m == 0 || m as usize > p + 1) || n.knots.iter().any(|k| !k.is_finite()) {
         return None;
     }
-    let full = expanded(&n.knots, &n.mults);
+    let full = nurbs::expand(&n.knots, &n.mults);
     let clamped = n.mults.first() == Some(&(n.degree + 1)) && n.mults.last() == Some(&(n.degree + 1));
     let sorted = full.windows(2).all(|w| w[0] <= w[1]);
     (full.len() == n.poles.len() + p + 1 && clamped && sorted && full[full.len() - 1] > full[0]).then_some(full)
@@ -928,7 +928,7 @@ fn checked_knots(n: &Nurbs<DVec3>) -> Option<Vec<f64>> {
 /// A clamped B-spline curve's value at the knot parameter `u`.
 fn nurbs_point(n: &Nurbs<DVec3>, u: f64) -> Option<DVec3> {
     let full = checked_knots(n)?;
-    let basis = blend::basis(&full, n.degree as usize, u);
+    let basis = nurbs::basis_all(&full, n.degree as usize, u);
     let weight = |i: usize| n.weights.as_ref().and_then(|w| w.get(i).copied()).unwrap_or(1.0);
     let (mut p, mut w) = (DVec3::ZERO, 0.0);
     for (i, b) in basis.iter().enumerate() {
@@ -937,10 +937,6 @@ fn nurbs_point(n: &Nurbs<DVec3>, u: f64) -> Option<DVec3> {
         w += k;
     }
     (w != 0.0).then(|| p / w)
-}
-
-fn expanded(knots: &[f64], mults: &[u32]) -> Vec<f64> {
-    knots.iter().zip(mults).flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize)).collect()
 }
 
 /// A B-spline's knot parameter at `t` (0..1 of its span).
@@ -1022,7 +1018,7 @@ fn nurbs_split(n: &Nurbs<DVec3>, u: f64) -> Option<(Nurbs<DVec3>, Nurbs<DVec3>)>
         return None;
     }
     for _ in have..p {
-        let k = span(&full, p, u)?;
+        let k = nurbs::span(&full, p, u)?;
         let mut q = Vec::with_capacity(hp.len() + 1);
         for i in 0..=hp.len() {
             if i + p <= k {
@@ -1074,23 +1070,6 @@ fn nurbs_split(n: &Nurbs<DVec3>, u: f64) -> Option<(Nurbs<DVec3>, Nurbs<DVec3>)>
     let mut right_knots = vec![u];
     right_knots.extend_from_slice(&full[s..]);
     Some((piece(&hp[..s], left_knots)?, piece(&hp[s - 1..], right_knots)?))
-}
-
-/// The knot span index holding `u` (the last span takes the end), or `None` for a vector too short.
-fn span(full: &[f64], p: usize, u: f64) -> Option<usize> {
-    let n = full.len().checked_sub(1)?;
-    let last = n.checked_sub(p + 1)?;
-    if last < p {
-        return None;
-    }
-    if u >= full[n] {
-        return Some(last);
-    }
-    let mut k = p;
-    while k < last && u >= full[k + 1] {
-        k += 1;
-    }
-    Some(k)
 }
 
 /// Cuts a curve at parameter `t` (as [`curve_point`] takes it) into the piece before and after it. `pa` and `pb`
@@ -1364,11 +1343,10 @@ fn loop_closes_on(edges: &[Edge], fins: &[Fin]) -> bool {
 
 /// A clamped B-spline surface value at `(u, v)`, for comparing two surfaces' geometry.
 fn bspline_at(s: &NurbsSurface, u: f64, v: f64) -> DVec3 {
-    let expand = |k: &[f64], m: &[u32]| -> Vec<f64> { k.iter().zip(m).flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize)).collect() };
-    let knots = expand(&s.u_knots, &s.u_mults);
-    let vknots = expand(&s.v_knots, &s.v_mults);
-    let nu = blend::basis(&knots, s.u_degree as usize, u);
-    let nv = blend::basis(&vknots, s.v_degree as usize, v);
+    let knots = nurbs::expand(&s.u_knots, &s.u_mults);
+    let vknots = nurbs::expand(&s.v_knots, &s.v_mults);
+    let nu = nurbs::basis_all(&knots, s.u_degree as usize, u);
+    let nv = nurbs::basis_all(&vknots, s.v_degree as usize, v);
     let weight = |i: usize, j: usize| s.weights.as_ref().map_or(1.0, |w| w[i * s.nv + j]);
     let (mut p, mut w) = (DVec3::ZERO, 0.0);
     for (i, bu) in nu.iter().enumerate() {

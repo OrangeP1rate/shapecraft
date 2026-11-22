@@ -4,8 +4,8 @@
 //! BLENDED_EDGE only as its two supports, the spine and the radius. Both are rebuilt here from closest points on
 //! the analytic surfaces, so edges and blend faces meet within a micron.
 
-use shapecraft_kernel::DVec3;
 use shapecraft_kernel::brep::{NurbsSurface, Surface};
+use shapecraft_kernel::{DVec3, nurbs};
 
 /// Closest point on a surface and the unit natural normal there; None for surfaces without a closed form.
 pub fn project(surfaces: &[Surface], s: usize, p: DVec3) -> Option<(DVec3, DVec3)> {
@@ -56,65 +56,6 @@ pub fn project(surfaces: &[Surface], s: usize, p: DVec3) -> Option<(DVec3, DVec3
     }
 }
 
-/// The span of a clamped or open full knot vector holding `t` (Piegl–Tiller A2.1), for degree `p`, `n` poles.
-fn span(full: &[f64], p: usize, n: usize, t: f64) -> usize {
-    if t >= full[n] {
-        return n - 1;
-    }
-    if t <= full[p] {
-        return p;
-    }
-    // (Outside the range the end spans are used, which extends the surface along their polynomials.)
-    let (mut lo, mut hi) = (p, n);
-    let mut mid = (lo + hi) / 2;
-    while t < full[mid] || t >= full[mid + 1] {
-        if t < full[mid] {
-            hi = mid
-        } else {
-            lo = mid
-        }
-        mid = (lo + hi) / 2;
-    }
-    mid
-}
-
-/// The p + 1 basis functions that are non-zero on `span` at `t`, and their first derivatives (A2.3 for k = 1).
-fn basis_ders(full: &[f64], p: usize, span: usize, t: f64) -> (Vec<f64>, Vec<f64>) {
-    let mut ndu = vec![vec![0.0; p + 1]; p + 1];
-    let (mut left, mut right) = (vec![0.0; p + 1], vec![0.0; p + 1]);
-    ndu[0][0] = 1.0;
-    for j in 1..=p {
-        left[j] = t - full[span + 1 - j];
-        right[j] = full[span + j] - t;
-        let mut saved = 0.0;
-        for r in 0..j {
-            ndu[j][r] = right[r + 1] + left[j - r];
-            let tmp = if ndu[j][r] != 0.0 { ndu[r][j - 1] / ndu[j][r] } else { 0.0 };
-            ndu[r][j] = saved + right[r + 1] * tmp;
-            saved = left[j - r] * tmp;
-        }
-        ndu[j][j] = saved;
-    }
-    let n: Vec<f64> = (0..=p).map(|j| ndu[j][p]).collect();
-    let d: Vec<f64> = if p == 0 {
-        vec![0.0]
-    } else {
-        (0..=p)
-            .map(|r| {
-                // N'_{r} = p (N_{r,p-1} / (u_{i+p} - u_i) - N_{r+1,p-1} / (u_{i+p+1} - u_{i+1})), from the table.
-                let a = if r >= 1 && ndu[p][r - 1] != 0.0 { ndu[r - 1][p - 1] / ndu[p][r - 1] } else { 0.0 };
-                let b = if r < p && ndu[p][r] != 0.0 { ndu[r][p - 1] / ndu[p][r] } else { 0.0 };
-                p as f64 * (a - b)
-            })
-            .collect()
-    };
-    (n, d)
-}
-
-fn full_knots(k: &[f64], m: &[u32]) -> Vec<f64> {
-    k.iter().zip(m).flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize)).collect()
-}
-
 /// A spline surface's point and its u and v derivatives. Past its edges the surface carries on straight, as the
 /// modeller that wrote the file extends it (a blend's spine stored beyond a support's edge is a straight line there):
 /// from the nearest point of the edge along the first derivatives, with the twist so both directions stay consistent.
@@ -152,9 +93,9 @@ fn closes(s: &NurbsSurface) -> (bool, bool) {
 /// [`nurbs_d1`] within the surface's own range.
 fn nurbs_inside(s: &NurbsSurface, fu: &[f64], fv: &[f64], u: f64, v: f64) -> Option<(DVec3, DVec3, DVec3)> {
     let (pu, pv) = (s.u_degree as usize, s.v_degree as usize);
-    let (su, sv) = (span(fu, pu, s.nu, u), span(fv, pv, s.nv, v));
-    let (nu, du) = basis_ders(fu, pu, su, u);
-    let (nv, dv) = basis_ders(fv, pv, sv, v);
+    let (su, sv) = (nurbs::span(fu, pu, u).unwrap_or(pu), nurbs::span(fv, pv, v).unwrap_or(pv));
+    let (nu, du) = nurbs::basis_ders(fu, pu, su, u);
+    let (nv, dv) = nurbs::basis_ders(fv, pv, sv, v);
     // Keep accumulation local to the active poles; extrapolated basis functions can
     // be very large, so multiplying them by a global origin loses precision.
     let anchor = *s.poles.get((su - pu) * s.nv + (sv - pv))?;
@@ -184,7 +125,7 @@ fn nurbs_inside(s: &NurbsSurface, fu: &[f64], fv: &[f64], u: f64, v: f64) -> Opt
 /// Closest point on a spline surface (best of a grid of samples, then Gauss–Newton steps) and the unit natural
 /// normal (Su × Sv) there.
 fn project_nurbs(s: &NurbsSurface, p: DVec3) -> Option<(DVec3, DVec3)> {
-    let (fu, fv) = (full_knots(&s.u_knots, &s.u_mults), full_knots(&s.v_knots, &s.v_mults));
+    let (fu, fv) = (nurbs::expand(&s.u_knots, &s.u_mults), nurbs::expand(&s.v_knots, &s.v_mults));
     let (pu, pv) = (s.u_degree as usize, s.v_degree as usize);
     if s.nu <= pu || s.nv <= pv || fu.len() != s.nu + pu + 1 || fv.len() != s.nv + pv + 1 || s.poles.len() != s.nu * s.nv {
         return None;
@@ -227,7 +168,7 @@ fn project_nurbs(s: &NurbsSurface, p: DVec3) -> Option<(DVec3, DVec3)> {
         // Differentiate the first derivatives within the current knot spans. The distance
         // Hessian includes curvature, which matters when the point is far off the surface.
         let difference = |full: &[f64], degree: usize, count: usize, t: f64| {
-            let i = span(full, degree, count, t);
+            let i = nurbs::span(full, degree, t).unwrap_or(degree);
             let h = (full[i + 1] - full[i]).abs() * 1e-5;
             let h = h.max((full[count] - full[degree]).abs() * 1e-10);
             if t - h < full[i] {
@@ -578,36 +519,12 @@ fn averaged_knots(params: &[f64], p: usize) -> Option<(Vec<f64>, Vec<u32>, Vec<f
     Some((knots, mults, full))
 }
 
-/// The B-spline basis functions of degree `p` at `t` (all of them, by the triangular scheme).
-pub(crate) fn basis(full: &[f64], p: usize, t: f64) -> Vec<f64> {
-    let count = full.len() - p - 1;
-    // Degree 0: the span holding t (the last span takes t = 1).
-    let mut n: Vec<f64> = (0..full.len() - 1)
-        .map(|i| {
-            let inside = full[i] <= t && t < full[i + 1];
-            let last = t >= full[full.len() - 1] && full[i] < full[i + 1] && full[i + 1] >= full[full.len() - 1];
-            if inside || last { 1.0 } else { 0.0 }
-        })
-        .collect();
-    for d in 1..=p {
-        for i in 0..full.len() - 1 - d {
-            let a = full[i + d] - full[i];
-            let b = full[i + d + 1] - full[i + 1];
-            let l = if a > 0.0 { (t - full[i]) / a * n[i] } else { 0.0 };
-            let r = if b > 0.0 { (full[i + d + 1] - t) / b * n[i + 1] } else { 0.0 };
-            n[i] = l + r;
-        }
-    }
-    n.truncate(count);
-    n
-}
-
 /// Global interpolation: poles of the degree-`p` spline on `full` that passes through `pts` at `params`.
 // Row operations read best with explicit indices.
 #[allow(clippy::needless_range_loop)]
 fn interpolate(params: &[f64], full: &[f64], p: usize, pts: &[[f64; 4]]) -> Option<Vec<[f64; 4]>> {
     let n = pts.len();
-    let mut a: Vec<Vec<f64>> = params.iter().map(|&t| basis(full, p, t)).collect();
+    let mut a: Vec<Vec<f64>> = params.iter().map(|&t| nurbs::basis_all(full, p, t)).collect();
     if a.iter().any(|r| r.len() != n) {
         return None;
     }
@@ -648,9 +565,8 @@ mod tests {
     use super::*;
 
     fn eval(s: &NurbsSurface, u: f64, v: f64) -> DVec3 {
-        let full = |k: &[f64], m: &[u32]| k.iter().zip(m).flat_map(|(k, m)| std::iter::repeat_n(*k, *m as usize)).collect::<Vec<_>>();
-        let nu = basis(&full(&s.u_knots, &s.u_mults), s.u_degree as usize, u);
-        let nv = basis(&full(&s.v_knots, &s.v_mults), s.v_degree as usize, v);
+        let nu = nurbs::basis_all(&nurbs::expand(&s.u_knots, &s.u_mults), s.u_degree as usize, u);
+        let nv = nurbs::basis_all(&nurbs::expand(&s.v_knots, &s.v_mults), s.v_degree as usize, v);
         let w = s.weights.as_ref().map_or(vec![1.0; s.poles.len()], Clone::clone);
         let (mut p, mut ws) = (DVec3::ZERO, 0.0);
         for i in 0..s.nu {
@@ -772,7 +688,7 @@ mod tests {
     #[test]
     fn spline_derivatives_match_differences() {
         let s = parabola_sheet();
-        let (fu, fv) = (full_knots(&s.u_knots, &s.u_mults), full_knots(&s.v_knots, &s.v_mults));
+        let (fu, fv) = (nurbs::expand(&s.u_knots, &s.u_mults), nurbs::expand(&s.v_knots, &s.v_mults));
         let (p, su, sv) = nurbs_d1(&s, &fu, &fv, 0.3, 0.6).expect("eval");
         let h = 1e-6;
         let (pu, _, _) = nurbs_d1(&s, &fu, &fv, 0.3 + h, 0.6).expect("eval");
@@ -806,7 +722,7 @@ mod tests {
             u_periodic: false,
             v_periodic: false,
         };
-        let (fu, fv) = (full_knots(&s.u_knots, &s.u_mults), full_knots(&s.v_knots, &s.v_mults));
+        let (fu, fv) = (nurbs::expand(&s.u_knots, &s.u_mults), nurbs::expand(&s.v_knots, &s.v_mults));
         let (q, su, sv) = nurbs_d1(&s, &fu, &fv, 60.3, 0.4).expect("evaluation");
         assert!(q.distance(origin + DVec3::new(4.0 * 60.3 / 512.0, 0.4, 0.0)) < 1e-8, "{q:?}");
         assert!(su.distance(DVec3::new(4.0 / 512.0, 0.0, 0.0)) < 1e-9, "{su:?}");

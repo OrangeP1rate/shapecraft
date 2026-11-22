@@ -105,26 +105,10 @@ impl Fit {
     }
 }
 
-/// The knot span holding `u` and the `p + 1` basis functions that don't vanish there (Piegl & Tiller A2.1/A2.2).
+/// The knot span holding `u` and the `p + 1` basis functions that don't vanish there (Piegl & Tiller A2.1/A2.2); a fit's
+/// knots always have room for its degree.
 fn basis(knots: &[f64], p: usize, u: f64) -> (usize, Vec<f64>) {
-    let n = knots.len() - p - 2;
-    let span = if u >= knots[n + 1] { n } else { (p..=n).rev().find(|&i| knots[i] <= u).unwrap_or(p) };
-    let mut b = vec![0.0; p + 1];
-    let (mut left, mut right) = (vec![0.0; p + 1], vec![0.0; p + 1]);
-    b[0] = 1.0;
-    for j in 1..=p {
-        left[j] = u - knots[span + 1 - j];
-        right[j] = knots[span + j] - u;
-        let mut saved = 0.0;
-        for r in 0..j {
-            let gap = right[r + 1] + left[j - r];
-            let t = if gap != 0.0 { b[r] / gap } else { 0.0 };
-            b[r] = saved + right[r + 1] * t;
-            saved = left[j - r] * t;
-        }
-        b[j] = saved;
-    }
-    (span, b)
+    crate::nurbs::basis(knots, p, u).unwrap_or_else(|| (p, vec![0.0; p + 1]))
 }
 
 /// Gaussian elimination with partial pivoting.

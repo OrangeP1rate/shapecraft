@@ -15,6 +15,7 @@ pub use glam::{DMat3, DVec2, DVec3};
 pub mod brep;
 pub mod helix;
 mod mesh;
+pub mod nurbs;
 pub mod spline;
 pub use mesh::Mesh;
 

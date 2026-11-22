@@ -1128,15 +1128,19 @@ pub(super) fn edge_entity(plane: &SketchPlane, curve: EdgeCurve) -> Option<Sketc
     }
 }
 
+/// A kernel shape's edges (an offset's result) as curves of a sketch on `plane`.
+fn shape_entities(s: &Session, plane: &SketchPlane, shape: &shapecraft_kernel::Shape) -> Result<Vec<SketchEntity>> {
+    let n = s.kernel.edge_count(shape)?;
+    Ok((0..n.min(10_000)).filter_map(|i| s.kernel.edge_curve(shape, i).ok().and_then(|c| edge_entity(plane, c))).collect())
+}
+
 /// A flat body face's outline offset as a whole (outwards when positive), flattened onto the face's sketch plane.
 pub fn face_offset(s: &Session, body: ItemId, face: u32, distance: f64) -> Result<(SketchPlane, Option<ItemId>, Vec<SketchEntity>)> {
     let on_face = json!({ "body": body.0, "face": face });
     let (plane, on_body) = plane_from(s, &Params::new(&on_face))?.ok_or_else(|| EngineError::NotAvailable("the face isn't flat".into()))?;
     let b = s.doc.body(body).ok_or_else(|| EngineError::BadParams(format!("no body {}", body.0)))?;
     let shape = s.kernel.offset_face_outline(&s.kernel.face(&b.shape, face)?, distance)?;
-    let n = s.kernel.edge_count(&shape)?;
-    let out: Vec<SketchEntity> =
-        (0..n.min(10_000)).filter_map(|i| s.kernel.edge_curve(&shape, i).ok().and_then(|c| edge_entity(&plane, c))).collect();
+    let out = shape_entities(s, &plane, &shape)?;
     if out.is_empty() {
         return Err(EngineError::NotAvailable("that offset would collapse the face's outline".into()));
     }
@@ -1177,13 +1181,9 @@ pub fn offset_body_edges(s: &Session, sketch: ItemId, edges: &[(ItemId, u32)], d
 /// joined corners, or each curve on its own. Positive is outwards (or to the left of a lone line).
 pub fn offset_entities(s: &Session, sketch: ItemId, entities: &[u32], region: Option<u32>, distance: f64) -> Result<Vec<SketchEntity>> {
     let sk = s.doc.sketch(sketch).ok_or_else(|| EngineError::BadParams(format!("no sketch {}", sketch.0)))?;
-    let from_shape = |shape: &shapecraft_kernel::Shape| -> Result<Vec<SketchEntity>> {
-        let n = s.kernel.edge_count(shape)?;
-        Ok((0..n.min(10_000)).filter_map(|i| s.kernel.edge_curve(shape, i).ok().and_then(|c| edge_entity(&sk.plane, c))).collect())
-    };
     if let Some(r) = region {
         let face = &sk.region(r).ok_or_else(|| EngineError::BadParams(format!("no region {r}")))?.face;
-        return from_shape(&s.kernel.offset_face_outline(face, distance)?);
+        return shape_entities(s, &sk.plane, &s.kernel.offset_face_outline(face, distance)?);
     }
     let picked: Vec<SketchEntity> = entities
         .iter()
@@ -1194,15 +1194,11 @@ pub fn offset_entities(s: &Session, sketch: ItemId, entities: &[u32], region: Op
 
 /// Curves in `sk`'s plane offset: connected ones as one chain with joined corners, else each on its own.
 fn offset_curves_of(s: &Session, sk: &Sketch, picked: Vec<SketchEntity>, distance: f64) -> Result<Vec<SketchEntity>> {
-    let from_shape = |shape: &shapecraft_kernel::Shape| -> Result<Vec<SketchEntity>> {
-        let n = s.kernel.edge_count(shape)?;
-        Ok((0..n.min(10_000)).filter_map(|i| s.kernel.edge_curve(shape, i).ok().and_then(|c| edge_entity(&sk.plane, c))).collect())
-    };
     if picked.len() >= 2 {
         let mut one = sk.clone();
         one.entities = picked.clone();
         if let Ok(shape) = s.kernel.offset_curves(sk.frame(), &one.curves(), distance) {
-            let out = from_shape(&shape)?;
+            let out = shape_entities(s, &sk.plane, &shape)?;
             if !out.is_empty() {
                 return Ok(out);
             }

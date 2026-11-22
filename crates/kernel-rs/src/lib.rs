@@ -640,7 +640,8 @@ impl Kernel for RustKernel {
             F::SketchRegions => Limited("splines and cut ellipses are followed as fine polylines"),
             F::OffsetEdge => Limited("chains of ellipses or splines are offset one curve at a time"),
             F::Sweep => Limited("no twist, scale or orientation settings, no closed paths"),
-            F::Booleans => Limited("bodies that only touch, with nothing in common, can be refused"),
+            F::Booleans => Limited("bodies that only touch can be refused; each cut slows as a face gathers holes"),
+            F::Revolve => Limited("a thread takes a few seconds"),
             F::OffsetFaces => Limited("faces beside fillets or chamfers can be refused"),
             F::DeleteFaces => Limited("holes, pockets, slots and bosses"),
             F::Fillet => Limited("some corners where three rounds meet are refused"),
@@ -648,7 +649,7 @@ impl Kernel for RustKernel {
             F::Scale => Limited("uneven scaling of cones, spheres and tori"),
             F::VariableFillet | F::SetbackCorners | F::TwoDistanceChamfer | F::MoveEdge | F::Fill | F::WrapEmboss => Missing,
             F::ProjectAsEdge | F::Iges => Missing,
-            F::Extrude | F::DraftAngles | F::Revolve | F::Loft | F::PushPull | F::Chamfer | F::Shell | F::SplitBody => Full,
+            F::Extrude | F::DraftAngles | F::Loft | F::PushPull | F::Chamfer | F::Shell | F::SplitBody => Full,
             F::Drawings | F::Measure | F::MeshBodies | F::StepFiles | F::ExactImports => Full,
         }
     }

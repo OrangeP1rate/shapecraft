@@ -7,6 +7,8 @@
 //! - `bench [FRAMES]` times headless frames of a heavy scene (144 filleted cylinders) while the camera turns.
 //! - `commands` lists every command with its parameters.
 //! - `mcp [--connect HOST:PORT]` serves MCP on stdio, headless or bridged to the running app.
+//!
+//! Any of them takes `--kernel occt|rust` (or `SHAPECRAFT_KERNEL`): the geometry kernel to run on.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -17,21 +19,22 @@ use anyhow::{Context, Result, bail};
 use shapecraft_doc::project;
 use shapecraft_engine::Session;
 use shapecraft_kernel::{BoolOp, DVec3, Kernel};
-use shapecraft_kernel_occt::OcctKernel;
 use shapecraft_render::{Camera, Renderer, SceneColors, SceneInput, StandardView};
 
 fn main() -> Result<()> {
     let result = cli();
     // A measurement left running past its budget would crash the normal way out (OCCT's statics go first).
-    shapecraft_kernel_occt::finish_process(i32::from(result.is_err()));
+    shapecraft_kernels::finish_process(i32::from(result.is_err()));
     result
 }
 
 fn cli() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let kernel = shapecraft_kernels::chosen(&raw).map_err(anyhow::Error::msg)?;
+    let args = shapecraft_kernels::strip_kernel_args(&raw);
     let arg = |i: usize| args.get(i).map(String::as_str);
     match arg(0) {
-        Some("demo") => demo(PathBuf::from(arg(1).unwrap_or("."))),
+        Some("demo") => demo(kernel.as_ref(), PathBuf::from(arg(1).unwrap_or("."))),
         Some("run") => {
             let script = arg(1).context("run needs a script")?;
             let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(PathBuf::from);
@@ -40,20 +43,18 @@ fn cli() -> Result<()> {
                 .and_then(|p| p.to_str().and_then(|t| t.split_once('x')).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
                 .unwrap_or((1600, 1000));
             let clear = args.iter().any(|a| a == "--clear");
-            run(Path::new(script), flag("--save"), flag("--png"), size, clear)
+            run(kernel, Path::new(script), flag("--save"), flag("--png"), size, clear)
         }
         Some("render") => {
             let dir = arg(1).context("render needs a project folder")?;
             let out = arg(2).context("render needs an output .png")?;
             let w = arg(3).and_then(|s| s.parse().ok()).unwrap_or(1600);
             let h = arg(4).and_then(|s| s.parse().ok()).unwrap_or(1000);
-            let kernel = Arc::new(OcctKernel::new());
             let doc = project::load(kernel.as_ref(), Path::new(dir))?;
             let session = Session::with_document(kernel, doc, None);
             write_png(&session, Path::new(out), (w, h))
         }
         Some("mcp") => {
-            let kernel = Arc::new(OcctKernel::new());
             let connect = args.iter().position(|a| a == "--connect").and_then(|i| args.get(i + 1)).cloned();
             let mut server = match connect {
                 Some(addr) => shapecraft_mcp::Server::bridge(kernel, addr),
@@ -63,7 +64,7 @@ fn cli() -> Result<()> {
             server.run(stdin.lock(), std::io::stdout().lock())?;
             Ok(())
         }
-        Some("bench") => bench(arg(1).and_then(|n| n.parse().ok()).unwrap_or(600)),
+        Some("bench") => bench(kernel, arg(1).and_then(|n| n.parse().ok()).unwrap_or(600)),
         Some("commands") => {
             for c in shapecraft_engine::registry() {
                 println!("{:<16} {:<22} {:<6} {}", c.id, c.label, c.shortcut.unwrap_or(""), c.params);
@@ -71,14 +72,15 @@ fn cli() -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "usage: shapecraft-cli demo OUT_DIR | run SCRIPT [--save DIR] [--png OUT [--size WxH] [--clear]] | render DIR OUT.png [W H] | bench [FRAMES] | commands | mcp [--connect HOST:PORT]"
+            "usage: shapecraft-cli demo OUT_DIR | run SCRIPT [--save DIR] [--png OUT [--size WxH] [--clear]] | render DIR OUT.png [W H] | bench [FRAMES] | commands | mcp [--connect HOST:PORT]  (each takes --kernel {})",
+            shapecraft_kernels::names().join("|")
         ),
     }
 }
 
-fn run(script: &Path, save: Option<PathBuf>, png: Option<PathBuf>, size: (u32, u32), clear: bool) -> Result<()> {
+fn run(kernel: Arc<dyn Kernel>, script: &Path, save: Option<PathBuf>, png: Option<PathBuf>, size: (u32, u32), clear: bool) -> Result<()> {
     let text = std::fs::read_to_string(script).with_context(|| format!("reading {}", script.display()))?;
-    let mut s = Session::new(Arc::new(OcctKernel::new()), "Untitled Project");
+    let mut s = Session::new(kernel, "Untitled Project");
     for (n, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with("//") {
@@ -104,9 +106,9 @@ fn run(script: &Path, save: Option<PathBuf>, png: Option<PathBuf>, size: (u32, u
     Ok(())
 }
 
-fn bench(frames: usize) -> Result<()> {
+fn bench(kernel: Arc<dyn Kernel>, frames: usize) -> Result<()> {
     use serde_json::json;
-    let mut s = Session::new(Arc::new(OcctKernel::new()), "Bench");
+    let mut s = Session::new(kernel, "Bench");
     s.execute("sketch", &json!({ "plane": "xy" }))?;
     s.execute("circle", &json!({ "center": [0, 0], "radius": 8 }))?;
     s.execute("extrude", &json!({ "sketch": 1, "region": 0, "distance": 12 }))?;
@@ -221,8 +223,7 @@ fn write_clear_png(s: &mut Session, out: &Path, size: (u32, u32)) -> Result<()> 
     Ok(())
 }
 
-fn demo(out: PathBuf) -> Result<()> {
-    let k = OcctKernel::new();
+fn demo(k: &dyn Kernel, out: PathBuf) -> Result<()> {
     let plate = k.extrude_polygon(
         &[DVec3::ZERO, DVec3::new(60.0, 0.0, 0.0), DVec3::new(60.0, 40.0, 0.0), DVec3::new(0.0, 40.0, 0.0)],
         DVec3::new(0.0, 0.0, 8.0),

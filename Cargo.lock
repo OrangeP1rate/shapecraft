@@ -3963,7 +3963,8 @@ dependencies = [
  "eframe",
  "egui",
  "png 0.18.1",
- "shapecraft-kernel-occt",
+ "shapecraft-kernel",
+ "shapecraft-kernels",
  "shapecraft-ui",
 ]
 
@@ -3991,7 +3992,7 @@ dependencies = [
  "shapecraft-doc",
  "shapecraft-engine",
  "shapecraft-kernel",
- "shapecraft-kernel-occt",
+ "shapecraft-kernels",
  "shapecraft-mcp",
  "shapecraft-render",
 ]
@@ -4069,6 +4070,24 @@ version = "0.11.2"
 dependencies = [
  "cc",
  "shapecraft-kernel",
+]
+
+[[package]]
+name = "shapecraft-kernel-rs"
+version = "0.11.2"
+dependencies = [
+ "serde_json",
+ "shapecraft-engine",
+ "shapecraft-kernel",
+]
+
+[[package]]
+name = "shapecraft-kernels"
+version = "0.11.2"
+dependencies = [
+ "shapecraft-kernel",
+ "shapecraft-kernel-occt",
+ "shapecraft-kernel-rs",
 ]
 
 [[package]]

@@ -7,7 +7,8 @@ license.workspace = true
 
 [dependencies]
 shapecraft-ui.workspace = true
-shapecraft-kernel-occt.workspace = true
+shapecraft-kernel.workspace = true
+shapecraft-kernels = { workspace = true, features = ["occt"] }
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11", "accesskit", "clipboard"] }
 egui = "0.37"
 anyhow.workspace = true

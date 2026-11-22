@@ -14,6 +14,11 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
   exact geometry) says so instead of coming in empty.
 - **Edges rounded against an edge come in.** Parts with a round that rolls along a face and an edge, which some
   Parasolid, SolidWorks, NX and Solid Edge files have, used to stop the import; they read now.
+- **The geometry core can be swapped (for developers).** ShapeCraft now picks its kernel in one place, and a first
+  pure-Rust kernel sits beside Open CASCADE: `shapecraft --kernel rust` or `SHAPECRAFT_KERNEL=rust`. It does
+  flat-faced solids so far (sketch lines, extrude, move, measure, STL) and says plainly what it can't do yet; Open
+  CASCADE stays the default. The command-line tools build without Open CASCADE at all
+  (`cargo build -p shapecraft-cli --no-default-features`), and CI checks that on every push.
 - **Export to FBX and VRML.** File ▸ Export to ▸ FBX… writes a binary FBX that Blender, Unity and Unreal open with
   each body as its own object, in its color, the right way up and at its real size. VRML… writes a `.wrl` for older
   viewers and simulators.

@@ -12,14 +12,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use shapecraft_kernel_occt::OcctKernel;
 use shapecraft_ui::settings::Settings;
 use shapecraft_ui::{Options, ShapeCraftApp, crash_log, graphics, system_theme, window_chrome};
 
 fn main() -> anyhow::Result<()> {
     let result = run();
     // A measurement left running past its budget would crash the normal way out (OCCT's statics go first).
-    shapecraft_kernel_occt::finish_process(i32::from(result.is_err()));
+    shapecraft_kernels::finish_process(i32::from(result.is_err()));
     result
 }
 
@@ -28,8 +27,16 @@ fn run() -> anyhow::Result<()> {
     shapecraft_ui::app_log::install();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).cloned();
+    // --kernel rust (or SHAPECRAFT_KERNEL): the pure-Rust kernel, for trying it out. It can't read or write the
+    // bodies of saved projects yet, so unless --projects says otherwise it gets a projects folder of its own and
+    // never touches real work.
+    let kernel = shapecraft_kernels::chosen(&args).map_err(anyhow::Error::msg)?;
+    let trial = kernel.name() != shapecraft_kernels::names()[0];
+    let projects_root = value("--projects").map(PathBuf::from).unwrap_or_else(|| {
+        if trial { std::env::temp_dir().join(format!("ShapeCraft {} kernel", kernel.name())) } else { Options::default_root() }
+    });
     let opts = Options {
-        projects_root: value("--projects").map(PathBuf::from).unwrap_or_else(Options::default_root),
+        projects_root,
         control_port: value("--control").and_then(|p| p.parse().ok()),
         open: value("--open").map(PathBuf::from),
         new_project: args.iter().any(|a| a == "--new"),
@@ -40,7 +47,7 @@ fn run() -> anyhow::Result<()> {
     let saved = opts.settings_file.as_deref().map(Settings::load).unwrap_or_default();
     if let Some(i) = args.iter().position(|a| a == "--serve") {
         let spec = args.get(i + 1).filter(|a| !a.starts_with("--")).cloned().unwrap_or_default();
-        return serve(&spec, opts, &saved);
+        return serve(&spec, opts, &saved, kernel);
     }
     let choice = value("--graphics").and_then(|g| graphics::parse(&g).map(str::to_string)).unwrap_or(saved.graphics);
     let viewport = egui::ViewportBuilder::default()
@@ -61,12 +68,13 @@ fn run() -> anyhow::Result<()> {
     let run = |pass: &[&'static str], opts: Options| {
         let wgpu_options = graphics::configuration(&choice, &saved.gpu, pass);
         let native = eframe::NativeOptions { viewport: viewport.clone(), wgpu_options, ..Default::default() };
+        let kernel = kernel.clone();
         eframe::run_native(
             "ShapeCraft",
             native,
             Box::new(move |cc| {
                 system_theme::watch(&cc.egui_ctx);
-                Ok(Box::new(ShapeCraftApp::new(Arc::new(OcctKernel::new()), opts, &cc.egui_ctx)))
+                Ok(Box::new(ShapeCraftApp::new(kernel, opts, &cc.egui_ctx)))
             }),
         )
     };
@@ -91,7 +99,7 @@ fn run() -> anyhow::Result<()> {
 }
 
 /// Runs only the tablet host, with no window, until the process is stopped.
-fn serve(spec: &str, opts: Options, saved: &Settings) -> anyhow::Result<()> {
+fn serve(spec: &str, opts: Options, saved: &Settings, kernel: Arc<dyn shapecraft_kernel::Kernel>) -> anyhow::Result<()> {
     use shapecraft_ui::tablet;
     let port = if saved.tablet_port == 0 { tablet::DEFAULT_PORT } else { saved.tablet_port };
     let addr: std::net::SocketAddr = if spec.is_empty() {
@@ -106,7 +114,7 @@ fn serve(spec: &str, opts: Options, saved: &Settings) -> anyhow::Result<()> {
         .filter(|k| !k.trim().is_empty())
         .or_else(|| (!saved.tablet_key.is_empty()).then(|| saved.tablet_key.clone()))
         .unwrap_or_else(tablet::new_token);
-    let host = tablet::Host::start(addr, key, Arc::new(OcctKernel::new()), opts)?;
+    let host = tablet::Host::start(addr, key, kernel, opts)?;
     println!("ShapeCraft is serving on port {}. Open this in a browser on the same network:", host.port);
     for url in tablet::status().map(|s| s.urls).unwrap_or_default() {
         println!("  {url}");

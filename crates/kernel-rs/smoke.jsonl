@@ -1,0 +1,6 @@
+// Runs on the pure-Rust kernel in CI (no OCCT in that build): sketch, extrude, move, measure, export.
+{"command": "sketch", "params": {"plane": "xy"}}
+{"command": "rectangle", "params": {"corner": [0, 0], "opposite": [20, 10]}}
+{"command": "extrude", "params": {"sketch": 1, "region": 0, "distance": 5}}
+{"command": "translate", "params": {"by": [5, 0, 0], "items": [2]}}
+{"command": "inspect", "params": {"faces": false}}

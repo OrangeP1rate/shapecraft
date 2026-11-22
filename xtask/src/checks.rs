@@ -3,6 +3,7 @@
 //!   cargo xtask assets   every image, font, picture or sound in git has its row in ATTRIBUTION.md
 //!   cargo xtask layers   crates depend only on crates below them (kernel → doc → engine → UI / MCP → apps), the
 //!                        UI toolkit stays in the UI and apps, the GPU in render and above, C++ only in kernel-occt
+//!                        (kernel-rs is the pure-Rust kernel beside it; kernels picks between them for the apps)
 
 use std::collections::BTreeMap;
 
@@ -33,13 +34,15 @@ pub fn assets() -> Result<()> {
 }
 
 /// Each crate's layer: a crate may depend only on crates in lower layers.
-const LAYERS: [(&str, u8); 19] = [
+const LAYERS: [(&str, u8); 21] = [
     ("shapecraft-kernel", 0),
     ("shapecraft-dwg", 0),
     ("shapecraft-update", 0),
     ("shapecraft-report", 0),
     ("shapecraft-plugin-host", 0),
     ("shapecraft-kernel-occt", 1),
+    ("shapecraft-kernel-rs", 1),
+    ("shapecraft-kernels", 2),
     ("shapecraft-doc", 1),
     ("shapecraft-xt", 2),
     ("shapecraft-render", 2),

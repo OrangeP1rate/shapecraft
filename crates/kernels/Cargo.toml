@@ -1,0 +1,19 @@
+[package]
+name = "shapecraft-kernels"
+description = "Picks the geometry kernel an app runs on: OCCT (default) or the pure-Rust one"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["occt"]
+# OCCT needs its C++ libraries to build; without this feature an app builds from Rust alone.
+occt = ["dep:shapecraft-kernel-occt"]
+
+[dependencies]
+shapecraft-kernel.workspace = true
+shapecraft-kernel-rs.workspace = true
+shapecraft-kernel-occt = { workspace = true, optional = true }
+
+[lints]
+workspace = true

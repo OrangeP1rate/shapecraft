@@ -5,9 +5,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["occt"]
+# Without it the CLI builds from Rust alone and runs on the pure-Rust kernel.
+occt = ["shapecraft-kernels/occt"]
+
 [dependencies]
 shapecraft-kernel.workspace = true
-shapecraft-kernel-occt.workspace = true
+shapecraft-kernels.workspace = true
 anyhow.workspace = true
 shapecraft-doc.workspace = true
 shapecraft-engine.workspace = true

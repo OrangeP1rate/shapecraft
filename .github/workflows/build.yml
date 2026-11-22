@@ -44,3 +44,18 @@ jobs:
       - name: Plugins
         if: runner.os == 'Linux'
         run: (cd plugins && cargo fmt --all --check && cargo clippy --release -- -D warnings) && cargo xtask plugin test
+
+  # The swappable core: with no OCCT installed at all, the engine, the pure-Rust kernel and the CLI still build,
+  # test and model (crates/kernel-rs/smoke.jsonl: sketch, extrude, move, measure).
+  rust-kernel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p shapecraft-kernel-rs -p shapecraft-kernels --no-default-features
+      - run: cargo build -p shapecraft-cli --no-default-features
+      - name: Model on the Rust kernel
+        run: |
+          out=$(./target/debug/shapecraft-cli run crates/kernel-rs/smoke.jsonl --kernel rust)
+          echo "$out"
+          echo "$out" | grep -q '"volume_mm3":1000.0'

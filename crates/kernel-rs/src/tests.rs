@@ -109,3 +109,24 @@ fn the_engine_models_on_the_rust_kernel() {
     s.execute("extrude", &json!({"sketch": sk.0, "region": disc, "distance": 5})).unwrap();
     assert_eq!(s.doc.bodies.len(), 1, "the disc joins the block");
 }
+
+#[test]
+fn packing_keeps_the_face_order() {
+    // STEP face colours and from_brep's face map number faces before a body is packed into its own model.
+    let b = K.make_box(DVec3::ZERO, DVec3::new(1.0, 2.0, 3.0)).unwrap();
+    let cut = K
+        .boolean(shapecraft_kernel::BoolOp::Subtract, &b, &K.extrude_circle(DVec3::new(0.5, 1.0, -1.0), 0.3, DVec3::Z * 5.0).unwrap())
+        .unwrap();
+    let a = crate::exact(&cut).unwrap();
+    let before: Vec<_> = a.model.faces(a.bodies[0]).unwrap().iter().map(|f| a.model.face(f.id).unwrap().surface()).collect();
+    let packed = crate::pack(&a.model, &a.bodies).unwrap();
+    let after: Vec<_> = packed
+        .model
+        .faces(packed.bodies[0])
+        .unwrap()
+        .iter()
+        .map(|f| packed.model.surface(packed.model.face(f.id).unwrap().surface()).unwrap().clone())
+        .collect();
+    let before: Vec<_> = before.iter().map(|s| a.model.surface(*s).unwrap().clone()).collect();
+    assert_eq!(before, after);
+}

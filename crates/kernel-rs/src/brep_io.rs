@@ -137,6 +137,11 @@ pub fn body(m: &Model, b: Body, solid: bool) -> Result<Brep> {
                 let mut fins = Vec::new();
                 for c in l.coedges() {
                     let eid = c.edge();
+                    // A point-like edge (a cone's apex, a sphere's pole) has no curve; the neutral form leaves it out,
+                    // as OCCT's does.
+                    if m.edge(eid).is_ok_and(|e| e.curve().is_none() && e.start() == e.end()) {
+                        continue;
+                    }
                     let index = match edges.get(&eid) {
                         Some(i) => *i,
                         None => {
@@ -174,7 +179,9 @@ pub fn body(m: &Model, b: Body, solid: bool) -> Result<Brep> {
                     };
                     fins.push(Fin { edge: index, forward: c.orientation() == Orientation::Forward, pcurve: None });
                 }
-                loops.push(fins);
+                if !fins.is_empty() {
+                    loops.push(fins);
+                }
             }
             out.faces.push(brep::Face { surface: sid, flip: f.orientation == Orientation::Reversed, loops, color: None });
             faces.push(out.faces.len() - 1);

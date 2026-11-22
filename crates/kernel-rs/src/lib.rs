@@ -9,29 +9,34 @@
 //! Choose it with `--kernel rust` or `SHAPECRAFT_KERNEL=rust` (see the `shapecraft-kernels` crate).
 
 mod brep_io;
+mod brep_step;
+mod offset2d;
 pub mod poly;
+mod profile;
 pub mod regions;
+mod step;
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use arris::geom::{Curve, FrameLaw, Path as APath, PathSegment, Profile, ProfileLoop, ProfileSegment, Surface};
+use arris::geom::{Curve, FrameLaw, Path as APath, PathSegment, Profile, Surface};
 use arris::math::nalgebra::{Unit, UnitQuaternion};
-use arris::math::{Axis as AAxis, Frame, Isometry, Point2, Point3, Reflection, Vec3};
+use arris::math::{Axis as AAxis, Frame, Isometry, Point3, Reflection, Vec3};
 use arris::ops::{Control, OpError};
 use arris::topo::{Body, Model, Orientation};
 use glam::DVec2;
 pub use poly::{Kind, Poly, PolyKernel, RsShape};
+use profile::{circle_profile, cycle_loop, plane_frame, polygon_profile, profile_of, profile_of_shape};
 use shapecraft_kernel::{
-    Aabb, Axis, BoolOp, DVec3, Distance, EdgeCurve, FacePlane, Kernel, KernelError, MassProps, Mesh, PlanarCurve, PlaneFrame, Result,
-    Shape, ShapeData, SubShape, ViewFrame, ViewLine,
+    Aabb, Axis, BoolOp, DVec3, Distance, EdgeCurve, FacePlane, Kernel, KernelError, MassProps, Mesh, PartInfo, PlanarCurve, PlaneFrame,
+    Result, Shape, ShapeData, SubShape, ViewFrame, ViewLine,
 };
 
-type AFace = arris::topo::Face;
+pub(crate) type AFace = arris::topo::Face;
 type AEdge = arris::topo::Edge;
 
-const C: &Control<'static> = &Control::NONE;
+pub(crate) const C: &Control<'static> = &Control::NONE;
 
 /// The pure-Rust kernel.
 #[derive(Debug, Default, Clone, Copy)]
@@ -60,11 +65,61 @@ impl ShapeData for ArShape {
     }
 }
 
+/// Free curves with no faces: what a 2D offset makes. Only their edges can be read back.
+#[derive(Debug, Clone)]
+pub struct Curves(pub Vec<EdgeCurve>);
+
+impl ShapeData for Curves {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl Curves {
+    /// Sketch pieces in `frame`'s plane, as world curves.
+    fn of(frame: &PlaneFrame, segs: &[regions::Seg]) -> Self {
+        let w = |p: DVec2| frame.origin + frame.x * p.x + frame.y * p.y;
+        let normal = frame.x.cross(frame.y).normalize_or_zero();
+        Curves(
+            segs.iter()
+                .map(|s| match *s {
+                    regions::Seg::Line { a, b } => EdgeCurve::Line { a: w(a), b: w(b) },
+                    regions::Seg::Arc { c, r, sweep, .. } if sweep.abs() >= std::f64::consts::TAU - 1e-12 => {
+                        EdgeCurve::Circle { center: w(c), normal, radius: r }
+                    }
+                    regions::Seg::Arc { .. } => EdgeCurve::Arc { a: w(s.at(0.0)), mid: w(s.at(0.5)), b: w(s.at(1.0)) },
+                })
+                .collect(),
+        )
+    }
+
+    fn points(c: &EdgeCurve) -> Vec<DVec3> {
+        let n = 32;
+        match c {
+            EdgeCurve::Line { a, b } => vec![*a, *b],
+            EdgeCurve::Circle { center, normal, radius } => {
+                let x = normal.any_orthonormal_vector();
+                let y = normal.cross(x);
+                (0..=n)
+                    .map(|i| {
+                        *center
+                            + (x * (i as f64 / n as f64 * std::f64::consts::TAU).cos()
+                                + y * (i as f64 / n as f64 * std::f64::consts::TAU).sin())
+                                * *radius
+                    })
+                    .collect()
+            }
+            EdgeCurve::Arc { a, mid, b } => vec![*a, *mid, *b],
+            EdgeCurve::Other { points } => points.clone(),
+        }
+    }
+}
+
 pub(crate) fn not_yet(op: &'static str) -> KernelError {
     KernelError::Operation { op, message: "not in the Rust kernel yet".into() }
 }
 
-fn bad(message: impl Into<String>) -> KernelError {
+pub(crate) fn bad(message: impl Into<String>) -> KernelError {
     KernelError::InvalidInput(message.into())
 }
 
@@ -72,11 +127,11 @@ fn op(name: &'static str) -> impl Fn(OpError) -> KernelError {
     move |e| KernelError::Operation { op: name, message: e.to_string() }
 }
 
-fn p3(v: DVec3) -> Point3 {
+pub(crate) fn p3(v: DVec3) -> Point3 {
     Point3::new(v.x, v.y, v.z)
 }
 
-fn v3(v: DVec3) -> Vec3 {
+pub(crate) fn v3(v: DVec3) -> Vec3 {
     Vec3::new(v.x, v.y, v.z)
 }
 
@@ -88,7 +143,7 @@ fn dv(v: &Vec3) -> DVec3 {
     DVec3::new(v.x, v.y, v.z)
 }
 
-fn sign(o: Orientation) -> f64 {
+pub(crate) fn sign(o: Orientation) -> f64 {
     if o == Orientation::Reversed { -1.0 } else { 1.0 }
 }
 
@@ -104,10 +159,13 @@ fn data(shape: &Shape) -> Result<Data<'_>> {
     if shape.downcast::<RsShape>().is_ok() {
         return Ok(Data::Mesh);
     }
+    if shape.downcast::<Curves>().is_ok() {
+        return Err(bad("these are only curves"));
+    }
     Err(bad("this shape was made by another kernel"))
 }
 
-fn exact(shape: &Shape) -> Result<&ArShape> {
+pub(crate) fn exact(shape: &Shape) -> Result<&ArShape> {
     match data(shape)? {
         Data::Exact(a) => Ok(a),
         Data::Mesh => Err(bad("a mesh body has no exact surfaces for this; import it as STEP to model on it")),
@@ -115,7 +173,7 @@ fn exact(shape: &Shape) -> Result<&ArShape> {
 }
 
 /// Dense copies of `bodies` in a model of their own.
-fn pack(m: &Model, bodies: &[Body]) -> Result<ArShape> {
+pub(crate) fn pack(m: &Model, bodies: &[Body]) -> Result<ArShape> {
     let mut fresh = Model::default();
     let mut out = Vec::with_capacity(bodies.len());
     for b in bodies {
@@ -124,19 +182,19 @@ fn pack(m: &Model, bodies: &[Body]) -> Result<ArShape> {
     Ok(ArShape { model: Arc::new(fresh), bodies: out, face: None, profile: None })
 }
 
-fn wrap(a: ArShape) -> Shape {
+pub(crate) fn wrap(a: ArShape) -> Shape {
     Shape::new(a)
 }
 
 /// The shape's bodies, copied into `m`.
-fn bring(m: &mut Model, s: &ArShape) -> Result<Vec<Body>> {
+pub(crate) fn bring(m: &mut Model, s: &ArShape) -> Result<Vec<Body>> {
     s.bodies
         .iter()
         .map(|b| m.import(&s.model, *b).map(|r| r.0).map_err(|e| KernelError::Operation { op: "copy", message: e.to_string() }))
         .collect()
 }
 
-fn faces_of(s: &ArShape) -> Vec<(Body, AFace)> {
+pub(crate) fn faces_of(s: &ArShape) -> Vec<(Body, AFace)> {
     if let (Some(f), Some(b)) = (s.face, s.bodies.first()) {
         return vec![(*b, f)];
     }
@@ -181,7 +239,7 @@ fn edge_faces(s: &ArShape) -> HashMap<arris::topo::EdgeId, Vec<u32>> {
     map
 }
 
-fn curve_of(m: &Model, e: AEdge) -> Option<(Curve, f64, f64)> {
+pub(crate) fn curve_of(m: &Model, e: AEdge) -> Option<(Curve, f64, f64)> {
     let edge = m.edge(e.id).ok()?;
     let (cid, range) = edge.curve()?;
     let curve = m.curve(cid).ok()?.clone();
@@ -196,123 +254,6 @@ fn edge_points(m: &Model, e: AEdge, n: usize) -> Vec<DVec3> {
         }
         None => Vec::new(),
     }
-}
-
-// ---- profiles ----
-
-fn plane_frame(frame: &PlaneFrame) -> Result<Frame> {
-    let z = frame.x.cross(frame.y);
-    Frame::from_orthonormal(p3(frame.origin), v3(frame.x.normalize()), v3(frame.y.normalize()), v3(z.normalize()))
-        .or_else(|_| Frame::new(p3(frame.origin), v3(z), v3(frame.x)))
-        .map_err(|e| bad(format!("sketch plane: {e}")))
-}
-
-fn p2(v: DVec2) -> Point2 {
-    Point2::new(v.x, v.y)
-}
-
-fn cycle_loop(c: &regions::Cycle) -> ProfileLoop {
-    if let [regions::Seg::Arc { c, r, sweep, .. }] = c.as_slice()
-        && sweep.abs() > std::f64::consts::PI
-    {
-        return ProfileLoop::Circle { center: p2(*c), radius: *r };
-    }
-    let start = p2(c[0].at(0.0));
-    let segments = c
-        .iter()
-        .map(|s| match s {
-            regions::Seg::Line { b, .. } => ProfileSegment::LineTo(p2(*b)),
-            regions::Seg::Arc { .. } => ProfileSegment::ArcTo { to: p2(s.at(1.0)), via: p2(s.at(0.5)) },
-        })
-        .collect();
-    ProfileLoop::Path { start, segments }
-}
-
-/// A planar face of a body as a profile (its plane facing out of the body).
-fn profile_of(m: &Model, f: AFace) -> Result<Profile> {
-    let face = m.face(f.id).map_err(|e| bad(e.to_string()))?;
-    let Surface::Plane { frame } = m.surface(face.surface()).map_err(|e| bad(e.to_string()))? else {
-        return Err(bad("pick a flat face"));
-    };
-    let n = frame.z().into_inner() * sign(f.orientation);
-    let plane = Frame::new(frame.origin(), n, frame.x().into_inner()).map_err(|e| bad(e.to_string()))?;
-    let mut loops: Vec<(f64, ProfileLoop)> = Vec::new();
-    for l in face.loops() {
-        let cs = l.coedges();
-        let local = |p: Point3| {
-            let q = plane.to_local(p);
-            Point2::new(q.x, q.y)
-        };
-        if let [c] = cs
-            && let Some((Curve::Circle { frame: cf, radius }, _, _)) = curve_of(m, c.edge_use())
-        {
-            let ctr = local(cf.origin());
-            loops.push((std::f64::consts::PI * radius * radius, ProfileLoop::Circle { center: ctr, radius }));
-            continue;
-        }
-        let mut start = None;
-        let mut segs = Vec::new();
-        let mut poly: Vec<Point2> = Vec::new();
-        for c in cs {
-            let Some((curve, lo, hi)) = curve_of(m, c.edge_use()) else { continue };
-            let (a, b) = if c.orientation() == Orientation::Reversed { (hi, lo) } else { (lo, hi) };
-            start.get_or_insert(local(curve.point(a)));
-            match curve {
-                Curve::Line { .. } => segs.push(ProfileSegment::LineTo(local(curve.point(b)))),
-                Curve::Circle { .. } => {
-                    segs.push(ProfileSegment::ArcTo { to: local(curve.point(b)), via: local(curve.point((a + b) / 2.0)) })
-                }
-                _ => {
-                    for i in 1..=24 {
-                        segs.push(ProfileSegment::LineTo(local(curve.point(a + (b - a) * i as f64 / 24.0))));
-                    }
-                }
-            }
-            for i in 0..8 {
-                poly.push(local(curve.point(a + (b - a) * i as f64 / 8.0)));
-            }
-        }
-        let Some(start) = start else { continue };
-        let area = poly.iter().zip(poly.iter().cycle().skip(1)).map(|(p, q)| p.x * q.y - q.x * p.y).sum::<f64>().abs() / 2.0;
-        loops.push((area, ProfileLoop::Path { start, segments: segs }));
-    }
-    loops.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let mut it = loops.into_iter().map(|l| l.1);
-    let outer = it.next().ok_or_else(|| bad("the face has no boundary"))?;
-    Ok(Profile { plane, outer, holes: it.collect() })
-}
-
-fn profile_of_shape(s: &Shape) -> Result<Profile> {
-    let a = exact(s)?;
-    if let Some(p) = &a.profile {
-        return Ok(p.clone());
-    }
-    let (_, f) = faces_of(a).into_iter().next().ok_or_else(|| bad("pick a flat face"))?;
-    profile_of(&a.model, f)
-}
-
-fn polygon_profile(points: &[DVec3]) -> Result<Profile> {
-    if points.len() < 3 {
-        return Err(bad("a polygon needs three corners"));
-    }
-    let mut n = DVec3::ZERO;
-    for i in 0..points.len() {
-        n += points[i].cross(points[(i + 1) % points.len()]);
-    }
-    let x = (points[1] - points[0]).normalize_or_zero();
-    let plane = Frame::new(p3(points[0]), v3(n), v3(x)).map_err(|e| bad(format!("polygon: {e}")))?;
-    let local = |p: DVec3| {
-        let q = plane.to_local(p3(p));
-        Point2::new(q.x, q.y)
-    };
-    let mut segments: Vec<ProfileSegment> = points[1..].iter().map(|p| ProfileSegment::LineTo(local(*p))).collect();
-    segments.push(ProfileSegment::LineTo(local(points[0])));
-    Ok(Profile { plane, outer: ProfileLoop::Path { start: local(points[0]), segments }, holes: Vec::new() })
-}
-
-fn circle_profile(center: DVec3, normal: DVec3, radius: f64) -> Result<Profile> {
-    let plane = Frame::from_z(p3(center), v3(normal)).map_err(|e| bad(format!("circle: {e}")))?;
-    Ok(Profile { plane, outer: ProfileLoop::Circle { center: Point2::origin(), radius }, holes: Vec::new() })
 }
 
 fn solid_from(
@@ -561,6 +502,11 @@ impl Kernel for RustKernel {
     }
 
     fn bounds(&self, shape: &Shape) -> Result<Aabb> {
+        if let Ok(c) = shape.downcast::<Curves>() {
+            let pts: Vec<DVec3> = c.0.iter().flat_map(Curves::points).collect();
+            let (lo, hi) = pts.iter().fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(l, h), p| (l.min(*p), h.max(*p)));
+            return if lo.is_finite() { Ok(Aabb { min: lo, max: hi }) } else { Err(bad("no curves")) };
+        }
         let s = match data(shape)? {
             Data::Mesh => return PolyKernel.bounds(shape),
             Data::Exact(s) => s,
@@ -593,6 +539,15 @@ impl Kernel for RustKernel {
     }
 
     fn tessellate(&self, shape: &Shape, deflection: f64) -> Result<Mesh> {
+        if let Ok(c) = shape.downcast::<Curves>() {
+            let mut mesh = Mesh::default();
+            for (i, curve) in c.0.iter().enumerate() {
+                mesh.edges.push(Curves::points(curve).iter().map(|p| p.as_vec3().to_array()).collect());
+                mesh.edge_ids.push(i as u32);
+                mesh.edge_faces.push([u32::MAX; 2]);
+            }
+            return Ok(mesh);
+        }
         match data(shape)? {
             Data::Mesh => PolyKernel.tessellate(shape, deflection),
             Data::Exact(s) => mesh_of(s, deflection),
@@ -729,11 +684,28 @@ impl Kernel for RustKernel {
         extrude_profile(&profile_of_shape(face)?, dir)
     }
 
+    /// A ruled loft from the profile to itself moved `dir` and shrunk by `|dir|·tan(angle)`: straight walls stay
+    /// planes and round ones become cones, as OCCT's draft prism makes them.
     fn prism_draft(&self, face: &Shape, dir: DVec3, angle: f64) -> Result<Shape> {
+        if !(dir.is_finite() && angle.is_finite()) {
+            return Err(bad("extrude by finite numbers"));
+        }
         if angle.abs() < 1e-12 {
             return self.prism(face, dir);
         }
-        Err(not_yet("draft angles"))
+        if angle.abs() >= std::f64::consts::FRAC_PI_2 * 0.95 {
+            return Err(bad("draft angle must be under 85°"));
+        }
+        let p = profile_of_shape(face)?;
+        let height = dir.length();
+        let n = dv(&p.plane.z().into_inner());
+        if height <= 0.0 || n.dot(dir).abs() < height * (1.0 - 1e-6) {
+            return Err(bad("a drafted extrude goes straight out of the face"));
+        }
+        let mut end = profile::grown(&p, -height * angle.tan())?;
+        let o = p.plane.origin() + v3(dir);
+        end.plane = Frame::new(o, p.plane.z().into_inner(), p.plane.x().into_inner()).map_err(|e| bad(e.to_string()))?;
+        solid_from("extrude", |m| arris::ops::loft(m, &[p, end], arris::ops::LoftKind::Ruled, false, C))
     }
 
     fn revolve(&self, face: &Shape, axis: Axis, angle: f64) -> Result<Shape> {
@@ -891,6 +863,9 @@ impl Kernel for RustKernel {
     }
 
     fn edge_count(&self, shape: &Shape) -> Result<u32> {
+        if let Ok(c) = shape.downcast::<Curves>() {
+            return Ok(c.0.len() as u32);
+        }
         match data(shape)? {
             Data::Mesh => PolyKernel.edge_count(shape),
             Data::Exact(s) => Ok(edges_of(s).len() as u32),
@@ -901,15 +876,37 @@ impl Kernel for RustKernel {
         Err(not_yet("drawings"))
     }
 
-    fn offset_curves(&self, _frame: PlaneFrame, _curves: &[PlanarCurve], _distance: f64) -> Result<Shape> {
-        Err(not_yet("offset curves"))
+    fn offset_curves(&self, frame: PlaneFrame, curves: &[PlanarCurve], distance: f64) -> Result<Shape> {
+        if !distance.is_finite() {
+            return Err(bad("offset by a finite distance"));
+        }
+        if curves.iter().any(|c| matches!(c, PlanarCurve::Ellipse { .. } | PlanarCurve::Spline { .. } | PlanarCurve::BSpline { .. })) {
+            return Err(not_yet("offset ellipses and splines as a chain"));
+        }
+        let (chain, closed) = offset2d::chain(&regions::pieces(&frame, curves)).map_err(|e| bad(e.message()))?;
+        // Positive is outwards round a closed chain, to the left along an open one (as OCCT's offset does).
+        let left = if closed && offset2d::area(&chain) > 0.0 { -distance } else { distance };
+        let out = offset2d::offset(&chain, left, closed).map_err(|e| bad(e.message()))?;
+        Ok(Shape::new(Curves::of(&frame, &out)))
     }
 
-    fn offset_face_outline(&self, _face: &Shape, _distance: f64) -> Result<Shape> {
-        Err(not_yet("offset a face's outline"))
+    fn offset_face_outline(&self, face: &Shape, distance: f64) -> Result<Shape> {
+        if !distance.is_finite() {
+            return Err(bad("offset by a finite distance"));
+        }
+        let p = profile::grown(&profile_of_shape(face)?, distance)?;
+        let frame = PlaneFrame { origin: dp(p.plane.origin()), x: dv(&p.plane.x().into_inner()), y: dv(&p.plane.y().into_inner()) };
+        let mut segs = Vec::new();
+        for l in std::iter::once(&p.outer).chain(&p.holes) {
+            segs.extend(profile::loop_segs(l).ok_or_else(|| not_yet("offset an ellipse"))?);
+        }
+        Ok(Shape::new(Curves::of(&frame, &segs)))
     }
 
     fn edge_curve(&self, shape: &Shape, edge: u32) -> Result<EdgeCurve> {
+        if let Ok(c) = shape.downcast::<Curves>() {
+            return c.0.get(edge as usize).cloned().ok_or_else(|| bad(format!("no edge {edge}")));
+        }
         let s = match data(shape)? {
             Data::Mesh => return PolyKernel.edge_curve(shape, edge),
             Data::Exact(s) => s,
@@ -978,35 +975,25 @@ impl Kernel for RustKernel {
     }
 
     fn write_step(&self, shapes: &[Shape], path: &Path) -> Result<()> {
-        let mut m = Model::default();
-        let mut bodies = Vec::new();
-        for s in shapes {
-            bodies.extend(bring(&mut m, exact(s)?)?);
-        }
-        let text = arris::io::step::write(&m, &bodies).map_err(|e| KernelError::Operation { op: "STEP files", message: e.to_string() })?;
-        std::fs::write(path, text).map_err(|e| KernelError::Io(e.to_string()))
+        let parts: Vec<(Shape, PartInfo)> = shapes.iter().map(|s| (s.clone(), PartInfo::default())).collect();
+        step::write_parts(&parts, path)
     }
 
+    /// Arris writes AP214 whatever the protocol asked (AP242 readers take it).
     fn write_step_ap(&self, shapes: &[Shape], path: &Path, _protocol: u32) -> Result<()> {
         self.write_step(shapes, path)
     }
 
+    fn write_step_parts(&self, parts: &[(Shape, PartInfo)], path: &Path, _protocol: u32) -> Result<()> {
+        step::write_parts(parts, path)
+    }
+
     fn read_step(&self, path: &Path) -> Result<Vec<Shape>> {
-        let text = std::fs::read(path).map_err(|e| KernelError::Io(e.to_string()))?;
-        let text = String::from_utf8_lossy(&text);
-        let mut m = Model::default();
-        let read = arris::io::step::read(&mut m, &text, &Default::default(), C)
-            .map_err(|e| KernelError::Operation { op: "STEP files", message: e.to_string() })?;
-        let mut out = Vec::new();
-        for s in read.solids {
-            if let Ok(b) = s.result {
-                out.push(wrap(pack(&m, &[b.body])?));
-            }
-        }
-        if out.is_empty() {
-            return Err(KernelError::Operation { op: "STEP files", message: "no solid in it could be read".into() });
-        }
-        Ok(out)
+        Ok(step::read_parts(path)?.into_iter().map(|(s, _)| s).collect())
+    }
+
+    fn read_step_parts(&self, path: &Path) -> Result<Vec<(Shape, PartInfo)>> {
+        step::read_parts(path)
     }
 
     fn write_iges(&self, _shapes: &[Shape], _path: &Path) -> Result<()> {
@@ -1023,6 +1010,35 @@ impl Kernel for RustKernel {
 
     fn shape_from_mesh(&self, positions: &[DVec3], indices: &[u32]) -> Result<Shape> {
         PolyKernel.shape_from_mesh(positions, indices)
+    }
+
+    fn from_brep(&self, brep: &shapecraft_kernel::brep::Brep) -> Result<Shape> {
+        Ok(self.from_brep_faces(brep)?.0)
+    }
+
+    /// Through STEP text: Arris's reader fits the pcurves, checks the body and heals small gaps, the same road a
+    /// STEP import takes. Faces map back through its provenance (each face generated from its `ADVANCED_FACE`).
+    fn from_brep_faces(&self, brep: &shapecraft_kernel::brep::Brep) -> Result<(Shape, Vec<Option<u32>>)> {
+        let written = brep_step::write(brep)?;
+        let mut m = Model::default();
+        let read = arris::io::step::read(&mut m, &written.text, &Default::default(), C)
+            .map_err(|e| KernelError::Operation { op: "from_brep", message: e.to_string() })?;
+        let solid = read.solids.into_iter().next().ok_or_else(|| bad("the body has no faces"))?;
+        let body = solid.result.map_err(|e| KernelError::Operation { op: "from_brep", message: e.to_string() })?;
+        let shape = ArShape { model: Arc::new(m), bodies: vec![body.body], face: None, profile: None };
+        let index: HashMap<arris::topo::FaceId, u32> = faces_of(&shape).iter().enumerate().map(|(i, (_, f))| (f.id, i as u32)).collect();
+        let faces = written
+            .faces
+            .iter()
+            .map(|id| {
+                let role = arris::topo::Role::File(arris::topo::provenance::FileEntity { id: *id, instance: 0 });
+                body.provenance.generated_from(role).iter().find_map(|s| match s.id {
+                    arris::topo::EntityId::Face(f) => index.get(&f).copied(),
+                    _ => None,
+                })
+            })
+            .collect();
+        Ok((wrap(shape), faces))
     }
 
     fn to_brep(&self, shape: &Shape) -> Result<Vec<shapecraft_kernel::brep::Brep>> {
@@ -1059,4 +1075,5 @@ impl Kernel for RustKernel {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests;

@@ -28,6 +28,19 @@ pub enum Seg {
 }
 
 impl Seg {
+    /// The arc from `from` through `via` to `to` (a line when the three are in a row).
+    pub fn through(from: DVec2, via: DVec2, to: DVec2) -> Seg {
+        match circle_through(from, via, to) {
+            Some((c, r)) => {
+                let ang = |p: DVec2| (p - c).to_angle();
+                let ccw = (ang(to) - ang(from)).rem_euclid(TAU);
+                let sweep = if (ang(via) - ang(from)).rem_euclid(TAU) < ccw { ccw } else { ccw - TAU };
+                Seg::Arc { c, r, a0: ang(from), sweep }
+            }
+            None => Seg::Line { a: from, b: to },
+        }
+    }
+
     pub fn at(&self, s: f64) -> DVec2 {
         match *self {
             Seg::Line { a, b } => a.lerp(b, s),
@@ -35,11 +48,11 @@ impl Seg {
         }
     }
 
-    fn start(&self) -> DVec2 {
+    pub fn start(&self) -> DVec2 {
         self.at(0.0)
     }
 
-    fn end(&self) -> DVec2 {
+    pub fn end(&self) -> DVec2 {
         self.at(1.0)
     }
 
@@ -76,7 +89,7 @@ impl Seg {
     }
 
     /// Its share of the signed area of a loop it's part of (shoelace term plus the arc's bulge).
-    fn area_term(&self) -> f64 {
+    pub fn area_term(&self) -> f64 {
         let (p, q) = (self.start(), self.end());
         let chord = p.perp_dot(q) / 2.0;
         match *self {
@@ -186,18 +199,7 @@ pub fn pieces(frame: &PlaneFrame, curves: &[PlanarCurve]) -> Vec<Seg> {
         match c {
             PlanarCurve::Line { a, b } => out.push(Seg::Line { a: l(*a), b: l(*b) }),
             PlanarCurve::Circle { center, radius } => out.push(Seg::Arc { c: l(*center), r: *radius, a0: 0.0, sweep: TAU }),
-            PlanarCurve::Arc { a, mid, b } => {
-                let (a, m, b) = (l(*a), l(*mid), l(*b));
-                match circle_through(a, m, b) {
-                    Some((c, r)) => {
-                        let ang = |p: DVec2| (p - c).to_angle();
-                        let ccw = (ang(b) - ang(a)).rem_euclid(TAU);
-                        let sweep = if (ang(m) - ang(a)).rem_euclid(TAU) < ccw { ccw } else { ccw - TAU };
-                        out.push(Seg::Arc { c, r, a0: ang(a), sweep });
-                    }
-                    None => out.push(Seg::Line { a, b }),
-                }
-            }
+            PlanarCurve::Arc { a, mid, b } => out.push(Seg::through(l(*a), l(*mid), l(*b))),
             PlanarCurve::Ellipse { center, major, rx, ry } => {
                 let c = l(*center);
                 let mx = DVec2::new(major.dot(frame.x), major.dot(frame.y)).normalize_or(DVec2::X);

@@ -254,7 +254,7 @@ impl<'a> Cx<'a> {
                 };
                 let near = self.face_corners(p);
                 let s = blend::rolling_ball(&self.b.surfaces, supports, &centers, &near).map_err(|e| bad(format!("blend #{p}: {e}")))?;
-                (Surface::BSpline(s), reversed)
+                (Surface::BSpline(s), !reversed)
             }
             "BLENDED_EDGE" => {
                 let t = self.get(n, "blend_type").and_then(Val::char).map(char::from).unwrap_or('?');

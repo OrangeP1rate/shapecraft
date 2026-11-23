@@ -144,6 +144,46 @@ fn mass_props_mode(shape: &Shape, mode: i32) -> Result<(MassProps, bool)> {
     Ok((MassProps { volume, area, centroid: DVec3::from_array(c) }, meshed != 0))
 }
 
+/// A shape's triangles. `fresh`: not the ones it may already have.
+fn mesh_of(shape: &Shape, deflection: f64, angle: f64, fresh: bool) -> Result<Mesh> {
+    finite("tessellate", &[deflection, angle])?;
+    if deflection <= 0.0 || angle <= 0.0 {
+        return Err(KernelError::InvalidInput("deflection must be positive".into()));
+    }
+    let s = raw(shape)?;
+    let mut m = ptr::null_mut();
+    // SAFETY: shape alive; out-pointer valid.
+    check("tessellate", unsafe { ffi::sk_tessellate(s, deflection, angle, i32::from(fresh), &mut m) })?;
+    if m.is_null() {
+        return Err(KernelError::Operation { op: "tessellate", message: "no mesh returned".into() });
+    }
+    // SAFETY: `m` is a live mesh; every length comes from the mesh itself; freed exactly once below.
+    let mesh = unsafe {
+        let np = ffi::sk_mesh_positions_len(m);
+        let ni = ffi::sk_mesh_indices_len(m);
+        let mut edges = Vec::new();
+        let mut edge_ids = Vec::new();
+        let mut edge_faces = Vec::new();
+        for i in 0..ffi::sk_mesh_edge_count(m) {
+            edges.push(triples(copy_slice(ffi::sk_mesh_edge(m, i), ffi::sk_mesh_edge_len(m, i))));
+            edge_ids.push(ffi::sk_mesh_edge_id(m, i));
+            edge_faces.push([ffi::sk_mesh_edge_face(m, i, 0), ffi::sk_mesh_edge_face(m, i, 1)]);
+        }
+        let mesh = Mesh {
+            bounds_cache: Default::default(),
+            positions: triples(copy_slice(ffi::sk_mesh_positions(m), np)),
+            normals: triples(copy_slice(ffi::sk_mesh_normals(m), np)),
+            indices: copy_slice(ffi::sk_mesh_indices(m), ni),
+            triangle_faces: copy_slice(ffi::sk_mesh_tri_faces(m), ni / 3),
+            edges,
+            edge_ids,
+            edge_faces,
+        };
+        ffi::sk_mesh_free(m);
+        mesh
+    };
+    Ok(mesh)
+}
 impl Kernel for OcctKernel {
     fn name(&self) -> &'static str {
         "occt"
@@ -254,43 +294,11 @@ impl Kernel for OcctKernel {
     }
 
     fn tessellate(&self, shape: &Shape, deflection: f64) -> Result<Mesh> {
-        finite("tessellate", &[deflection])?;
-        if deflection <= 0.0 {
-            return Err(KernelError::InvalidInput("deflection must be positive".into()));
-        }
-        let s = raw(shape)?;
-        let mut m = ptr::null_mut();
-        // SAFETY: shape alive; out-pointer valid.
-        check("tessellate", unsafe { ffi::sk_tessellate(s, deflection, &mut m) })?;
-        if m.is_null() {
-            return Err(KernelError::Operation { op: "tessellate", message: "no mesh returned".into() });
-        }
-        // SAFETY: `m` is a live mesh; every length comes from the mesh itself; freed exactly once below.
-        let mesh = unsafe {
-            let np = ffi::sk_mesh_positions_len(m);
-            let ni = ffi::sk_mesh_indices_len(m);
-            let mut edges = Vec::new();
-            let mut edge_ids = Vec::new();
-            let mut edge_faces = Vec::new();
-            for i in 0..ffi::sk_mesh_edge_count(m) {
-                edges.push(triples(copy_slice(ffi::sk_mesh_edge(m, i), ffi::sk_mesh_edge_len(m, i))));
-                edge_ids.push(ffi::sk_mesh_edge_id(m, i));
-                edge_faces.push([ffi::sk_mesh_edge_face(m, i, 0), ffi::sk_mesh_edge_face(m, i, 1)]);
-            }
-            let mesh = Mesh {
-                bounds_cache: Default::default(),
-                positions: triples(copy_slice(ffi::sk_mesh_positions(m), np)),
-                normals: triples(copy_slice(ffi::sk_mesh_normals(m), np)),
-                indices: copy_slice(ffi::sk_mesh_indices(m), ni),
-                triangle_faces: copy_slice(ffi::sk_mesh_tri_faces(m), ni / 3),
-                edges,
-                edge_ids,
-                edge_faces,
-            };
-            ffi::sk_mesh_free(m);
-            mesh
-        };
-        Ok(mesh)
+        mesh_of(shape, deflection, 0.35, false)
+    }
+
+    fn mesh_within(&self, shape: &Shape, tolerance: f64, angle: f64) -> Result<Mesh> {
+        mesh_of(shape, tolerance, angle, true)
     }
 
     fn face_count(&self, shape: &Shape) -> Result<u32> {

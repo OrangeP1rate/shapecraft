@@ -116,7 +116,7 @@ impl Workspace {
             fork.kernel.cancellable(true);
             let out = if amend { fork.amend(id, &params) } else { fork.execute(id, &params) };
             let out = out.map_err(|e| match working_value(&mut fork, id, &params, amend) {
-                Some(v) => EngineError::NotAvailable(format!("{e}. Try {v}.")),
+                Some(v) => EngineError::NotAvailable(format!("{}. Try {v}.", e.to_string().trim_end_matches('.'))),
                 None => e,
             });
             let _ = tx.send((fork, out));

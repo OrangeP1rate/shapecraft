@@ -483,12 +483,16 @@ int sk_bounds(const SkShape* s, double* min, double* max) {
   });
 }
 
-int sk_tessellate(const SkShape* s, double deflection, SkMesh** out) {
+// `fresh`: on a copy without the triangles the shape already has (those are kept when they are finer than asked, so a
+// coarser mesh never came of it).
+int sk_tessellate(const SkShape* s, double deflection, double angle, int fresh, SkMesh** out) {
   return guard([&] {
-    BRepMesh_IncrementalMesh(s->shape, deflection, Standard_False, 0.35, Standard_True);
+    TopoDS_Shape shape = s->shape;
+    if (fresh) shape = BRepBuilderAPI_Copy(shape, Standard_False, Standard_False).Shape();
+    BRepMesh_IncrementalMesh(shape, deflection, Standard_False, angle, Standard_True);
     auto mesh = new SkMesh();
     TopTools_IndexedMapOfShape faces;
-    TopExp::MapShapes(s->shape, TopAbs_FACE, faces);
+    TopExp::MapShapes(shape, TopAbs_FACE, faces);
     for (int fi = 1; fi <= faces.Extent(); ++fi) {
       const TopoDS_Face& face = TopoDS::Face(faces(fi));
       TopLoc_Location loc;

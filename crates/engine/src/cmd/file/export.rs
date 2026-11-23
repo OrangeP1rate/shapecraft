@@ -54,7 +54,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             menu: "File/Export to/STL…",
             shortcut: None,
             help: "Export bodies as a binary STL mesh",
-            params: r#"{"path": "/out.stl", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "ascii": false, "units": "mm"|"cm"|"m"|"in"}"#,
+            params: r#"{"path": "/out.stl", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "tolerance": mm? (0.001–10: how far the triangles may be off the exact surface, instead of a resolution), "ascii": false, "units": "mm"|"cm"|"m"|"in"}"#,
             modifies: false,
             enabled: |s| !s.doc.bodies.is_empty(),
             run: export_stl,
@@ -65,7 +65,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             menu: "File/Export to/OBJ…",
             shortcut: None,
             help: "Export bodies as an OBJ mesh with an MTL of their colors",
-            params: r#"{"path": "/out.obj", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "colors": true}"#,
+            params: r#"{"path": "/out.obj", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "tolerance": mm? (0.001–10: how far the triangles may be off the exact surface, instead of a resolution), "colors": true}"#,
             modifies: false,
             enabled: |s| !s.doc.bodies.is_empty(),
             run: export_obj,
@@ -76,7 +76,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             menu: "File/Export to/3MF…",
             shortcut: None,
             help: "Export bodies as a 3MF package for 3D printing, with their colors",
-            params: r#"{"path": "/out.3mf", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "colors": true}"#,
+            params: r#"{"path": "/out.3mf", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "tolerance": mm? (0.001–10: how far the triangles may be off the exact surface, instead of a resolution), "colors": true}"#,
             modifies: false,
             enabled: |s| !s.doc.bodies.is_empty(),
             run: export_3mf,
@@ -87,7 +87,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             menu: "File/Export to/GLB…",
             shortcut: None,
             help: "Export bodies as binary glTF with their materials",
-            params: r#"{"path": "/out.glb", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "colors": true}"#,
+            params: r#"{"path": "/out.glb", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "tolerance": mm? (0.001–10: how far the triangles may be off the exact surface, instead of a resolution), "colors": true}"#,
             modifies: false,
             enabled: |s| !s.doc.bodies.is_empty(),
             run: export_glb,
@@ -98,7 +98,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             menu: "File/Export to/FBX…",
             shortcut: None,
             help: "Export bodies as a binary FBX file (Blender, Unity, Unreal) with their colors",
-            params: r#"{"path": "/out.fbx", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "colors": true}"#,
+            params: r#"{"path": "/out.fbx", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "tolerance": mm? (0.001–10: how far the triangles may be off the exact surface, instead of a resolution), "colors": true}"#,
             modifies: false,
             enabled: |s| !s.doc.bodies.is_empty(),
             run: |s, p| {
@@ -116,7 +116,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             menu: "File/Export to/VRML…",
             shortcut: None,
             help: "Export bodies as a VRML 2.0 file (.wrl) with their colors",
-            params: r#"{"path": "/out.wrl", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "colors": true}"#,
+            params: r#"{"path": "/out.wrl", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "tolerance": mm? (0.001–10: how far the triangles may be off the exact surface, instead of a resolution), "colors": true}"#,
             modifies: false,
             enabled: |s| !s.doc.bodies.is_empty(),
             run: |s, p| {
@@ -132,7 +132,7 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             menu: "File/Export to/USDZ…",
             shortcut: None,
             help: "Export bodies as a USDZ package (AR Quick Look, USD viewers) with their materials",
-            params: r#"{"path": "/out.usdz", "items": [ids]?, "hidden": false, "resolution": "high"|"low"}"#,
+            params: r#"{"path": "/out.usdz", "items": [ids]?, "hidden": false, "resolution": "high"|"low", "tolerance": mm? (0.001–10: how far the triangles may be off the exact surface, instead of a resolution)}"#,
             modifies: false,
             enabled: |s| !s.doc.bodies.is_empty(),
             run: |s, p| {
@@ -416,10 +416,22 @@ fn export_iges(s: &mut Session, p: &Params) -> Result<Value> {
     Ok(json!({ "path": path, "bodies": shapes.len() }))
 }
 
-/// The bodies a mesh export writes, at the asked resolution ("low" re-meshes coarser; "high" is the view's mesh),
-/// with their appearance colors unless "colors" is false.
+/// The bodies a mesh export writes, at the asked resolution ("low" re-meshes coarser; "high" is the view's mesh) or
+/// tolerance, with their appearance colors unless "colors" is false.
 fn export_bodies<'a>(s: &'a Session, p: &Params) -> Result<Vec<formats::ExportBody<'a>>> {
-    let low = p.opt_str("resolution") == Some("low");
+    let tolerance = match p.opt_str("resolution") {
+        _ if p.has("tolerance") => {
+            let t = p.f64("tolerance")?;
+            if !(t.is_finite() && (0.001..=10.0).contains(&t)) {
+                return Err(EngineError::BadParams("the tolerance must be between 0.001 and 10 mm".into()));
+            }
+            Some(t)
+        }
+        Some("low") => Some(project::deflection() * 10.0),
+        _ => None,
+    };
+    // Looser triangles may also turn further from one to the next, tighter ones less.
+    let angle = |t: f64| (0.35 * (t / project::deflection()).sqrt()).clamp(0.1, 0.8);
     let colors = p.bool_or("colors", true);
     chosen_bodies(s, p)?
         .into_iter()
@@ -428,8 +440,10 @@ fn export_bodies<'a>(s: &'a Session, p: &Params) -> Result<Vec<formats::ExportBo
                 (Some(a), true) => (a.color, a.metal, a.gloss),
                 _ => ([0.7, 0.7, 0.72], 0.0, 0.3),
             };
-            let mesh =
-                if low && !b.is_mesh() { Arc::new(s.kernel.tessellate(&b.shape, project::deflection() * 10.0)?) } else { b.mesh.clone() };
+            let mesh = match tolerance {
+                Some(t) if !b.is_mesh() => Arc::new(s.kernel.mesh_within(&b.shape, t, angle(t))?),
+                _ => b.mesh.clone(),
+            };
             Ok(formats::ExportBody { name: &b.name, mesh, color, metal, gloss })
         })
         .collect()

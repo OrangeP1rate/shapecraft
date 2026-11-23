@@ -33,9 +33,34 @@ pub enum KernelError {
 
 pub type Result<T> = std::result::Result<T, KernelError>;
 
+/// What a failure the kernels only name technically means for the part.
+fn plain_text(op: &str, message: &str) -> Option<&'static str> {
+    let m = message.to_ascii_lowercase();
+    let vague = m.contains("failed") || m.contains("degenerate") || m.contains("invalid solid") || m.contains("(+");
+    if !vague || m.contains("time limit") || m.contains("cancel") || m.contains("geometry kernel failed") {
+        return None;
+    }
+    Some(match op {
+        "shell" => "The walls don't fit at this thickness.",
+        "fillet" | "variable fillet" => "This radius doesn't fit on those edges.",
+        "chamfer" => "This distance doesn't fit on those edges.",
+        "offset" => "The face can't move that far without breaking the body.",
+        "boolean" => "These bodies couldn't be combined. Moving one by a hair often helps.",
+        "sweep" => "The profile doesn't fit along this path. A gentler bend or a smaller profile may.",
+        "loft" => "These profiles couldn't be joined. Check that they don't cross each other.",
+        "revolve" => "This profile couldn't be turned into a body. Check that it doesn't cross the axis.",
+        "extrude" => "This profile couldn't be pulled into a body.",
+        "split" => "The body couldn't be split there.",
+        _ => return None,
+    })
+}
+
 /// "offset failed: …", unless the message already says what failed ("offset failed for this distance"), so a
 /// toast never reads "offset failed: offset failed for this distance".
 fn operation_text(op: &str, message: &str) -> String {
+    if let Some(plain) = plain_text(op, message) {
+        return plain.to_string();
+    }
     if message.to_ascii_lowercase().contains("failed") { message.to_string() } else { format!("{op} failed: {message}") }
 }
 
@@ -417,6 +442,13 @@ pub trait Kernel: Send + Sync {
     /// Triangulates for display. `deflection` is the maximum chord error in model units.
     fn tessellate(&self, shape: &Shape, deflection: f64) -> Result<Mesh>;
 
+    /// Triangulates for a file: at most `tolerance` off the exact surface, neighbouring triangles at most about `angle`
+    /// radians apart, whatever mesh the shape has for display.
+    fn mesh_within(&self, shape: &Shape, tolerance: f64, angle: f64) -> Result<Mesh> {
+        let _ = angle;
+        self.tessellate(shape, tolerance)
+    }
+
     fn face_count(&self, shape: &Shape) -> Result<u32>;
 
     /// The plane of a planar face, or `None` if the face is curved.
@@ -770,7 +802,11 @@ mod error_text_tests {
     #[test]
     fn a_failure_says_what_failed_once() {
         let doubled = KernelError::Operation { op: "offset", message: "offset failed for this distance".into() };
-        assert_eq!(doubled.to_string(), "offset failed for this distance");
+        assert_eq!(doubled.to_string(), "The face can't move that far without breaking the body.");
+        let odd = KernelError::Operation { op: "mirror", message: "mirror failed".into() };
+        assert_eq!(odd.to_string(), "mirror failed");
+        let stopped = KernelError::Operation { op: "offset", message: "stopped: it took longer than its time limit".into() };
+        assert!(stopped.to_string().contains("time limit"), "what the callers look for stays");
         let plain = KernelError::Operation { op: "fillet", message: "radius too large".into() };
         assert_eq!(plain.to_string(), "fillet failed: radius too large");
     }

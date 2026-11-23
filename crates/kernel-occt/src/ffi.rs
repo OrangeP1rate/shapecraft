@@ -30,7 +30,7 @@ unsafe extern "C" {
     /// The C runtime's immediate exit: no atexit handlers, no static destructors.
     pub fn _exit(status: i32) -> !;
     pub fn sk_bounds(s: *const SkShape, min: *mut f64, max: *mut f64) -> i32;
-    pub fn sk_tessellate(s: *const SkShape, deflection: f64, out: *mut *mut SkMesh) -> i32;
+    pub fn sk_tessellate(s: *const SkShape, deflection: f64, angle: f64, fresh: i32, out: *mut *mut SkMesh) -> i32;
     pub fn sk_mesh_free(m: *mut SkMesh);
     pub fn sk_mesh_positions_len(m: *const SkMesh) -> usize;
     pub fn sk_mesh_positions(m: *const SkMesh) -> *const f32;

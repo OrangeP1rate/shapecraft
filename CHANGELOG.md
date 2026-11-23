@@ -10,10 +10,16 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
 - **Extend** (Sketch ▸ Extend): click a line or an arc near an end and it grows to the next curve in its way; click again
   to go on to the one after. A ring shows where it will end. Return keeps it, Escape takes it all back.
 - **Trim cuts splines and ellipses.** What's left is a control-point spline on the same curve.
+- **Export ▸ Resolution ▸ Custom**: type how far the triangles may be off the real surface (STL, 3MF, OBJ, GLB and the
+  other mesh formats).
 ### Changed
+- **Failures say what's wrong in plain words** ("The walls don't fit at this thickness. Try 9.9 mm.") instead of the
+  kernel's own.
 - Trim and Extend show the curves alone, without fills and points in the way.
 - Construction curves are drawn dash and dot, round circles and arcs too. They could look solid before.
 - A typed arc radius reads "R 2 mm" at the arc, not a diameter across it.
+### Fixed
+- **Low resolution exports are low resolution.** They used to write the same triangles as High.
 
 ## 0.12.6-alpha
 **Everything moves now: popups grow in and out, the side columns slide.**

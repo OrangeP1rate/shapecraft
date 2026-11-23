@@ -155,7 +155,9 @@ pub struct ExportDialog {
     pub project_name: String,
     pub hidden: bool,
     pub separately: bool,
-    pub high: bool,
+    /// Mesh resolution: 0 Low, 1 High, 2 Custom (the tolerance as typed, in mm).
+    pub detail: usize,
+    pub tolerance: String,
     pub colors: bool,
     pub stl_ascii: bool,
     pub stl_units: usize,
@@ -192,7 +194,8 @@ impl ExportDialog {
             project_name: name.to_string(),
             hidden: false,
             separately: false,
-            high: true,
+            detail: 1,
+            tolerance: "0.05".into(),
             colors: true,
             stl_ascii: false,
             stl_units: 0,
@@ -223,6 +226,11 @@ impl ExportDialog {
         let dpi = self.svg_dpi.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0 && *v <= 10_000.0).unwrap_or(96.0);
         let res = self.svg_res.trim().parse::<f64>().ok().filter(|v| v.is_finite()).map_or(100.0, |v| v.clamp(0.0, 100.0));
         (dpi, res)
+    }
+
+    /// The mesh tolerance as typed, in mm (0.001–10, else 0.05).
+    pub fn mesh_tolerance(&self) -> f64 {
+        self.tolerance.trim().replace(',', ".").parse::<f64>().ok().filter(|v| v.is_finite()).map_or(0.05, |v| v.clamp(0.001, 10.0))
     }
 
     /// What an SVG export will draw, in words.
@@ -260,7 +268,10 @@ impl ExportDialog {
             f,
             Format::ThreeMf | Format::Slicer | Format::Stl | Format::Glb | Format::Obj | Format::Usdz | Format::Fbx | Format::Vrml
         ) {
-            p["resolution"] = serde_json::json!(if self.high { "high" } else { "low" });
+            p["resolution"] = serde_json::json!(if self.detail == 0 { "low" } else { "high" });
+            if self.detail == 2 {
+                p["tolerance"] = serde_json::json!(self.mesh_tolerance());
+            }
             p["colors"] = serde_json::json!(self.colors);
         }
         if f == Format::Step {
@@ -292,6 +303,22 @@ fn selected() -> Color32 {
 fn card(p: &egui::Painter, r: Rect) {
     p.rect_filled(r, radius(7), theme::c(0x212121));
     p.rect_stroke(r, radius(7), Stroke::new(1.0, theme::c(0x2a2a2a)), StrokeKind::Inside);
+}
+
+/// A small typed number at the right end of a row.
+fn number_field(ui: &mut Ui, p: &egui::Painter, right: f32, cy: f32, id: (&str, usize, usize), text: &mut String) {
+    let field = Rect::from_min_max(pos2(right - 136.0, cy - 9.0), pos2(right - 10.0, cy + 9.0));
+    p.rect_filled(field, radius(4), theme::c(0x2a2a2c));
+    p.rect_stroke(field, radius(4), Stroke::new(1.0, theme::c(0x3a3a3c)), StrokeKind::Inside);
+    let _ = ui.put(
+        field.shrink2(vec2(6.0, 1.0)),
+        egui::TextEdit::singleline(text)
+            .id(ui.scope_id().with(id))
+            .char_limit(8)
+            .frame(egui::Frame::NONE)
+            .font(theme::body(13.0))
+            .text_color(Tokens::text_strong()),
+    );
 }
 
 fn divider(p: &egui::Painter, r: Rect, y: f32) {
@@ -408,8 +435,17 @@ fn settings(d: &mut ExportDialog, ui: &mut Ui, p: &egui::Painter, f: Format, k: 
         if paint {
             card(p, r);
             label(p, r.left() + 10.0, r.center().y, "Resolution", None);
-            if let Some(i) = segmented(ui, p, r.right() - 8.0, r.center().y, ("exp-res", k), &["Low", "High"], usize::from(d.high)) {
-                d.high = i == 1;
+            if let Some(i) = segmented(ui, p, r.right() - 8.0, r.center().y, ("exp-res", k), &["Low", "High", "Custom"], d.detail) {
+                d.detail = i;
+            }
+        }
+        if d.detail == 2 {
+            let r = row(&mut y, 50.0);
+            if paint {
+                card(p, r);
+                let cy = r.center().y;
+                label(p, r.left() + 10.0, cy, "Tolerance (mm)", Some("How far the triangles may be off the real surface"));
+                number_field(ui, p, r.right(), cy, ("exp-tol", k, 0), &mut d.tolerance);
             }
         }
         let (text, sub) = match f {
@@ -453,19 +489,8 @@ fn settings(d: &mut ExportDialog, ui: &mut Ui, p: &egui::Painter, f: Format, k: 
             for (text, sub, i) in rows {
                 let cy = r.top() + 25.0 + 50.0 * i as f32;
                 label(p, r.left() + 10.0, cy, text, Some(sub));
-                let field = Rect::from_min_max(pos2(r.right() - 136.0, cy - 9.0), pos2(r.right() - 10.0, cy + 9.0));
-                p.rect_filled(field, radius(4), theme::c(0x2a2a2c));
-                p.rect_stroke(field, radius(4), Stroke::new(1.0, theme::c(0x3a3a3c)), StrokeKind::Inside);
                 let text = if i == 0 { &mut d.svg_dpi } else { &mut d.svg_res };
-                let _ = ui.put(
-                    field.shrink2(vec2(6.0, 1.0)),
-                    egui::TextEdit::singleline(text)
-                        .id(ui.scope_id().with(("exp-svg-num", k, i)))
-                        .char_limit(8)
-                        .frame(egui::Frame::NONE)
-                        .font(theme::body(13.0))
-                        .text_color(Tokens::text_strong()),
-                );
+                number_field(ui, p, r.right(), cy, ("exp-svg-num", k, i), text);
             }
             p.line_segment(
                 [pos2(r.left() + 10.0, r.center().y), pos2(r.right() - 10.0, r.center().y)],

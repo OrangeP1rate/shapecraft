@@ -196,6 +196,22 @@ fn mesh_and_iges_exports_round_trip() {
     assert!(s.execute("export_sketch", &json!({"path": path("bad.svg"), "dpi": 0})).is_err());
     // Options: ASCII STL in inches, low resolution, hidden bodies.
     s.execute("export_stl", &json!({"path": path("a.stl"), "ascii": true, "units": "in", "resolution": "low", "hidden": true})).unwrap();
+    // Low is coarser than High, a typed tolerance finer than either, and a later High isn't what Low left behind.
+    let mut round = session();
+    round.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    round.execute("circle", &json!({"center": [0, 0], "radius": 30})).unwrap();
+    round.execute("extrude", &json!({"sketch": 1, "region": 0, "distance": 20})).unwrap();
+    let mut triangles = |p: serde_json::Value| {
+        let mut p = p;
+        p["path"] = json!(path("r.stl"));
+        round.execute("export_stl", &p).map(|o| o.value["triangles"].as_u64().unwrap())
+    };
+    let high = triangles(json!({"resolution": "high"})).unwrap();
+    let low = triangles(json!({"resolution": "low"})).unwrap();
+    let fine = triangles(json!({"tolerance": 0.002})).unwrap();
+    assert!(low < high && high < fine, "{low} {high} {fine}");
+    assert_eq!(triangles(json!({"resolution": "high"})).unwrap(), high);
+    assert!(triangles(json!({"tolerance": 0})).is_err());
     let text = std::fs::read_to_string(dir.join("a.stl")).unwrap();
     assert!(text.starts_with("solid") && text.contains("vertex 0.787"), "20 mm = 0.787 in");
     assert!(s.execute("export_stl", &json!({"path": path("b.stl"), "units": "furlong"})).is_err());

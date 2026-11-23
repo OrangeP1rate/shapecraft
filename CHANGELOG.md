@@ -2,7 +2,7 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
-## 0.12.3-alpha
+## 0.12.4-alpha
 **Everything moves now: popups grow in and out, the side columns slide.**
 ### Changed
 - **Popups open and close with motion.** Every menu, popover, card, toast and sheet grows out of the spot that
@@ -19,7 +19,8 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
 - **The camera settles.** View changes, the view cube, Zoom to Fit and turning to a sketch plane run a hair past
   and settle, and the grid fades in going into a sketch and away leaving it.
 - **Values pop onto the view.** Value pills and dimension boxes pop in from a little small, and a menu's rows come
-  in one after another as it opens.
+  in one after another as it opens. The window menus (File, Edit, …) move about two and a half times faster than
+  other popups, since they're opened often and in quick succession.
 - **Lists glide.** History and Items rows slide to their new places when steps or items come and go, and a new
   message pushes the older ones up instead of jumping them.
 - **Undo and Redo show what changed.** The bodies they change light up pale blue for a moment and fade back.

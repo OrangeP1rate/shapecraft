@@ -955,6 +955,7 @@ impl WindowMenu {
     }
 
     fn entries(&mut self, ui: &mut egui::Ui, entries: &[Entry]) {
+        crate::motion::quick(ui);
         for e in entries {
             match e {
                 Entry::Item { label, accel, action, when } => {

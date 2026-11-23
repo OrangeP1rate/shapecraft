@@ -50,6 +50,9 @@ const LIFT: [f32; 4] = [0.6, 0.0, 1.0, 1.0];
 const OPENED_BY_S: f64 = 0.6;
 /// At most this many closing popups in flight (a burst of them is a swap, not a show).
 const MAX_GHOSTS: usize = 8;
+/// The window menus (File, Edit, …) open and close this many times faster than other popups: they're opened often
+/// and in quick succession, so the full growth reads as sluggish there.
+const QUICK_PACE: f64 = 2.5;
 
 /// The columns: a spring for coming in (rad/s, damping ratio: about 3 % overshoot, a few points, settled in 0.4 s).
 const SPRING_W: f32 = 21.0;
@@ -151,6 +154,8 @@ fn system_reduce_motion() -> bool {
 #[derive(Clone)]
 struct Pop {
     born: f64,
+    /// How many times faster than usual it opens and closes (1 for most popups, `QUICK_PACE` for menus).
+    pace: f64,
     /// The point it grows out of and goes back into (the layer's own coordinates).
     origin: Pos2,
     card: Rect,
@@ -162,6 +167,7 @@ struct Pop {
 struct Ghost {
     layer: LayerId,
     start: f64,
+    pace: f64,
     /// How grown and how opaque it was when it closed (it may close before it finished opening).
     scale: f32,
     alpha: f32,
@@ -221,6 +227,8 @@ struct Motion {
     screen_ghost: Option<(f64, Vec<ClippedShape>, bool)>,
     /// Tooltip-order areas that are popups (asked for each frame by `include`).
     extra: HashSet<LayerId>,
+    /// Popups that asked this frame to move quickly (`quick`).
+    quick: HashSet<LayerId>,
     /// Buttons squashing under a press or springing back: held, since when, from what scale.
     presses: HashMap<Id, (bool, f64, f32)>,
     /// Labels on the view (value pills, dimension boxes) by kind and their order this frame: how many drawn this
@@ -249,6 +257,14 @@ fn key() -> Id {
 
 fn with<R>(ctx: &Context, f: impl FnOnce(&mut Motion) -> R) -> R {
     ctx.data_mut(|d| f(d.get_temp_mut_or_default::<Motion>(key())))
+}
+
+/// A popup that opens and closes quickly (a window menu or its submenu): call from inside it each frame.
+pub fn quick(ui: &egui::Ui) {
+    let layer = ui.layer_id();
+    with(ui.ctx(), |m| {
+        m.quick.insert(layer);
+    });
 }
 
 /// A tooltip-order area that is really a popup (a dropdown list, a submenu): it opens and closes like the rest.
@@ -420,6 +436,7 @@ pub fn finish(ctx: &Context) {
         m.pops.clear();
         m.ghosts.clear();
         m.extra.clear();
+        m.quick.clear();
         ctx.data_mut(|d| d.insert_temp(key(), m));
         return;
     }
@@ -463,12 +480,13 @@ pub fn finish(ctx: &Context) {
         if m.ghosts.len() >= MAX_GHOSTS || pop.shapes.is_empty() {
             continue;
         }
-        let (scale, alpha, veil_alpha) = opening(now - pop.born, pop.card);
+        let (scale, alpha, veil_alpha) = opening((now - pop.born) * pop.pace, pop.card);
         // Its own layer, named after the popup's, so a reopening finds it.
         m.ghosts.retain(|g| g.layer != ghost_layer(layer));
         m.ghosts.push(Ghost {
             layer: ghost_layer(layer),
             start: now,
+            pace: pop.pace,
             scale,
             alpha,
             veil_alpha,
@@ -483,17 +501,18 @@ pub fn finish(ctx: &Context) {
     for (layer, shapes) in drawn {
         let card = card_of(&shapes, screen).unwrap_or_else(|| Rect::from_center_size(screen.center(), vec2(2.0, 2.0)));
         let veiled = shapes.iter().any(|s| is_veil(&s.shape, screen));
+        let pace = if m.quick.contains(&layer) { QUICK_PACE } else { 1.0 };
         if !m.pops.contains_key(&layer) {
             // Reopened while still closing: it grows back from as far as it had shrunk.
             let ghost_at = m.ghosts.iter().position(|g| g.layer == ghost_layer(layer));
             let mut born = now;
             if let Some(i) = ghost_at {
                 let g = m.ghosts.remove(i);
-                let (left, _) = closing(now - g.start, g.scale, g.card);
-                born = now - OPEN_S * f64::from(left.clamp(0.0, 1.0)) * 0.5;
+                let (left, _) = closing((now - g.start) * g.pace, g.scale, g.card);
+                born = now - OPEN_S * f64::from(left.clamp(0.0, 1.0)) * 0.5 / pace;
             }
             if settled_births.contains(&layer) {
-                born = now - OPENED_S;
+                born = now - OPENED_S / pace;
             }
             let origin = match recent {
                 Some(p) if !veiled => {
@@ -502,12 +521,13 @@ pub fn finish(ctx: &Context) {
                 }
                 _ => card.center(),
             };
-            m.pops.insert(layer, Pop { born, origin, card, shapes: Vec::new() });
+            m.pops.insert(layer, Pop { born, pace, origin, card, shapes: Vec::new() });
         }
         let Some(pop) = m.pops.get_mut(&layer) else { continue };
         pop.card = card;
         pop.shapes = shapes;
-        let t = now - pop.born;
+        pop.pace = pace;
+        let t = (now - pop.born) * pace;
         if t >= OPENED_S {
             continue;
         }
@@ -534,10 +554,10 @@ pub fn finish(ctx: &Context) {
     }
 
     // Popups on their way out.
-    m.ghosts.retain(|g| now - g.start < CLOSED_S);
+    m.ghosts.retain(|g| (now - g.start) * g.pace < CLOSED_S);
     for g in &m.ghosts {
         moving = true;
-        let (scale, lift) = closing(now - g.start, g.scale, g.card);
+        let (scale, lift) = closing((now - g.start) * g.pace, g.scale, g.card);
         ctx.graphics_mut(|gr| {
             let list = gr.entry(g.layer);
             for s in &g.shapes {
@@ -552,6 +572,7 @@ pub fn finish(ctx: &Context) {
             }
         });
     }
+    m.quick.clear();
     if moving || m.columns.values().any(|c| c.enter.is_some() || c.exit.is_some()) {
         ctx.request_repaint();
     }

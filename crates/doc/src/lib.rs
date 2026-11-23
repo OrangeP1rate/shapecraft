@@ -12,6 +12,7 @@ pub mod constraints;
 pub mod date;
 pub mod expr;
 mod sketch;
+mod sketch_curve;
 pub mod sketch_ops;
 pub mod text;
 pub use constraints::{Along, Constraint, Element};

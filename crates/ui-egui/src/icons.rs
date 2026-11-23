@@ -37,8 +37,11 @@ pub enum Icon {
     Circle,
     Ellipse,
     Polygon,
+    Slot,
+    Extend,
     /// Tool variants (the cascades beside Rectangle, Polygon, Spline, Offset Edge, Pattern).
     RectCenter,
+    SlotCenter,
     Rect3,
     Triangle,
     Hexagon,
@@ -646,6 +649,27 @@ fn paint_dark(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
         Polygon => {
             pen.solid(&ring(12.0, 12.5, 8.5, 8.5, 5, -90.0), &[(12.0, 12.5)]);
             sketch_dots(&pen, color, &[(17.0, 19.4)]);
+        }
+        // A slot's outline with its center line (or its middle) marked.
+        Slot | SlotCenter => {
+            let arc = |x: f32, from: f32| {
+                (0..=10).map(move |k| {
+                    let t = (from + 180.0 * k as f32 / 10.0).to_radians();
+                    (x + 5.0 * t.cos(), 12.0 + 5.0 * t.sin())
+                })
+            };
+            let outline: Vec<(f32, f32)> = arc(15.5, -90.0).chain(arc(8.5, 90.0)).collect();
+            let dots: &[(f32, f32)] = if icon == Slot { &[(8.5, 12.0), (15.5, 12.0)] } else { &[(12.0, 12.0), (15.5, 12.0)] };
+            pen.solid(&outline, &[]);
+            sketch_dots(&pen, color, dots);
+        }
+        // Extend: a line running on, dotted, to an upright one.
+        Extend => {
+            pen.line(&[(19.5, 5.0), (19.5, 19.0)]);
+            pen.line(&[(3.5, 12.0), (11.0, 12.0)]);
+            for x in [12.8f32, 16.0] {
+                pen.line(&[(x, 12.0), (x + 1.6, 12.0)]);
+            }
         }
         // Sketch Move/Rotate: a dashed square with arrows up and right out of it.
         SketchMove => {

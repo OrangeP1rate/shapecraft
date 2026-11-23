@@ -53,7 +53,8 @@ impl Workspace {
         }
         self.variants.insert(key.to_string(), i);
         // An armed drawing tool of the same kind restarts as the new type (its key would cycle it instead).
-        if matches!(self.tool, Tool::Rectangle { .. } | Tool::Rect3 { .. } | Tool::Polygon { .. } | Tool::Spline { .. }) {
+        if matches!(self.tool, Tool::Rectangle { .. } | Tool::Rect3 { .. } | Tool::Polygon { .. } | Tool::Slot { .. } | Tool::Spline { .. })
+        {
             self.tool = Tool::Idle;
         }
         self.start_tool(kind);
@@ -187,6 +188,7 @@ impl Workspace {
             | ToolKind::Rectangle
             | ToolKind::Circle
             | ToolKind::Polygon
+            | ToolKind::Slot
             | ToolKind::Arc
             | ToolKind::Ellipse
             | ToolKind::Spline => {
@@ -605,6 +607,24 @@ impl Workspace {
                     self.tool = Tool::Trim { target: None };
                 } else {
                     self.await_selection(ToolKind::Trim, "Select the parts of sketch curves between crossings to trim them away");
+                }
+            }
+            ToolKind::Extend => {
+                let curve = self.session.selection.iter().find_map(|p| match *p {
+                    Pick::SketchEntity { sketch, .. } => Some(sketch),
+                    _ => None,
+                });
+                if self.session.active_sketch.is_none()
+                    && let Some(sk) = curve
+                {
+                    self.open_sketch_in_place(sk);
+                }
+                if self.session.active_sketch.is_some() {
+                    self.remember("extend");
+                    self.session.selection.clear();
+                    self.tool = Tool::Extend { target: None, from: self.session.undo_depth() };
+                } else {
+                    self.toast("Open a sketch to extend its lines and arcs");
                 }
             }
             ToolKind::OffsetEdge

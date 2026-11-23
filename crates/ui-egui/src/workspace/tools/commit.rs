@@ -350,6 +350,21 @@ impl Workspace {
                     }
                 }
             }
+            // Slot: the typed length places the second center the way the pointer aims; the typed radius finishes it.
+            Tool::Slot { middle, a: Some(a), b: None, .. } => {
+                if let (Some(v), Some(cursor)) = (typed.filter(|v| v.abs() > 1e-6), self.sketch_cursor()) {
+                    let reach = if middle { v.abs() / 2.0 } else { v.abs() };
+                    let b = a + (cursor - a).normalize_or(DVec2::X) * reach;
+                    self.tool = Tool::Slot { middle, a: Some(a), b: Some(b), length: Some(v.abs()) };
+                }
+            }
+            Tool::Slot { middle, a: Some(a), b: Some(b), length } => {
+                if let Some(r) = typed {
+                    self.add_slot(middle, a, b, r.abs(), length, true);
+                }
+            }
+            // Return keeps what Extend grew.
+            Tool::Extend { .. } => self.tool = Tool::Idle,
             Tool::Rect3 { a: Some(a), b: Some(b) } => {
                 if let (Some(v), Some(cursor)) = (typed, self.sketch_cursor()) {
                     let n = (b - a).perp().normalize_or_zero();
@@ -588,6 +603,32 @@ impl Workspace {
         if let Some(v) = self.run("rectangle", json!({ "points": [[a.x, a.y], [b.x, b.y], [c.x, c.y]] })) {
             self.select_new_entity(&v);
             self.tool = Tool::Rect3 { a: None, b: None };
+        }
+    }
+
+    /// A slot from its two centers (or its middle and one). Typed sizes stay as dimensions.
+    pub(in crate::workspace) fn add_slot(&mut self, middle: bool, a: DVec2, b: DVec2, r: f64, length: Option<f64>, typed_radius: bool) {
+        if r < 1e-6 {
+            return;
+        }
+        let first = if middle { "middle" } else { "a" };
+        if let Some(v) = self.run("slot", json!({ first: [a.x, a.y], "b": [b.x, b.y], "radius": r })) {
+            self.select_new_entity(&v);
+            self.tool = Tool::Slot { middle, a: None, b: None, length: None };
+            if let Some(len) = length {
+                // The center line: the one whose middle is the slot's.
+                let m = if middle { a } else { (a + b) / 2.0 };
+                self.drive("distance", len, |e| match e {
+                    SketchEntity::Line { a, b } => -((*a + *b) / 2.0).distance(m),
+                    _ => f64::NEG_INFINITY,
+                });
+            }
+            if typed_radius {
+                self.drive("radius", r, |e| if matches!(e, SketchEntity::Arc { .. }) { 0.0 } else { f64::NEG_INFINITY });
+            }
+            // Nothing stays picked: five curves' sizes at once would hide the slot.
+            self.session.selection.clear();
+            self.just_drawn.clear();
         }
     }
 

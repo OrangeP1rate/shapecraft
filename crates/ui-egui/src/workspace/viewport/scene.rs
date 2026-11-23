@@ -7,7 +7,7 @@ use glam::{DVec2, DVec3};
 use shapecraft_doc::{Pick, SketchEntity};
 use shapecraft_render::{Overlay, Rgba, SceneColors};
 
-use super::snap::ellipse_minor;
+use super::snap::{ellipse_minor, slot_ends, slot_radius};
 use crate::workspace::Workspace;
 use crate::workspace::tools::Tool;
 
@@ -238,6 +238,42 @@ impl Workspace {
                     out.push(Overlay::Dot { p: pl.to_world(*p), color: Rgba::hex(0x2e68ff), size: 5.0 });
                 }
             }
+            (Tool::Slot { middle, a: Some(a), b, .. }, Some(pl), Some((c, _))) => {
+                let blue = Rgba::hex(0x2e68ff);
+                let mut line = |p: DVec2, q: DVec2| {
+                    out.push(Overlay::Line { a: pl.to_world(p), b: pl.to_world(q), color: preview, width: 2.0 });
+                };
+                let (p, q) = slot_ends(*middle, *a, b.unwrap_or(c));
+                let mut dots = vec![p, q];
+                match b {
+                    // First just the center line, solid; then the slot round it, the line dash-dotted.
+                    None => line(p, q),
+                    Some(b) => {
+                        let (d, r) = ((q - p).normalize_or_zero(), slot_radius(*a, *b, c));
+                        let n = d.perp() * r;
+                        for arc in [(q + n, q + d * r, q - n), (p - n, p - d * r, p + n)] {
+                            for w in shapecraft_doc::arc_points(arc.0, arc.1, arc.2, 32).windows(2) {
+                                line(w[0], w[1]);
+                            }
+                        }
+                        line(p + n, q + n);
+                        line(q - n, p - n);
+                        dots.extend([p + n, q + n, q - n, p - n]);
+                        let len = p.distance(q);
+                        let dash = self.camera.world_per_pixel(self.size().y) * 14.0;
+                        let (mut at, mut k) = (0.0, 0);
+                        while at < len && k < 400 {
+                            let step = if k % 2 == 0 { dash } else { dash * 0.15 };
+                            line(p + d * at, p + d * (at + step).min(len));
+                            at += step + dash * 0.45;
+                            k += 1;
+                        }
+                    }
+                }
+                for p in dots {
+                    out.push(Overlay::Dot { p: pl.to_world(p), color: blue, size: 5.0 });
+                }
+            }
             (Tool::Polygon { center: Some(ctr) }, Some(pl), Some((c, _))) => {
                 let r = ctr.distance(c);
                 if r > 0.0 {
@@ -392,6 +428,19 @@ impl Workspace {
         {
             for w in gone.outline().windows(2) {
                 out.push(Overlay::Line { a: sk.plane.to_world(w[0]), b: sk.plane.to_world(w[1]), color: Rgba::hex(0xd0861a), width: 2.0 });
+            }
+        }
+        // Extend: the curve it would grow, and a ring where it would end.
+        if let (Tool::Extend { target: Some((i, at)), .. }, Some(sk)) = (&self.tool, self.session.active_sketch())
+            && let Some(e) = sk.entities.get(*i as usize)
+        {
+            let orange = Rgba::hex(0xd0861a);
+            for w in e.outline().windows(2) {
+                out.push(Overlay::Line { a: sk.plane.to_world(w[0]), b: sk.plane.to_world(w[1]), color: orange, width: 2.0 });
+            }
+            if let Ok(x) = shapecraft_doc::sketch_ops::extend(&sk.entities, *i as usize, *at) {
+                out.push(Overlay::Dot { p: sk.plane.to_world(x.to), color: orange.with_alpha(170), size: 18.0 });
+                out.push(Overlay::Dot { p: sk.plane.to_world(x.to), color: Rgba::hex(0x2e2e33), size: 8.0 });
             }
         }
         // A live fillet or chamfer keeps its edges drawn picked where they were: they're gone

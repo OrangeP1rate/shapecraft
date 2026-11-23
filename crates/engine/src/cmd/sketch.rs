@@ -143,6 +143,28 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             },
         },
         CommandSpec {
+            id: "slot",
+            label: "Slot",
+            menu: "Sketch/Slot",
+            shortcut: None,
+            help: "Click the two end centers (or the middle and one end), then pull out the radius",
+            params: r#"{"a":[u,v], "b":[u,v], "radius": r}  (the two end centers) | {"middle":[u,v], "b":[u,v], "radius": r}  (two lines and two arcs, with a construction line between the centers)"#,
+            modifies: true,
+            enabled: in_sketch,
+            run: slot,
+        },
+        CommandSpec {
+            id: "extend",
+            label: "Extend",
+            menu: "Sketch/Extend",
+            shortcut: None,
+            help: "Click a line or an arc near an end: it grows to the next curve in its way",
+            params: r#"{"entity": n, "at": [u,v], "sketch": id?}  (the end nearer to the point; the other one when nothing lies beyond it)"#,
+            modifies: true,
+            enabled: in_sketch,
+            run: extend,
+        },
+        CommandSpec {
             id: "arc",
             label: "Arc",
             menu: "Sketch/Arc",
@@ -878,6 +900,88 @@ fn add_lines(s: &mut Session, p: &Params, lines: [SketchEntity; 4]) -> Result<Va
         entities.push(v["entity"].clone());
     }
     Ok(json!({ "sketch": sketch, "entity": entities[0], "entities": entities }))
+}
+
+/// Two lines and two arcs around a construction line, held together: ends joined, sides tangent, arcs equal and
+/// centered on the line's ends, which is level or upright if it was drawn so.
+fn slot(s: &mut Session, p: &Params) -> Result<Value> {
+    use shapecraft_doc::{Constraint as C, Element as El};
+    let b = p.vec2("b")?;
+    let a = if p.has("middle") { p.vec2("middle")? * 2.0 - b } else { p.vec2("a")? };
+    let r = p.f64("radius")?;
+    let Some(d) = (b - a).try_normalize().filter(|_| a.is_finite() && b.is_finite() && a.distance(b) > 1e-6) else {
+        return Err(EngineError::BadParams("a slot's two centers can't be in one place".into()));
+    };
+    if !(r.is_finite() && r > 1e-6 && r < 1e6) {
+        return Err(EngineError::BadParams("a slot's radius must be a positive number".into()));
+    }
+    let n = d.perp() * r;
+    let curves = [
+        SketchEntity::Line { a: a + n, b: b + n },
+        SketchEntity::Arc { a: b + n, mid: b + d * r, b: b - n },
+        SketchEntity::Line { a: b - n, b: a - n },
+        SketchEntity::Arc { a: a - n, mid: a - d * r, b: a + n },
+        SketchEntity::Line { a, b },
+    ];
+    let mut e = Vec::new();
+    let mut sketch = Value::Null;
+    for c in curves {
+        let v = add_entity(s, p, c)?;
+        sketch = v["sketch"].clone();
+        e.extend(v["entity"].as_u64().and_then(|n| u32::try_from(n).ok()));
+    }
+    let (Some(id), &[top, right, bottom, left, middle]) = (sketch.as_u64(), e.as_slice()) else {
+        return Err(EngineError::BadParams("the slot couldn't be drawn".into()));
+    };
+    let sk = s.doc.sketch_mut(ItemId(id)).ok_or_else(|| EngineError::BadParams(format!("no sketch {id}")))?;
+    sk.construction.insert(middle);
+    let point = |entity, index| El::Point { entity, index };
+    let side = |entity| El::Segment { entity, index: 0 };
+    let round = |entity| El::Curve { entity };
+    for (x, y) in [(top, right), (right, bottom), (bottom, left), (left, top)] {
+        sk.constraints.push(C::Coincident { a: point(x, 1), b: point(y, 0) });
+    }
+    for (x, y) in [(top, right), (bottom, right), (bottom, left), (top, left)] {
+        sk.constraints.push(C::Tangent { a: side(x), b: round(y), inside: false });
+    }
+    sk.constraints.push(C::Equal { a: round(right), b: round(left) });
+    sk.constraints.push(C::Coincident { a: point(middle, 0), b: point(left, 2) });
+    sk.constraints.push(C::Coincident { a: point(middle, 1), b: point(right, 2) });
+    if d.y.abs() < 1e-9 {
+        sk.constraints.push(C::Horizontal { a: side(middle) });
+    } else if d.x.abs() < 1e-9 {
+        sk.constraints.push(C::Vertical { a: side(middle) });
+    }
+    Ok(json!({ "sketch": id, "entity": top, "entities": e }))
+}
+
+fn extend(s: &mut Session, p: &Params) -> Result<Value> {
+    use shapecraft_doc::{Constraint as C, Element as El, constraints, sketch_ops};
+    let id = target_sketch(s, p)?;
+    let entity = p.f64("entity")?;
+    let at: [f64; 2] = p.parse("at")?;
+    if !entity.is_finite() || entity < 0.0 || !at.iter().all(|v| v.is_finite()) {
+        return Err(EngineError::BadParams("extend needs a curve index and a finite point".into()));
+    }
+    let index = entity as usize;
+    let sketch = s.doc.sketch_mut(id).ok_or_else(|| EngineError::BadParams(format!("no sketch {}", id.0)))?;
+    let out = sketch_ops::extend(&sketch.entities, index, glam::DVec2::from_array(at)).map_err(|m| EngineError::NotAvailable(m.into()))?;
+    let on = sketch_ops::lies_on(&sketch.entities, index, out.to);
+    let end = El::Point { entity: index as u32, index: out.end };
+    if let Some(e) = sketch.entities.get_mut(index) {
+        *e = out.curve;
+    }
+    // What held the old end goes, and so do the sizes that don't fit any more; the new end stays on what it reached.
+    let entities = &sketch.entities;
+    sketch.constraints.retain(|c| {
+        let mine = c.entities().contains(&(index as u32));
+        !mine || (!c.elements().contains(&end) && constraints::residuals(entities, c).is_some_and(|r| r.iter().all(|v| v.abs() < 1e-5)))
+    });
+    if let Some(b) = on {
+        sketch.constraints.push(C::Coincident { a: end, b });
+    }
+    s.selection.retain(|pk| !matches!(pk, Pick::SketchEntity { sketch, .. } if *sketch == id));
+    Ok(json!({ "sketch": id.0, "entity": index, "to": out.to.to_array() }))
 }
 
 fn trim(s: &mut Session, p: &Params) -> Result<Value> {

@@ -66,9 +66,13 @@ Polygon - Triangle|
 Polygon - Pentagon|
 Polygon - Hexagon|
 Polygon - Octagon|
+Slot - Recent|
+Slot - Center to Center|
+Slot - Center Point|
 Offset Edge - Recent|
 Offset Edge - Single|
 Offset Edge - Chain|
+Extend|
 Move/Rotate|
 Mirror|
 Pattern - Recent|

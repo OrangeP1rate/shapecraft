@@ -2,6 +2,19 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.12.7-alpha
+**Slot and Extend, and Trim on every curve.**
+### New
+- **Slot** (Sketch ▸ Slot): click the two end centers, or the middle and one end, then pull out the radius. Type the length
+  and the radius and they stay as dimensions. It's held together, so the sides stay tangent and the ends round.
+- **Extend** (Sketch ▸ Extend): click a line or an arc near an end and it grows to the next curve in its way; click again
+  to go on to the one after. A ring shows where it will end. Return keeps it, Escape takes it all back.
+- **Trim cuts splines and ellipses.** What's left is a control-point spline on the same curve.
+### Changed
+- Trim and Extend show the curves alone, without fills and points in the way.
+- Construction curves are drawn dash and dot, round circles and arcs too. They could look solid before.
+- A typed arc radius reads "R 2 mm" at the arc, not a diameter across it.
+
 ## 0.12.6-alpha
 **Everything moves now: popups grow in and out, the side columns slide.**
 ### New

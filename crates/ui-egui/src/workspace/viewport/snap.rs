@@ -175,6 +175,7 @@ impl Workspace {
             | Tool::Circle { center: Some(a) }
             | Tool::Polygon { center: Some(a) }
             | Tool::Rect3 { a: Some(a), .. } => keys.push(a),
+            Tool::Slot { a, b, .. } => keys.extend(a.into_iter().chain(b)),
             Tool::Arc { a, b } => keys.extend(a.into_iter().chain(b)),
             Tool::Ellipse { center: Some(c), major } => keys.extend(std::iter::once(c).chain(major)),
             Tool::Spline { ref points, .. } => keys.extend(points.iter().copied()),
@@ -436,6 +437,16 @@ pub(super) fn seg_dist(p: DVec2, a: DVec2, b: DVec2) -> (f64, f64) {
     let l2 = ab.length_squared();
     let t = if l2 > 0.0 { ((p - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
     ((a + ab * t).distance(p), t)
+}
+
+/// A slot's two end centers: as clicked, or the second one and its mirror through the middle.
+pub(super) fn slot_ends(middle: bool, a: DVec2, b: DVec2) -> (DVec2, DVec2) {
+    if middle { (a * 2.0 - b, b) } else { (a, b) }
+}
+
+/// A slot's radius: the cursor's distance from its center line.
+pub(super) fn slot_radius(a: DVec2, b: DVec2, cursor: DVec2) -> f64 {
+    ellipse_minor(a, b, cursor)
 }
 
 /// The other half-axis of an ellipse with center `c` and first axis end `m`: the cursor's distance from that axis.

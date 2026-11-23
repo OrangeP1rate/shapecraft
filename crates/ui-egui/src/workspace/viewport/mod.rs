@@ -204,6 +204,7 @@ impl Workspace {
             drawn: if self.session.selection == self.just_drawn { &self.just_drawn } else { &[] },
             defined: &defined,
             boxing: boxed.is_some(),
+            bare: matches!(self.tool, Tool::Trim { .. } | Tool::Extend { .. }),
         };
         let texture = self.gpu.draw(ui.ctx(), render_state, &scene, &self.camera, px);
         match texture {

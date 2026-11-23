@@ -387,6 +387,7 @@ impl Server {
                     drawn: &[],
                     defined: &[],
                     boxing: false,
+                    bare: false,
                 };
                 r.render(&scene, &camera, size).map_err(|e| e.to_string())?;
                 let (w, h, px) = r.read_pixels().map_err(|e| e.to_string())?;

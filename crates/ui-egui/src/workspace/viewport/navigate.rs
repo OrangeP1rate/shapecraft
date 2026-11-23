@@ -178,15 +178,24 @@ impl Workspace {
                     None
                 };
             }
-            Tool::Trim { .. } => {
+            Tool::Trim { .. } | Tool::Extend { .. } => {
                 let found = match self.pick_at(c) {
                     Some((Pick::SketchEntity { sketch, entity }, hit)) if Some(sketch) == self.session.active_sketch => {
                         self.sketch_plane().map(|pl| (entity, pl.to_local(hit)))
                     }
                     _ => None,
                 };
-                if let Tool::Trim { target } = &mut self.tool {
-                    *target = found;
+                let extends = |e: u32| {
+                    self.session
+                        .active_sketch()
+                        .and_then(|sk| sk.entities.get(e as usize))
+                        .is_some_and(|e| matches!(e, shapecraft_doc::SketchEntity::Line { .. } | shapecraft_doc::SketchEntity::Arc { .. }))
+                };
+                let grows = found.filter(|(e, _)| extends(*e));
+                match &mut self.tool {
+                    Tool::Trim { target } => *target = found,
+                    Tool::Extend { target, .. } => *target = grows,
+                    _ => {}
                 }
                 self.hover = None;
             }

@@ -267,7 +267,7 @@ impl Workspace {
                     painter.add(egui::Shape::convex_polygon(vec![tip + d * 3.0 * s, tip + n * 4.0, tip - n * 4.0], col, Stroke::NONE));
                 }
                 let text = format!("R {}", format_length(r, self.session.doc.units));
-                leader_dim(&painter, sm + n * 40.0, sm + n * 14.0, &text, self.numeric.as_deref());
+                leader_dim(&painter, sm + n * 40.0, sm + n * 14.0, &text, self.numeric.as_deref(), true);
                 let _ = n;
                 let (pressed, down, released) =
                     ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.primary_released()));

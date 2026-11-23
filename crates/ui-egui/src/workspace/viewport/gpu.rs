@@ -233,6 +233,7 @@ impl Workspace {
             drawn: &[],
             defined: &[],
             boxing: false,
+            bare: false,
         };
         let camera = self.camera;
         self.gpu.thumbnail(&scene, &camera, px).ok_or_else(|| "the view couldn't be rendered".to_string())

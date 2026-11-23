@@ -37,6 +37,14 @@ pub enum Tool {
     Polygon {
         center: Option<DVec2>,
     },
+    /// Slot: the first end's center (or the middle), then the other end's center, then the cursor sets the radius.
+    /// `length`: the center line's length as typed, kept as a dimension.
+    Slot {
+        middle: bool,
+        a: Option<DVec2>,
+        b: Option<DVec2>,
+        length: Option<f64>,
+    },
     /// Start, then end; the cursor bends it until the third click.
     Arc {
         a: Option<DVec2>,
@@ -79,6 +87,12 @@ pub enum Tool {
     /// The sketch curve under the cursor and where on it (sketch coordinates).
     Trim {
         target: Option<(u32, DVec2)>,
+    },
+    /// The line or arc under the cursor and where on it; `from`: how many undo steps there were when it started (Escape
+    /// goes back there).
+    Extend {
+        target: Option<(u32, DVec2)>,
+        from: usize,
     },
     OffsetEdge(OffsetEdgeTool),
     RotateAxis(RotateAxisTool),
@@ -1230,6 +1244,7 @@ impl Tool {
             ToolKind::Rectangle => Tool::Rectangle { first: None },
             ToolKind::Circle => Tool::Circle { center: None },
             ToolKind::Polygon => Tool::Polygon { center: None },
+            ToolKind::Slot => Tool::Slot { middle: false, a: None, b: None, length: None },
             ToolKind::Arc => Tool::Arc { a: None, b: None },
             ToolKind::Ellipse => Tool::Ellipse { center: None, major: None },
             ToolKind::Spline => Tool::Spline { points: Vec::new(), control: false },
@@ -1245,6 +1260,7 @@ impl Tool {
                 | Tool::Rect3 { .. }
                 | Tool::Circle { .. }
                 | Tool::Polygon { .. }
+                | Tool::Slot { .. }
                 | Tool::Arc { .. }
                 | Tool::Ellipse { .. }
                 | Tool::Spline { .. }
@@ -1262,6 +1278,7 @@ impl Tool {
             Tool::Polygon { center: Some(_) } => Tool::Polygon { center: None },
             Tool::Arc { a, b } if a.is_some() || b.is_some() => Tool::Arc { a: None, b: None },
             Tool::Ellipse { center, major } if center.is_some() || major.is_some() => Tool::Ellipse { center: None, major: None },
+            Tool::Slot { middle, a, b, .. } if a.is_some() || b.is_some() => Tool::Slot { middle: *middle, a: None, b: None, length: None },
             Tool::Rect3 { a, b } if a.is_some() || b.is_some() => Tool::Rect3 { a: None, b: None },
             Tool::Spline { points, control } if !points.is_empty() => Tool::Spline { points: Vec::new(), control: *control },
             _ => return None,
@@ -1273,6 +1290,7 @@ impl Tool {
             Tool::Line { last, .. } => last.is_some(),
             Tool::Rectangle { first } => first.is_some(),
             Tool::Rect3 { b, .. } => b.is_some(),
+            Tool::Slot { a, .. } => a.is_some(),
             Tool::Circle { center } | Tool::Polygon { center } => center.is_some(),
             Tool::Ellipse { center, .. } => center.is_some(),
             Tool::Arc { .. } | Tool::Spline { .. } => false,
@@ -1287,6 +1305,7 @@ impl Tool {
             | Tool::Loft(_)
             | Tool::Sweep(_)
             | Tool::Trim { .. }
+            | Tool::Extend { .. }
             | Tool::Plane3 { .. }
             | Tool::Axis2 { .. }
             | Tool::PointPlane { .. }
@@ -1314,6 +1333,15 @@ impl Tool {
             Tool::Rect3 { .. } => ("Rectangle (R)", "Click both ends of one side, then pull out the width. Type to set it"),
             Tool::Circle { .. } => ("Circle (C)", "Click the center, then the rim. Type to set the radius"),
             Tool::Polygon { .. } => ("Polygon (G)", "Click the center, then a corner. Type to set the size"),
+            Tool::Slot { middle: false, .. } => {
+                ("Slot", "Click the two end centers, then pull out the radius. Type to set the length and the radius")
+            }
+            Tool::Slot { .. } => {
+                ("Slot", "Click the middle, then one end's center, then pull out the radius. Type to set the length and the radius")
+            }
+            Tool::Extend { .. } => {
+                ("Extend", "Click a line or an arc near an end to grow it to the next curve. Return keeps it; Escape takes it all back.")
+            }
             Tool::Arc { .. } => {
                 ("3-Point Arc (A)", "Click the two ends of the arc, then a third point to shape the curve. Return finishes it.")
             }

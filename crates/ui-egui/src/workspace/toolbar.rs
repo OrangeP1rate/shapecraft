@@ -33,6 +33,8 @@ pub enum ToolKind {
     Shell,
     Revolve,
     Polygon,
+    /// Two round ends and two straight sides.
+    Slot,
     Arc,
     Move,
     Mirror,
@@ -45,6 +47,8 @@ pub enum ToolKind {
     Loft,
     Sweep,
     Trim,
+    /// Lines and arcs grown to the next curve.
+    Extend,
     OffsetEdge,
     RotateAxis,
     OffsetPlane,
@@ -208,6 +212,7 @@ pub fn variant_icon(label: &str, i: usize) -> Option<Icon> {
     let icons: &[Icon] = match label {
         "Rectangle" => &[Icon::RectCenter, Icon::Rectangle, Icon::Rect3],
         "Polygon" => &[Icon::Triangle, Icon::Polygon, Icon::Hexagon, Icon::Octagon],
+        "Slot" => &[Icon::Slot, Icon::SlotCenter],
         "Spline" => &[Icon::SplineControl, Icon::Spline],
         "Pattern" => &[Icon::Pattern, Icon::PatternCircular],
         "Offset Edge" => &[Icon::OffsetEdge, Icon::OffsetChain],
@@ -222,6 +227,7 @@ pub fn variants(label: &str) -> (&'static [&'static str], usize) {
     match label {
         "Rectangle" => (&["Center", "Diagonal", "3 Points"], 1),
         "Polygon" => (&["Triangle", "Pentagon", "Hexagon", "Octagon"], 1),
+        "Slot" => (&["Center to Center", "Center Point"], 0),
         "Spline" => (&["Control", "Fit"], 1),
         "Pattern" => (&["Linear", "Circular"], 0),
         "Offset Edge" => (&["Single", "Chain"], 0),
@@ -275,8 +281,10 @@ pub const SKETCHING: &[ToolDef] = &[
     t(Icon::Circle, "Circle", "C", Tool(ToolKind::Circle)),
     t(Icon::Ellipse, "Ellipse", "", Tool(ToolKind::Ellipse)),
     tv(Icon::Polygon, "Polygon", "Pentagon", "G", Tool(ToolKind::Polygon)),
+    tv(Icon::Slot, "Slot", "Center to Center", "", Tool(ToolKind::Slot)),
     t(Icon::Project, "Project", "P", Tool(ToolKind::Project)),
     t(Icon::OffsetEdge, "Offset Edge", "O", Tool(ToolKind::OffsetEdge)),
+    t(Icon::Extend, "Extend", "", Tool(ToolKind::Extend)),
     t(Icon::Fillet, "Fillet", "", Tool(ToolKind::SketchFillet)),
     t(Icon::Text, "Text", "", Tool(ToolKind::Text)),
     t(Icon::SketchMove, "Move/Rotate", "M", Tool(ToolKind::Move)),
@@ -775,7 +783,7 @@ pub fn chip(ui: &Ui, anchor: Pos2, def: &ToolDef, left_side: bool, dim: bool) ->
 /// drawing tools).
 fn has_settings_glyph(def: &ToolDef) -> bool {
     use ToolKind as K;
-    matches!(def.action, Tool(k) if !matches!(k, K::Line | K::Arc | K::Spline | K::Rectangle | K::Circle | K::Ellipse | K::Polygon | K::Trim | K::Text | K::Sketch))
+    matches!(def.action, Tool(k) if !matches!(k, K::Line | K::Arc | K::Spline | K::Rectangle | K::Circle | K::Ellipse | K::Polygon | K::Slot | K::Trim | K::Extend | K::Text | K::Sketch))
 }
 
 pub fn chip_with(ui: &Ui, anchor: Pos2, def: &ToolDef, sub_text: Option<&str>, left_side: bool, dim: bool, hot: bool) -> Rect {

@@ -314,10 +314,20 @@ pub fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                         item("Octagon", None, MenuAction::Variant(ToolKind::Polygon, "Polygon", 3), InProject),
                     ],
                 },
+                Entry::Sub {
+                    label: "Slot",
+                    items: vec![
+                        item("Recent", None, Tool(ToolKind::Slot), InProject),
+                        sep(),
+                        item("Center to Center", None, MenuAction::Variant(ToolKind::Slot, "Slot", 0), InProject),
+                        item("Center Point", None, MenuAction::Variant(ToolKind::Slot, "Slot", 1), InProject),
+                    ],
+                },
                 sep(),
                 item("Project as Sketch", Some("P"), Tool(ToolKind::Project), InProject),
                 // A plain item: 26.202 has no submenu here (s39 menu dump).
                 item("Offset Edge", None, Tool(ToolKind::OffsetEdge), InProject),
+                item("Extend", None, Tool(ToolKind::Extend), InProject),
                 item("Fillet Sketch", None, Tool(ToolKind::SketchFillet), Sketching),
                 item("Text…", None, Tool(ToolKind::Text), InProject),
                 sep(),

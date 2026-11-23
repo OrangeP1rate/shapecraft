@@ -165,6 +165,7 @@ fn plain_scene(s: &Session) -> SceneInput<'_> {
         drawn: &[],
         defined: &[],
         boxing: false,
+        bare: false,
     }
 }
 

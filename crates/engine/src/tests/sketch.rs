@@ -172,6 +172,70 @@ fn trimming_a_dimensioned_line_drops_the_dimension() {
 }
 
 #[test]
+fn a_slot_is_held_together() {
+    use glam::DVec2;
+    use shapecraft_doc::{Constraint, SketchEntity as E, constraints};
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    let v = s.execute("slot", &json!({"a": [3, 5], "b": [13, 5], "radius": 2})).unwrap().value;
+    assert_eq!(v["entities"].as_array().unwrap().len(), 5);
+    let sk = s.active_sketch().unwrap().clone();
+    assert_eq!(sk.construction.iter().copied().collect::<Vec<_>>(), vec![4]);
+    for c in &sk.constraints {
+        assert!(constraints::residuals(&sk.entities, c).unwrap().iter().all(|r| r.abs() < 1e-9), "{c:?}");
+    }
+    let areas = |s: &Session| s.active_sketch().unwrap().regions().len();
+    assert_eq!(areas(&s), 1, "the construction line doesn't split it");
+    // The radius and the length are driven like any other size, and the slot follows.
+    s.execute("constrain", &json!({"kind": "radius", "value": 3, "entities": [1]})).unwrap();
+    s.execute("constrain", &json!({"kind": "distance", "value": 20, "entities": [4]})).unwrap();
+    let sk = s.active_sketch().unwrap().clone();
+    let E::Line { a, b } = sk.entities[4] else { panic!() };
+    assert!((a.distance(b) - 20.0).abs() < 1e-5 && (a.y - b.y).abs() < 1e-5, "{a} {b}");
+    for i in [1, 3] {
+        assert!((constraints::curve(&sk.entities[i]).unwrap().1 - 3.0).abs() < 1e-5, "arc {i}");
+    }
+    let E::Line { a: t, .. } = sk.entities[0] else { panic!() };
+    assert!((t.y - a.y - 3.0).abs() < 1e-5);
+    assert!(sk.constraints.iter().any(|c| matches!(c, Constraint::Horizontal { .. })));
+    // From its middle, turned; and the nonsense ones are refused.
+    s.execute("slot", &json!({"middle": [50, 50], "b": [53, 54], "radius": 1})).unwrap();
+    let E::Line { a, .. } = s.active_sketch().unwrap().entities[9] else { panic!() };
+    assert!(a.distance(DVec2::new(47.0, 46.0)) < 1e-9, "{a}");
+    assert!(s.execute("slot", &json!({"a": [0, 0], "b": [0, 0], "radius": 1})).is_err());
+    assert!(s.execute("slot", &json!({"a": [0, 0], "b": [5, 0], "radius": 0})).is_err());
+    s.execute("extrude", &json!({"sketch": 1, "region": 0, "distance": 4})).unwrap();
+}
+
+#[test]
+fn extend_holds_the_new_end_on_what_it_reached() {
+    use glam::DVec2;
+    use shapecraft_doc::{Constraint, Element, SketchEntity as E};
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("line", &json!({"a": [1, 1], "b": [6, 1]})).unwrap();
+    s.execute("line", &json!({"a": [10, -5], "b": [10, 5]})).unwrap();
+    s.execute("circle", &json!({"center": [20, 1], "radius": 2})).unwrap();
+    s.execute("constrain", &json!({"kind": "horizontal_vertical", "entities": [0]})).unwrap();
+    s.execute("constrain", &json!({"kind": "distance", "value": 5, "entities": [0]})).unwrap();
+    s.execute("extend", &json!({"entity": 0, "at": [5, 1]})).unwrap();
+    let end = Element::Point { entity: 0, index: 1 };
+    let sk = s.active_sketch().unwrap().clone();
+    assert_eq!(sk.entities[0], E::Line { a: DVec2::new(1.0, 1.0), b: DVec2::new(10.0, 1.0) });
+    assert!(sk.constraints.contains(&Constraint::Coincident { a: end, b: Element::Segment { entity: 1, index: 0 } }));
+    assert!(sk.constraints.iter().any(|c| matches!(c, Constraint::Horizontal { .. })), "it's still level");
+    assert!(!sk.constraints.iter().any(|c| matches!(c, Constraint::Distance { .. })), "its length isn't 5 any more");
+    // On to the circle: the old hold is let go.
+    s.execute("extend", &json!({"entity": 0, "at": [9, 1]})).unwrap();
+    let sk = s.active_sketch().unwrap().clone();
+    assert!(sk.constraints.contains(&Constraint::Coincident { a: end, b: Element::Curve { entity: 2 } }));
+    assert!(!sk.constraints.contains(&Constraint::Coincident { a: end, b: Element::Segment { entity: 1, index: 0 } }));
+    let E::Line { b, .. } = sk.entities[0] else { panic!() };
+    assert!(b.distance(DVec2::new(18.0, 1.0)) < 1e-6, "{b}");
+    assert!(s.execute("extend", &json!({"entity": 2, "at": [22, 1]})).is_err());
+}
+
+#[test]
 fn move_mirror_and_pattern_sketch_curves() {
     use glam::DVec2;
     use shapecraft_doc::SketchEntity;

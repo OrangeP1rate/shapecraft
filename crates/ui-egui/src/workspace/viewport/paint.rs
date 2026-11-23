@@ -25,7 +25,7 @@ fn hex_text() -> Color32 {
 pub(super) const RADIAL: f32 = -1.0;
 /// A value on a leader from outside: the arrow at `tip` (a corner), the line running on away from `from` (the
 /// center) with the boxed value at its end, turned along it.
-pub(super) fn leader_dim(painter: &egui::Painter, from: Pos2, tip: Pos2, text: &str, typed: Option<&str>) {
+pub(super) fn leader_dim(painter: &egui::Painter, from: Pos2, tip: Pos2, text: &str, typed: Option<&str>, live: bool) {
     let d = tip - from;
     if d.length() < 2.0 {
         typed_at_start(painter, from, typed);
@@ -40,7 +40,7 @@ pub(super) fn leader_dim(painter: &egui::Painter, from: Pos2, tip: Pos2, text: &
     let half = text.chars().count() as f32 * 3.6 + 5.0;
     match typed {
         Some(t) => value_field(painter, tail + u * 40.0, t),
-        None => sketch_dimension_label(painter, tail + u * half, u, text, true),
+        None => sketch_dimension_label(painter, tail + u * half, u, text, live),
     }
 }
 

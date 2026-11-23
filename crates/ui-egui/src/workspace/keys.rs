@@ -472,6 +472,7 @@ impl Workspace {
             | Tool::Polygon { center: None }
             | Tool::Arc { a: None, b: None }
             | Tool::Ellipse { center: None, major: None }
+            | Tool::Slot { a: None, .. }
             | Tool::Rect3 { a: None, b: None } => true,
             Tool::Spline { points, .. } => points.is_empty(),
             _ => false,
@@ -791,5 +792,46 @@ mod undo_in_visualization {
         let d3 = ws.camera.distance;
         frame(&ctx, &mut ws, key(egui::Key::Minus).to_vec());
         assert_eq!(ws.camera.distance, d3, "a circle waiting for its size keeps the view");
+    }
+
+    /// Slot: the typed length and radius stay as dimensions and nothing is left picked; Escape in Extend takes back all it
+    /// grew, Return keeps it.
+    #[test]
+    fn slot_keeps_typed_sizes_and_extend_goes_back() {
+        use crate::workspace::tools::Tool;
+        use glam::DVec2;
+        use serde_json::json;
+        let mut s = shapecraft_engine::Session::new(std::sync::Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "Slot");
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        let mut ws = crate::workspace::Workspace::new(s, crate::settings::Settings::default());
+        ws.add_slot(false, DVec2::new(2.0, 3.0), DVec2::new(12.0, 3.0), 2.5, Some(10.0), true);
+        assert!(matches!(ws.tool, Tool::Slot { middle: false, a: None, b: None, length: None }), "ready for the next one");
+        assert!(ws.session.selection.is_empty());
+        let sk = ws.session.active_sketch().unwrap();
+        assert!(
+            sk.constraints.iter().any(
+                |c| matches!(c, shapecraft_doc::Constraint::Distance { a, value, .. } if a.entity() == 4 && (value - 10.0).abs() < 1e-9)
+            )
+        );
+        assert!(sk.constraints.iter().any(|c| matches!(c, shapecraft_doc::Constraint::Radius { value, .. } if (value - 2.5).abs() < 1e-9)));
+        ws.session.execute("line", &json!({"a": [-5, 3], "b": [-3, 3]})).unwrap();
+        for keep in [false, true] {
+            ws.start_tool(crate::workspace::toolbar::ToolKind::Extend);
+            let before = ws.session.active_sketch().unwrap().entities.clone();
+            let depth = ws.session.undo_depth();
+            for _ in 0..2 {
+                let _ = ws.run("extend", json!({"entity": 5, "at": [-3, 3]}));
+            }
+            assert_eq!(ws.session.undo_depth(), depth + 2);
+            if keep {
+                ws.commit_tool();
+                assert_ne!(ws.session.active_sketch().unwrap().entities, before);
+            } else {
+                ws.escape();
+                assert_eq!(ws.session.active_sketch().unwrap().entities, before);
+            }
+            assert!(matches!(ws.tool, Tool::Idle));
+            assert!(ws.session.active_sketch().is_some(), "still in the sketch");
+        }
     }
 }

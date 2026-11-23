@@ -8,7 +8,8 @@ use shapecraft_doc::constraints::Element;
 use shapecraft_doc::{ItemId, Pick, SketchEntity, SketchPlane, format_length};
 
 use super::paint::{
-    DASHED_RADIUS, DIAMETER, RADIAL, angle_dim, diameter_dim, dim_label_pos, sketch_dimension, sketch_dimension_label, value_field,
+    DASHED_RADIUS, DIAMETER, RADIAL, angle_dim, diameter_dim, dim_label_pos, leader_dim, sketch_dimension, sketch_dimension_label,
+    value_field,
 };
 use crate::theme;
 use crate::workspace::Workspace;
@@ -255,7 +256,17 @@ impl Workspace {
                         has.push((sk.id, entity));
                         let center = match sk.entities.get(entity as usize) {
                             Some(SketchEntity::Circle { center, .. }) => *center,
-                            Some(SketchEntity::Arc { a, mid, b }) => shapecraft_doc::circle_through(*a, *mid, *b).map_or(*a, |(c, _)| c),
+                            // An arc's radius points in at its start from outside: "R 2 mm".
+                            Some(SketchEntity::Arc { a, mid, b }) => {
+                                let c = shapecraft_doc::circle_through(*a, *mid, *b).map_or(*a, |(c, _)| c);
+                                if let (Some(sc), Some(tip)) = (s(c), s(*a))
+                                    && (tip - sc).length() > 2.0
+                                {
+                                    let u = (tip - sc).normalized();
+                                    dims.push((sk.id, entity, DimKind::Radius, value, [sc, tip], [tip, tip + u * 140.0]));
+                                }
+                                continue;
+                            }
                             _ => continue,
                         };
                         if let (Some(sc), Some(rim)) = (s(center), s(center + DVec2::new(value, 0.0))) {
@@ -289,6 +300,8 @@ impl Workspace {
             let typed = self.dim_edit.filter(|e| e.sketch == sketch && e.entity == entity).map(|_| self.numeric.as_deref().unwrap_or(""));
             if kind == DimKind::Diameter {
                 diameter_dim(painter, ends[0], ends[1], &format!("Ø {}", format_length(value, units)), typed, false);
+            } else if kind == DimKind::Radius {
+                leader_dim(painter, ends[0], ends[1], &format!("R {}", format_length(value, units)), typed, false);
             } else {
                 sketch_dimension(painter, ends, dim, &format_length(value, units), typed, false);
             }

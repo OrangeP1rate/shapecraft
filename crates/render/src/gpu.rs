@@ -1660,6 +1660,7 @@ mod cull_tests {
             drawn: &[],
             defined: &[],
             boxing: false,
+            bare: false,
         };
         let camera = crate::Camera::standard(crate::StandardView::Front, glam::DVec3::ZERO, 50.0);
         r.render(&scene, &camera, (64, 48)).expect("an empty mesh body must not panic the renderer");
@@ -1706,6 +1707,7 @@ mod empty_scene_tests {
                 drawn: &[],
                 defined: &[],
                 boxing: false,
+                bare: false,
             };
             let camera = crate::Camera::standard(crate::StandardView::Front, glam::DVec3::ZERO, 50.0);
             r.render(&scene, &camera, (64, 48)).expect("an empty Visualize scene renders");

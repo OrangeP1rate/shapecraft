@@ -123,6 +123,8 @@ pub struct SceneInput<'a> {
     pub defined: &'a [bool],
     /// `selection` is what a box being dragged would take, not what's picked: regions show it fainter.
     pub boxing: bool,
+    /// The sketch being edited shows its curves alone, no fills or points (Trim and Extend).
+    pub bare: bool,
 }
 
 #[derive(Default)]
@@ -417,6 +419,8 @@ pub(crate) fn build(scene: &SceneInput, camera: &Camera, size: DVec2) -> Built {
 
 fn sketch_geometry(out: &mut Built, scene: &SceneInput, sketch: &Sketch, active: bool, c: &SceneColors) {
     let plane = sketch.plane;
+    let bare = scene.bare && active;
+    let dots = out.dots.len();
     for region in sketch.regions() {
         let pick = Pick::Region { sketch: sketch.id, region: region.index };
         // Fills blend in linear light: a picked region is the orange at 22% over the navy tint (#64420e on screen),
@@ -436,7 +440,7 @@ fn sketch_geometry(out: &mut Built, scene: &SceneInput, sketch: &Sketch, active:
         };
         // Every closed region is tinted faint blue, in the sketch being edited too: a finished rectangle or circle
         // reads as a profile at once.
-        let color = color.or((active || sketch.visible).then_some(c.region_tint));
+        let color = color.or((active || sketch.visible).then_some(c.region_tint)).filter(|_| !bare);
         if let Some(color) = color {
             for t in &region.triangles {
                 out.fills.push(([plane.to_world(t[0]), plane.to_world(t[1]), plane.to_world(t[2])], color, true));
@@ -458,11 +462,11 @@ fn sketch_geometry(out: &mut Built, scene: &SceneInput, sketch: &Sketch, active:
         };
         let point_color = if active && scene.defined.get(i).copied().unwrap_or(false) { DEFINED } else { c.sketch_point };
         let width = if active { 1.7 } else { 1.5 };
-        // Construction geometry is dashed (dashes sized to the sketch, so they read at any zoom of it).
+        // Construction geometry is drawn dash and dot (sized to the sketch, so they read at any zoom of it).
         let construction = sketch.construction.contains(&(i as u32));
         let dash = sketch.entities.iter().flat_map(|e| e.outline()).fold(0.0f64, |m, p| m.max(p.length())).max(1.0) * 0.015;
-        for w in e.outlines().iter().flat_map(|o| o.windows(2)) {
-            let pieces = if construction { dashes(w[0], w[1], dash) } else { vec![(w[0], w[1])] };
+        for outline in e.outlines() {
+            let pieces = if construction { dash_dots(&outline, dash * 5.0) } else { outline.windows(2).map(|w| (w[0], w[1])).collect() };
             for (a, b) in pieces {
                 out.segments.push(Segment {
                     a: plane.to_world(a),
@@ -537,9 +541,42 @@ fn sketch_geometry(out: &mut Built, scene: &SceneInput, sketch: &Sketch, active:
             }
         }
     }
+    if bare {
+        out.dots.truncate(dots);
+    }
 }
 
 /// The dashes of a dashed segment: `dash` long with gaps of 0.7 dash, the phase running from `a`.
+/// A dash, a gap, a dot, a gap, running on along the whole of a curve's points.
+fn dash_dots(points: &[DVec2], dash: f64) -> Vec<(DVec2, DVec2)> {
+    let round = dash * 2.1;
+    let mut out = Vec::new();
+    if dash <= 0.0 || !dash.is_finite() {
+        return out;
+    }
+    let mut run = 0.0;
+    for w in points.windows(2) {
+        let len = w[0].distance(w[1]);
+        if len < 1e-12 || len / round > 10_000.0 {
+            continue;
+        }
+        let dir = (w[1] - w[0]) / len;
+        let (from, to) = (run, run + len);
+        let mut k = (from / round).floor() * round;
+        while k < to {
+            for (a, b) in [(k, k + dash), (k + dash * 1.45, k + dash * 1.65)] {
+                let (a, b) = (a.max(from), b.min(to));
+                if a < b {
+                    out.push((w[0] + dir * (a - from), w[0] + dir * (b - from)));
+                }
+            }
+            k += round;
+        }
+        run = to;
+    }
+    out
+}
+
 fn dashes(a: DVec2, b: DVec2, dash: f64) -> Vec<(DVec2, DVec2)> {
     let len = a.distance(b);
     if len < 1e-12 || dash <= 0.0 {

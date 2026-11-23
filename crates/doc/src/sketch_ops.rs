@@ -8,6 +8,7 @@ use glam::{DAffine2, DVec2};
 
 use crate::constraints::{self, Constraint, Element};
 use crate::sketch::{SketchEntity, circle_through};
+use crate::sketch_curve::Curve;
 
 const EPS: f64 = 1e-9;
 
@@ -142,11 +143,59 @@ pub fn crossings(entities: &[SketchEntity], cap: usize) -> Vec<DVec2> {
     out
 }
 
-/// Where other curves cross the target: parameter along it (0..1) and the exact point.
-fn cuts(target: Prim, cutters: &[Prim]) -> Vec<(f64, DVec2)> {
+/// What can cut a curve: the straight and round ones, and the ellipses and splines as they are.
+enum Cutter {
+    Prim(Prim),
+    Curve(Curve),
+}
+
+fn cutters(e: &SketchEntity) -> Vec<Cutter> {
+    match Curve::of(e) {
+        Some(c) => vec![Cutter::Curve(c)],
+        None => prims(e).into_iter().map(Cutter::Prim).collect(),
+    }
+}
+
+/// Where the curve crosses a straight or round one: parameter along the curve and the point.
+fn curve_prim(c: &Curve, q: Prim) -> Vec<(f64, DVec2)> {
+    let roots = match q {
+        Prim::Seg(a, b) => {
+            let n = (b - a).normalize_or_zero().perp();
+            c.roots(|p| (p - a).dot(n))
+        }
+        Prim::Arc(m, r, ..) => c.roots(|p| p.distance(m) - r),
+    };
+    let on = |x: DVec2| match q {
+        Prim::Seg(a, b) => (-1e-9..=1.0 + 1e-9).contains(&seg_param(a, b, x)),
+        Prim::Arc(m, _, s, sw) => arc_param(m, s, sw, x).is_some(),
+    };
+    roots.into_iter().map(|t| (t, c.at(t))).filter(|(_, x)| on(*x)).collect()
+}
+
+/// Where other curves cross an ellipse or spline: parameter along it (0..1, rising) and the point.
+fn curve_cuts(c: &Curve, cutters: &[Cutter]) -> Vec<(f64, DVec2)> {
     let mut ts: Vec<(f64, DVec2)> = cutters
         .iter()
-        .flat_map(|q| intersections(target, *q))
+        .flat_map(|q| match q {
+            Cutter::Prim(q) => curve_prim(c, *q),
+            Cutter::Curve(d) => c.meets(d).into_iter().map(|(t, _)| (t, c.at(t))).collect(),
+        })
+        .map(|(t, x)| (if c.closed() { t.rem_euclid(1.0) } else { t }, x))
+        .filter(|(t, _)| c.closed() || (-1e-9..=1.0 + 1e-9).contains(t))
+        .collect();
+    ts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    ts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-7);
+    ts
+}
+
+/// Where other curves cross the target: parameter along it (0..1) and the exact point.
+fn cuts(target: Prim, cutters: &[Cutter]) -> Vec<(f64, DVec2)> {
+    let mut ts: Vec<(f64, DVec2)> = cutters
+        .iter()
+        .flat_map(|q| match q {
+            Cutter::Prim(q) => intersections(target, *q),
+            Cutter::Curve(c) => curve_prim(c, target).into_iter().map(|(_, x)| x).collect(),
+        })
         .filter_map(|x| match target {
             Prim::Seg(a, b) => Some((seg_param(a, b, x).clamp(0.0, 1.0), x)),
             Prim::Arc(c, _, s, sw) => arc_param(c, s, sw, x).map(|t| (t, x)),
@@ -157,7 +206,7 @@ fn cuts(target: Prim, cutters: &[Prim]) -> Vec<(f64, DVec2)> {
     ts
 }
 
-fn cut_params(target: Prim, cutters: &[Prim]) -> Vec<f64> {
+fn cut_params(target: Prim, cutters: &[Cutter]) -> Vec<f64> {
     cuts(target, cutters).into_iter().map(|c| c.0).collect()
 }
 
@@ -277,17 +326,16 @@ impl Trimmed {
         // The point must still be where it was: an end that is left, a center.
         let Some(was) = self.whole.get(entity).and_then(|e| constraints::points(e).get(index as usize).copied()) else { return Vec::new() };
         let same = was.length().max(1.0) * 1e-7;
+        // A center only stands in for a center, an end for an end.
+        let was_center = self.whole.get(entity).is_some_and(|e| is_center(e, index as usize));
         pieces
             .flat_map(|j| {
-                let points = self.entities.get(j).map(constraints::points).unwrap_or_default();
-                let center = points.len() > 2;
-                // An arc's center only stands in for a center, an end for an end.
-                let was_center =
-                    matches!(self.whole.get(entity), Some(SketchEntity::Circle { .. } | SketchEntity::Ellipse { .. })) || index >= 2;
+                let e = self.entities.get(j);
+                let points = e.map(constraints::points).unwrap_or_default();
                 points
                     .into_iter()
                     .enumerate()
-                    .filter(move |(k, p)| (center && *k == 2) == was_center && p.distance(was) < same)
+                    .filter(move |(k, p)| e.is_some_and(|e| is_center(e, *k)) == was_center && p.distance(was) < same)
                     .map(move |(k, _)| Element::Point { entity: j as u32, index: k as u32 })
             })
             .collect()
@@ -331,6 +379,16 @@ impl Trimmed {
     }
 }
 
+/// Whether a curve's point `k` (as in `constraints::points`) is its center.
+fn is_center(e: &SketchEntity, k: usize) -> bool {
+    match e {
+        SketchEntity::Circle { .. } | SketchEntity::Ellipse { .. } | SketchEntity::Polygon { .. } => k == 0,
+        SketchEntity::Arc { .. } => k == 2,
+        SketchEntity::Rectangle { .. } => k == 4,
+        _ => false,
+    }
+}
+
 /// Every way to take one of each.
 fn combinations(options: &[Vec<Element>]) -> Vec<Vec<Element>> {
     options.iter().fold(vec![Vec::new()], |acc, opts| {
@@ -357,7 +415,7 @@ pub fn trim(entities: &[SketchEntity], index: usize, at: DVec2) -> Result<Trimme
         list.extend(entities[index + 1..].iter().cloned());
         return Ok(Trimmed { asked: index, sides: sides.len(), ..trim(&list, index + pick, at)? });
     }
-    let cutters: Vec<Prim> = entities.iter().enumerate().filter(|(j, _)| *j != index).flat_map(|(_, e)| prims(e)).collect();
+    let cutters: Vec<Cutter> = entities.iter().enumerate().filter(|(j, _)| *j != index).flat_map(|(_, e)| cutters(e)).collect();
     let (pieces, removed): (Vec<SketchEntity>, SketchEntity) = match *target {
         SketchEntity::Line { a, b } => {
             let mut ts = cuts(Prim::Seg(a, b), &cutters);
@@ -410,10 +468,41 @@ pub fn trim(entities: &[SketchEntity], index: usize, at: DVec2) -> Result<Trimme
                 )
             }
         }
-        SketchEntity::Ellipse { .. } | SketchEntity::Spline { .. } | SketchEntity::ControlSpline { .. } | SketchEntity::Text { .. } => {
+        SketchEntity::Ellipse { .. } | SketchEntity::Spline { .. } | SketchEntity::ControlSpline { .. } => {
+            let Some(c) = Curve::of(target) else { return Err("this curve is degenerate") };
+            let ts = curve_cuts(&c, &cutters);
+            let tc = c.nearest(at);
+            if c.closed() {
+                // Round the loop: the crossing just before the click and the one just after.
+                match (ts.first(), ts.last()) {
+                    (Some(first), Some(last)) if ts.len() >= 2 => {
+                        let before = ts.iter().rev().find(|t| t.0 <= tc).copied().unwrap_or((last.0 - 1.0, last.1));
+                        let after = ts.iter().find(|t| t.0 > tc).copied().unwrap_or((first.0 + 1.0, first.1));
+                        let stays = c.piece(after.0, before.0 + 1.0, after.1, before.1);
+                        (vec![stays], c.piece(before.0, after.0, before.1, after.1))
+                    }
+                    _ => (Vec::new(), target.clone()),
+                }
+            } else {
+                let (start, end) = ((0.0, c.at(0.0)), (1.0, c.at(1.0)));
+                let inner = || ts.iter().copied().filter(|t| t.0 > 1e-6 && t.0 < 1.0 - 1e-6);
+                let lo = inner().filter(|t| t.0 <= tc).max_by(|x, y| x.0.total_cmp(&y.0)).unwrap_or(start);
+                let hi = inner().filter(|t| t.0 > tc).min_by(|x, y| x.0.total_cmp(&y.0)).unwrap_or(end);
+                let mut out = Vec::new();
+                if lo.0 > 0.0 {
+                    out.push(c.piece(0.0, lo.0, start.1, lo.1));
+                }
+                if hi.0 < 1.0 {
+                    out.push(c.piece(hi.0, 1.0, hi.1, end.1));
+                }
+                let gone = if out.is_empty() { target.clone() } else { c.piece(lo.0, hi.0, lo.1, hi.1) };
+                (out, gone)
+            }
+        }
+        SketchEntity::Text { .. } => {
             let crossed = prims(target).iter().any(|p| !cut_params(*p, &cutters).is_empty());
             if crossed {
-                return Err("Trim works on lines, arcs, circles, rectangles and polygons so far");
+                return Err("Trim can't cut letters");
             }
             (Vec::new(), target.clone())
         }
@@ -424,6 +513,89 @@ pub fn trim(entities: &[SketchEntity], index: usize, at: DVec2) -> Result<Trimme
     list.extend(pieces);
     list.extend(entities[index + 1..].iter().cloned());
     Ok(Trimmed { entities: list, removed, whole: entities.to_vec(), asked: index, sides: 1, cut: index, pieces: count })
+}
+
+/// What [`extend`] makes of a curve.
+#[derive(Clone, Debug)]
+pub struct Extended {
+    pub curve: SketchEntity,
+    /// Which end moved (a point of the curve, as in `constraints::points`) and where to.
+    pub end: u32,
+    pub to: DVec2,
+}
+
+/// Line or arc `index` lengthened at the end nearer to `at`, as far as the next curve in its way; at the other end when
+/// nothing lies beyond that one.
+pub fn extend(entities: &[SketchEntity], index: usize, at: DVec2) -> Result<Extended, &'static str> {
+    let target = entities.get(index).ok_or("no such sketch curve")?;
+    let cutters: Vec<Cutter> = entities.iter().enumerate().filter(|(j, _)| *j != index).flat_map(|(_, e)| cutters(e)).collect();
+    // The first crossing past the start of `way`, at least a hair away.
+    let first = |way: Prim, length: f64| {
+        let least = 1e-6 / length.max(1e-9);
+        cuts(way, &cutters).into_iter().filter(|(t, _)| *t > least).min_by(|x, y| x.0.total_cmp(&y.0))
+    };
+    let found = match *target {
+        SketchEntity::Line { a, b } => {
+            let dir = (b - a).try_normalize().ok_or("this line has no length")?;
+            let out = |end: u32| {
+                let (from, dir) = if end == 0 { (a, -dir) } else { (b, dir) };
+                let (_, to) = first(Prim::Seg(from, from + dir * REACH), REACH)?;
+                let curve = if end == 0 { SketchEntity::Line { a: to, b } } else { SketchEntity::Line { a, b: to } };
+                Some(Extended { curve, end, to })
+            };
+            let near = if seg_param(a, b, at) < 0.5 { 0 } else { 1 };
+            out(near).or_else(|| out(1 - near))
+        }
+        SketchEntity::Arc { a, mid, b } => {
+            let (c, r, s, sw) = arc_frame(a, mid, b).ok_or("this arc is degenerate")?;
+            // Round the rest of its circle.
+            let rest = (TAU - sw.abs()) * sw.signum();
+            let out = |end: u32| {
+                let way = if end == 0 { Prim::Arc(c, r, s, -rest) } else { Prim::Arc(c, r, s + sw, rest) };
+                let (t, to) = first(way, rest.abs() * r).filter(|(t, _)| *t < 1.0 - 1e-9)?;
+                let more = sw + rest * t;
+                let m = |from: f64| arc_point(c, r, from, more, 0.5);
+                let curve =
+                    if end == 0 { SketchEntity::Arc { a: to, mid: m(s - rest * t), b } } else { SketchEntity::Arc { a, mid: m(s), b: to } };
+                Some(Extended { curve, end, to })
+            };
+            let near = if arc_param(c, s, sw, at).map_or(a.distance(at) < b.distance(at), |t| t < 0.5) { 0 } else { 1 };
+            out(near).or_else(|| out(1 - near))
+        }
+        _ => return Err("Extend works on lines and arcs"),
+    };
+    found.ok_or("There's nothing in that direction to extend to")
+}
+
+/// How far Extend looks for something to end at, in millimeters.
+const REACH: f64 = 1e5;
+
+/// What point `p` lies on among the curves (not `index` itself): one of their points, a straight side, a circle or arc.
+pub fn lies_on(entities: &[SketchEntity], index: usize, p: DVec2) -> Option<Element> {
+    let near = p.length().max(1.0) * 1e-7;
+    let others = || entities.iter().enumerate().filter(|(j, _)| *j != index);
+    let point = others().find_map(|(j, e)| {
+        let k = constraints::points(e).iter().position(|q| q.distance(p) < near)?;
+        (!is_center(e, k)).then_some(Element::Point { entity: j as u32, index: k as u32 })
+    });
+    point.or_else(|| {
+        others().find_map(|(j, e)| {
+            let entity = j as u32;
+            let side =
+                constraints::segments(e).iter().position(|(a, b)| p.distance(a.lerp(*b, seg_param(*a, *b, p).clamp(0.0, 1.0))) < near);
+            match (side, e) {
+                (Some(k), _) => Some(Element::Segment { entity, index: k as u32 }),
+                (None, SketchEntity::Circle { center, radius }) => {
+                    ((p.distance(*center) - radius).abs() < near).then_some(Element::Curve { entity })
+                }
+                (None, SketchEntity::Arc { a, mid, b }) => {
+                    let (c, r, s, sw) = arc_frame(*a, *mid, *b)?;
+                    ((p.distance(c) - r).abs() < near && arc_param(c, s, sw, p).is_some()).then_some(Element::Curve { entity })
+                }
+                _ => None,
+            }
+        })
+    })
 }
 
 /// A copy of the curve moved sideways by `d`: outwards for closed shapes and arcs (away from the center),
@@ -599,6 +771,83 @@ mod tests {
         let SketchEntity::Arc { a, mid, b } = out[0] else { panic!("{out:?}") };
         assert!(mid.distance(v(0.0, -5.0)) < 1e-9, "the lower half stays: {mid}");
         assert!((a.y.abs() + b.y.abs()) < 1e-9);
+    }
+
+    #[test]
+    fn trim_an_ellipse_leaves_a_control_spline() {
+        let es = vec![
+            SketchEntity::Ellipse { center: v(0.0, -1.0), rx: 7.0, ry: 3.0, angle: 0.0 },
+            SketchEntity::Line { a: v(-20.0, 0.0), b: v(20.0, 0.0) },
+        ];
+        let t = trim(&es, 0, v(0.0, -4.0)).unwrap();
+        assert_eq!(t.entities.len(), 2);
+        let SketchEntity::ControlSpline { poles } = &t.entities[0] else { panic!("{:?}", t.entities[0]) };
+        let (a, b) = (poles[0], poles[poles.len() - 1]);
+        assert!(a.y.abs() < 1e-9 && b.y.abs() < 1e-9 && (a.x.abs() - 7.0 * (8.0f64 / 9.0).sqrt()).abs() < 1e-9, "{a} {b}");
+        // It follows the ellipse's top.
+        for p in crate::sketch::bspline_points(poles, 12) {
+            let off = (p.x / 7.0).powi(2) + ((p.y + 1.0) / 3.0).powi(2) - 1.0;
+            assert!(off.abs() < 1e-4 && p.y > -1e-9, "{p} {off}");
+        }
+        // The line between the crossings, cut by the ellipse itself and not by a drawn-out polyline of it.
+        let t = trim(&es, 1, v(0.0, 0.0)).unwrap();
+        let SketchEntity::Line { b, .. } = t.entities[1] else { panic!() };
+        assert!((b.x + 7.0 * (8.0f64 / 9.0).sqrt()).abs() < 1e-9, "{b}");
+        // Crossed once or not at all it goes whole.
+        assert_eq!(trim(&es[..1], 0, v(0.0, -4.0)).unwrap().entities.len(), 0);
+    }
+
+    #[test]
+    fn trim_splines_between_crossings() {
+        let points = vec![v(0.0, 0.0), v(10.0, 8.0), v(20.0, -8.0), v(30.0, 0.0)];
+        for spline in [SketchEntity::Spline { points: points.clone() }, SketchEntity::ControlSpline { poles: points.clone() }] {
+            let es = vec![
+                spline,
+                SketchEntity::Line { a: v(5.0, -20.0), b: v(5.0, 20.0) },
+                SketchEntity::Circle { center: v(25.0, 0.0), radius: 4.0 },
+            ];
+            // The middle: two pieces are left, ending where the line and the circle cross it.
+            let t = trim(&es, 0, v(15.0, 0.0)).unwrap();
+            assert_eq!(t.entities.len(), 4);
+            let ends = |e: &SketchEntity| {
+                let SketchEntity::ControlSpline { poles } = e else { panic!("{e:?}") };
+                (poles[0], poles[poles.len() - 1])
+            };
+            let (a, b) = ends(&t.entities[0]);
+            assert!(a.distance(v(0.0, 0.0)) < 1e-9 && (b.x - 5.0).abs() < 1e-9, "{a} {b}");
+            let (a, b) = ends(&t.entities[1]);
+            assert!((a.distance(v(25.0, 0.0)) - 4.0).abs() < 1e-9 && b.distance(v(30.0, 0.0)) < 1e-9, "{a} {b}");
+            // The first bit up to the line.
+            assert_eq!(trim(&es, 0, v(1.0, 1.0)).unwrap().entities.len(), 3);
+        }
+    }
+
+    #[test]
+    fn extend_lines_and_arcs_to_the_next_curve() {
+        let es = vec![
+            SketchEntity::Line { a: v(0.0, 0.0), b: v(5.0, 0.0) },
+            SketchEntity::Circle { center: v(12.0, 0.0), radius: 2.0 },
+            SketchEntity::Line { a: v(20.0, -5.0), b: v(20.0, 5.0) },
+            SketchEntity::Arc { a: v(0.0, 20.0), mid: v(10.0, 30.0), b: v(20.0, 20.0) },
+            SketchEntity::Line { a: v(12.0, 10.0), b: v(22.0, 20.0) },
+        ];
+        // To the near side of the circle, then across it, then to the line.
+        let mut list = es.clone();
+        for (to, on) in [(10.0, 1), (14.0, 1), (20.0, 2)] {
+            let e = extend(&list, 0, v(4.0, 0.0)).unwrap();
+            assert!(e.end == 1 && e.to.distance(v(to, 0.0)) < 1e-9, "{e:?}");
+            assert!(lies_on(&list, 0, e.to).is_some_and(|el| el.entity() == on));
+            list[0] = e.curve;
+        }
+        assert!(extend(&list, 0, v(4.0, 0.0)).is_err(), "nothing further on either side");
+        // Near the start, where nothing lies: the other end goes.
+        assert_eq!(extend(&es, 0, v(0.5, 0.0)).unwrap().end, 1);
+        // The arc goes round its own circle (center (10, 20), radius 10) to the slanted line.
+        let e = extend(&es, 3, v(19.0, 24.0)).unwrap();
+        assert!(e.end == 1 && (e.to.distance(v(10.0, 20.0)) - 10.0).abs() < 1e-9 && (e.to.y - e.to.x + 2.0).abs() < 1e-9, "{e:?}");
+        let SketchEntity::Arc { a, mid, b } = e.curve else { panic!() };
+        assert!(a == v(0.0, 20.0) && b == e.to && (mid.distance(v(10.0, 20.0)) - 10.0).abs() < 1e-9 && mid.y > 20.0);
+        assert!(extend(&es, 1, v(14.0, 0.0)).is_err(), "a circle has no end");
     }
 
     #[test]

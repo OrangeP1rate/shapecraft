@@ -251,6 +251,8 @@ pub(super) fn is_active(ws: &Workspace, def: &ToolDef) -> bool {
         (Action::Tool(K::Line), Tool::Line { .. })
         | (Action::Tool(K::Rectangle), Tool::Rectangle { .. } | Tool::Rect3 { .. })
         | (Action::Tool(K::Polygon), Tool::Polygon { .. })
+        | (Action::Tool(K::Slot), Tool::Slot { .. })
+        | (Action::Tool(K::Extend), Tool::Extend { .. })
         | (Action::Tool(K::Spline), Tool::Spline { .. })
         | (Action::Tool(K::Arc), Tool::Arc { .. })
         | (Action::Tool(K::Ellipse), Tool::Ellipse { .. })

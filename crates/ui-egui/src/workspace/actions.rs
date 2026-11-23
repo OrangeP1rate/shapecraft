@@ -467,11 +467,17 @@ impl Workspace {
             | Tool::Circle { .. }
             | Tool::Arc { .. }
             | Tool::Polygon { .. }
+            | Tool::Slot { .. }
             | Tool::Ellipse { .. }
             | Tool::Spline { .. }
                 if sketch_empty == Some(true) =>
             {
                 self.ui_action(UiAction::ExitSketching);
+            }
+            // Escape takes back everything this Extend grew.
+            Tool::Extend { from, .. } => {
+                while self.session.undo_depth() > from && self.run("undo", json!({})).is_some() {}
+                self.tool = Tool::Idle;
             }
             Tool::PickPlane { .. } => {
                 self.pending_tool = None;

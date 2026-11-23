@@ -330,6 +330,7 @@ mod tests {
             drawn: &[],
             defined: &[],
             boxing: false,
+            bare: false,
         };
         let mut camera = crate::Camera::standard(crate::StandardView::Front, glam::DVec3::ZERO, 50.0);
         camera.ortho = 0.0;

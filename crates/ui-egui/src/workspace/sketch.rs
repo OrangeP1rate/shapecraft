@@ -119,6 +119,7 @@ impl Workspace {
     pub(crate) fn sketch_tool(&self, kind: ToolKind) -> Tool {
         match kind {
             ToolKind::Rectangle if self.variant("Rectangle") == 2 => Tool::Rect3 { a: None, b: None },
+            ToolKind::Slot => Tool::Slot { middle: self.variant("Slot") == 1, a: None, b: None, length: None },
             ToolKind::Spline => Tool::Spline { points: Vec::new(), control: self.variant("Spline") == 0 },
             _ => Tool::for_sketch_kind(kind),
         }

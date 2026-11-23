@@ -8,7 +8,7 @@ use shapecraft_doc::{Pick, SketchEntity, SketchPlane};
 
 use super::dimensions::{DimEdit, DimKind};
 use super::handles::SECTION_FLIP;
-use super::snap::ellipse_minor;
+use super::snap::{ellipse_minor, slot_radius};
 use crate::workspace::ToolKind;
 use crate::workspace::Workspace;
 use crate::workspace::tools::{AXES, Tool};
@@ -598,6 +598,12 @@ impl Workspace {
                 let _ = self.run("trim", json!({ "entity": entity, "at": [at.x, at.y] }));
                 self.tool = Tool::Trim { target: None };
             }
+            Tool::Extend { target: Some((entity, at)), from } => {
+                let _ = self.run("extend", json!({ "entity": entity, "at": [at.x, at.y] }));
+                self.tool = Tool::Extend { target: None, from };
+            }
+            // A click on nothing ends it.
+            Tool::Extend { target: None, .. } => self.tool = Tool::Idle,
             Tool::Trim { target: None } | Tool::OffsetEdge(_) | Tool::OffsetPlane(_) => {}
             Tool::Text { .. } => {}
             Tool::SketchFillet { .. } => {
@@ -864,6 +870,16 @@ impl Workspace {
                             let p = self.rect_cursor(a, p);
                             self.add_rectangle(self.rect_corner(a, p), p);
                         }
+                    }
+                }
+            }
+            Tool::Slot { middle, a, b, length } => {
+                if let Some(p) = self.sketch_cursor() {
+                    match (a, b) {
+                        (None, _) => self.tool = Tool::Slot { middle, a: Some(p), b: None, length: None },
+                        (Some(a), None) if a.distance(p) > 1e-6 => self.tool = Tool::Slot { middle, a: Some(a), b: Some(p), length: None },
+                        (Some(a), Some(b)) => self.add_slot(middle, a, b, slot_radius(a, b, p), length, false),
+                        _ => {}
                     }
                 }
             }

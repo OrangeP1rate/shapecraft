@@ -236,6 +236,8 @@ fn tool_for(id: &str) -> Option<crate::workspace::toolbar::ToolKind> {
         "rectangle" => K::Rectangle,
         "circle" => K::Circle,
         "polygon" => K::Polygon,
+        "slot" => K::Slot,
+        "extend" => K::Extend,
         "arc" => K::Arc,
         "ellipse" => K::Ellipse,
         "spline" => K::Spline,

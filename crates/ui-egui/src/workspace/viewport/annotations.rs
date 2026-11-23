@@ -9,7 +9,7 @@ use super::paint::{
     DASHED_RADIUS, DIAMETER, PILL_INK, RADIAL, axis_pill, axis_pill_ex, copy_pill, dashed_radius, diameter_dim, double_arrow, face_arrow,
     lead_drop, leader_dim, link_pill, padlock, pill, radius_dim, screen_dim, sketch_dimension, target_badge, value_box, value_field,
 };
-use super::snap::ellipse_minor;
+use super::snap::{ellipse_minor, slot_ends, slot_radius};
 use crate::theme::{self, Tokens, radius};
 use crate::workspace::Workspace;
 use crate::workspace::tools::{Handle, Tool};
@@ -65,13 +65,33 @@ impl Workspace {
                     diameter_dim(&painter, a, b, &text, typed, true);
                 }
             }
+            // A slot: its center line's length, then (boxed, live) its radius, pointing in at the second end's side.
+            (Tool::Slot { middle, a: Some(a), b, .. }, Some(pl), Some(c)) => {
+                let s = |p: DVec2| self.to_screen(pl.to_world(p));
+                let (p, q) = slot_ends(*middle, *a, b.unwrap_or(c));
+                if let (Some(sp), Some(sq)) = (s(p), s(q)) {
+                    screen_dim(&painter, sp, sq, 60.0, &format_length(p.distance(q), units), typed.filter(|_| b.is_none()), b.is_none());
+                }
+                if let Some(b) = b {
+                    let r = slot_radius(*a, *b, c);
+                    let n = (q - p).normalize_or_zero().perp() * r;
+                    let rim = |n: DVec2| s(q + n);
+                    let up = match (rim(n), rim(-n)) {
+                        (Some(x), Some(y)) if y.y < x.y => -n,
+                        _ => n,
+                    };
+                    if let (Some(from), Some(tip)) = (s(q), s(q + up)) {
+                        leader_dim(&painter, from, tip, &format!("R {}", format_length(r, units)), typed, true);
+                    }
+                }
+            }
             // A polygon (or a circle with radius labels) is measured from the center to the cursor: "R 20 mm".
             // A polygon's R is a leader pointing in at the corner under the pointer, its value boxed out past it
             // (s11-065).
             (Tool::Polygon { center: Some(ctr) }, Some(pl), Some(c)) => {
                 if let (Some(a), Some(b)) = (self.to_screen(pl.to_world(*ctr)), self.to_screen(pl.to_world(c))) {
                     let text = format!("R {}", format_length(ctr.distance(c), units));
-                    leader_dim(&painter, a, b, &text, typed);
+                    leader_dim(&painter, a, b, &text, typed, true);
                 }
             }
             (Tool::Circle { center: Some(ctr) }, Some(pl), Some(c)) => {

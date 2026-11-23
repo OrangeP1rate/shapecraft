@@ -1485,6 +1485,8 @@ impl ShapeCraftApp {
                     "shell" => K::Shell,
                     "revolve" => K::Revolve,
                     "polygon" => K::Polygon,
+                    "slot" => K::Slot,
+                    "extend" => K::Extend,
                     "arc" => K::Arc,
                     "move" => K::Move,
                     "mirror" => K::Mirror,
@@ -2580,6 +2582,7 @@ fn picture(ws: &mut Workspace, doc: &shapecraft_doc::Document, px: (u32, u32)) -
             drawn: &[],
             defined: &[],
             boxing: false,
+            bare: false,
         };
         ws.gpu.thumbnail(&scene, &camera, px)
     };
@@ -2626,6 +2629,7 @@ fn write_thumbnail(ws: &mut Workspace, dir: &std::path::Path) {
             drawn: &[],
             defined: &[],
             boxing: false,
+            bare: false,
         };
         ws.gpu.thumbnail(&scene, &camera, (400, 296))
     };

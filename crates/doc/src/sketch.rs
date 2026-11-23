@@ -138,26 +138,36 @@ pub fn bspline_points(poles: &[DVec2], per_span: usize) -> Vec<DVec2> {
     if n < 3 {
         return poles.to_vec();
     }
+    let steps = (n - (n - 1).min(3)) * per_span.max(1);
+    (0..=steps).map(|k| bspline_at(poles, k as f64 / steps as f64)).collect()
+}
+
+/// The point at `u` (0 to 1) of the same curve.
+pub fn bspline_at(poles: &[DVec2], u: f64) -> DVec2 {
+    let n = poles.len();
+    match poles {
+        [] => return DVec2::ZERO,
+        [p] => return *p,
+        [a, b] => return a.lerp(*b, u),
+        _ => {}
+    }
     let deg = (n - 1).min(3);
     let spans = n - deg;
+    let t = u.clamp(0.0, 1.0) * spans as f64;
     // Knots 0…spans with the ends repeated deg+1 times.
     let knot = |i: usize| (i as f64 - deg as f64).clamp(0.0, spans as f64);
-    let at = |t: f64| {
-        let s = (t.floor() as usize).min(spans - 1);
-        // de Boor on the poles s..=s+deg.
-        let mut d: Vec<DVec2> = (0..=deg).map(|j| poles[s + j]).collect();
-        for r in 1..=deg {
-            for j in (r..=deg).rev() {
-                let i = s + j;
-                let (k0, k1) = (knot(i), knot(i + deg + 1 - r));
-                let a = if k1 - k0 > 1e-12 { (t - k0) / (k1 - k0) } else { 0.0 };
-                d[j] = d[j - 1] * (1.0 - a) + d[j] * a;
-            }
+    let s = (t.floor() as usize).min(spans - 1);
+    // de Boor on the poles s..=s+deg.
+    let mut d: Vec<DVec2> = (0..=deg).map(|j| poles[s + j]).collect();
+    for r in 1..=deg {
+        for j in (r..=deg).rev() {
+            let i = s + j;
+            let (k0, k1) = (knot(i), knot(i + deg + 1 - r));
+            let a = if k1 - k0 > 1e-12 { (t - k0) / (k1 - k0) } else { 0.0 };
+            d[j] = d[j - 1] * (1.0 - a) + d[j] * a;
         }
-        d[deg]
-    };
-    let steps = spans * per_span.max(1);
-    (0..=steps).map(|k| at(k as f64 * spans as f64 / steps as f64)).collect()
+    }
+    d[deg]
 }
 
 /// The circle through three points: center and radius, or `None` if they are (nearly) collinear.

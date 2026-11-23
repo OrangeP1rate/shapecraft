@@ -3,7 +3,7 @@
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
 ## 0.12.7-alpha
-**3MF files open, threads work in every size, and there's Slot and Extend.**
+**3MF files open, threads come out right, and there are two new sketch tools: Slot and Extend.**
 ### New
 - **3MF import.** Every object on the plate comes in as a mesh body where it was placed, in a folder named after the
   file, with its color. Files from Bambu Studio and OrcaSlicer bring their part names and filament colors along, and

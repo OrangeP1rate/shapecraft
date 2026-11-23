@@ -87,6 +87,7 @@ impl Session {
     }
 
     fn keep_constraints_only(&mut self, before: &Document) -> Result<()> {
+        let renumbered = self.renumbered.take();
         for sk in &mut self.doc.sketches {
             if sk.constraints.is_empty() && sk.construction.is_empty() {
                 continue;
@@ -98,7 +99,7 @@ impl Session {
             if old.entities.len() != sk.entities.len() {
                 // Elements were added, removed or split: follow the unchanged ones, drop what depended on the rest.
                 // (Constraints added by this command already use the new numbering.)
-                if old.constraints == sk.constraints {
+                if old.constraints == sk.constraints && renumbered != Some(sk.id) {
                     let map = match_elements(&old.entities, &sk.entities);
                     let f = |e: u32| map.get(e as usize).copied().flatten();
                     sk.constraints = old.constraints.iter().filter_map(|c| c.remapped(&f)).collect();

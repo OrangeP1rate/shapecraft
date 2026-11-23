@@ -387,7 +387,8 @@ impl Workspace {
         }
         // Trim: the piece that would go, in the orange of a hovered curve (26.200, s11-084).
         if let (Tool::Trim { target: Some((i, at)) }, Some(sk)) = (&self.tool, self.session.active_sketch())
-            && let Ok((_, gone)) = shapecraft_doc::sketch_ops::trim(&sk.entities, *i as usize, *at)
+            && let Ok(shapecraft_doc::sketch_ops::Trimmed { removed: gone, .. }) =
+                shapecraft_doc::sketch_ops::trim(&sk.entities, *i as usize, *at)
         {
             for w in gone.outline().windows(2) {
                 out.push(Overlay::Line { a: sk.plane.to_world(w[0]), b: sk.plane.to_world(w[1]), color: Rgba::hex(0xd0861a), width: 2.0 });

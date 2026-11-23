@@ -84,6 +84,93 @@ fn trim_and_offset_sketch_curves() {
     assert!(s.execute("offset_edge", &json!({"distance": 0})).is_err());
 }
 
+/// #90: half of a rectangle's side comes off and the rest of the rectangle stays where it is.
+#[test]
+fn trimming_half_a_side_leaves_the_neighbours_alone() {
+    use glam::DVec2;
+    use shapecraft_doc::{Constraint, SketchEntity as E};
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("rectangle", &json!({"corner": [0, 0], "opposite": [40, 20]})).unwrap();
+    s.execute("line", &json!({"a": [0, 10], "b": [40, 10]})).unwrap();
+    s.execute("circle", &json!({"center": [0, 10], "radius": 10})).unwrap();
+    let before = s.active_sketch().unwrap().entities.clone();
+    s.execute("trim", &json!({"entity": 1, "at": [40, 15]})).unwrap();
+    let sk = s.active_sketch().unwrap();
+    assert_eq!(sk.entities[1], E::Line { a: DVec2::new(40.0, 0.0), b: DVec2::new(40.0, 10.0) });
+    for i in [0, 2, 3, 4, 5] {
+        assert_eq!(sk.entities[i], before[i], "curve {i} moved");
+    }
+    // The corner that is left still holds, and so do the sides' directions.
+    let holds = |want: &Constraint| sk.constraints.contains(want);
+    let point = |entity, index| shapecraft_doc::Element::Point { entity, index };
+    let side = |entity| shapecraft_doc::Element::Segment { entity, index: 0 };
+    assert!(holds(&Constraint::Coincident { a: point(0, 1), b: point(1, 0) }));
+    assert!(!holds(&Constraint::Coincident { a: point(1, 1), b: point(2, 0) }));
+    assert!(holds(&Constraint::Vertical { a: side(1) }) && holds(&Constraint::Horizontal { a: side(2) }));
+    // Undo brings the joined corner back.
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(s.active_sketch().unwrap().constraints.len(), 8 + 2);
+}
+
+/// A trim that splits or removes a curve keeps what still holds on the others and on what is left.
+#[test]
+fn trims_carry_constraints_and_construction_over() {
+    use shapecraft_doc::{Constraint, Element};
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("rectangle", &json!({"corner": [1, 1], "opposite": [41, 21]})).unwrap();
+    s.execute("line", &json!({"a": [11, -5], "b": [11, 30]})).unwrap();
+    s.execute("line", &json!({"a": [31, -5], "b": [31, 30], "construction": true})).unwrap();
+    s.execute("circle", &json!({"center": [60, 10], "radius": 5})).unwrap();
+    // The top side's middle goes: two pieces, both level, each still joined to its own corner.
+    let before = s.active_sketch().unwrap().clone();
+    s.execute("trim", &json!({"entity": 2, "at": [21, 21]})).unwrap();
+    let sk = s.active_sketch().unwrap().clone();
+    assert_eq!(sk.entities.len(), before.entities.len() + 1);
+    assert_eq!(sk.entities[4..], before.entities[3..]);
+    let side = |entity| Element::Segment { entity, index: 0 };
+    let point = |entity, index| Element::Point { entity, index };
+    for c in [
+        Constraint::Horizontal { a: side(2) },
+        Constraint::Horizontal { a: side(3) },
+        Constraint::Vertical { a: side(4) },
+        Constraint::Coincident { a: point(1, 1), b: point(2, 0) },
+        Constraint::Coincident { a: point(3, 1), b: point(4, 0) },
+    ] {
+        assert!(sk.constraints.contains(&c), "{c:?}");
+    }
+    assert_eq!(sk.construction.iter().copied().collect::<Vec<_>>(), vec![6], "the construction line kept its mark");
+    // A construction line cut in two is two construction lines.
+    s.execute("trim", &json!({"entity": 6, "at": [31, 10]})).unwrap();
+    assert_eq!(s.active_sketch().unwrap().construction.iter().copied().collect::<Vec<_>>(), vec![6, 7]);
+    // A circle with nothing across it goes whole; nothing else moves.
+    let before = s.active_sketch().unwrap().entities.clone();
+    let last = before.len() - 1;
+    s.execute("trim", &json!({"entity": last, "at": [65, 10]})).unwrap();
+    assert_eq!(s.active_sketch().unwrap().entities[..], before[..last]);
+}
+
+/// A dimension on what was cut doesn't hold any more: it goes instead of pulling the line back out.
+#[test]
+fn trimming_a_dimensioned_line_drops_the_dimension() {
+    use glam::DVec2;
+    use shapecraft_doc::{Constraint, SketchEntity as E};
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("line", &json!({"a": [3, 3], "b": [43, 3]})).unwrap();
+    s.execute("line", &json!({"a": [23, -10], "b": [23, 10]})).unwrap();
+    let id = s.active_sketch().unwrap().id.0;
+    s.execute("select", &json!({"picks": [{"kind": "sketch_entity", "sketch": id, "entity": 0}]})).unwrap();
+    s.execute("constrain", &json!({"kind": "distance", "value": 40})).unwrap();
+    assert!(s.active_sketch().unwrap().constraints.iter().any(|c| matches!(c, Constraint::Distance { .. })));
+    s.execute("trim", &json!({"entity": 0, "at": [33, 3]})).unwrap();
+    let sk = s.active_sketch().unwrap();
+    assert_eq!(sk.entities[0], E::Line { a: DVec2::new(3.0, 3.0), b: DVec2::new(23.0, 3.0) });
+    assert_eq!(sk.entities[1], E::Line { a: DVec2::new(23.0, -10.0), b: DVec2::new(23.0, 10.0) });
+    assert!(!sk.constraints.iter().any(|c| matches!(c, Constraint::Distance { .. })));
+}
+
 #[test]
 fn move_mirror_and_pattern_sketch_curves() {
     use glam::DVec2;

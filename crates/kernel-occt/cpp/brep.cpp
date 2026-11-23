@@ -1,3 +1,5 @@
+#include "fault.hpp"
+
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_Result.hxx>
 #include <cstdlib>
@@ -10,6 +12,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <BRepBuilderAPI_MakeEdge.hxx>
@@ -1697,7 +1700,7 @@ std::vector<double> describe(const TopoDS_Shape& shape) {
 }
 
 template <class F>
-int guard_b(F&& f) {
+int catching_b(F& f) {
   try {
     sk_quiet_external();
     return f();
@@ -1708,8 +1711,15 @@ int guard_b(F&& f) {
   } catch (const std::exception& e) {
     return sk_fail_external(e.what());
   } catch (...) {
-    return sk_fail_external("unknown C++ exception");
+    return sk_fail_external(kFailed);
   }
+}
+
+template <class F>
+int guard_b(F&& f) {
+  int faulted = 0;
+  const int code = sk_protect([](void* p) { return catching_b(*static_cast<std::remove_reference_t<F>*>(p)); }, &f, &faulted);
+  return faulted ? sk_fail_external(kFailed) : code;
 }
 
 }  // namespace

@@ -45,6 +45,8 @@ fn first_existing(candidates: &[&str]) -> Option<PathBuf> {
 fn main() {
     println!("cargo:rerun-if-changed=cpp/shim.cpp");
     println!("cargo:rerun-if-changed=cpp/brep.cpp");
+    println!("cargo:rerun-if-changed=cpp/fault.cpp");
+    println!("cargo:rerun-if-changed=cpp/fault.hpp");
     println!("cargo:rerun-if-env-changed=OCCT_INCLUDE_DIR");
     println!("cargo:rerun-if-env-changed=OCCT_LIB_DIR");
     println!("cargo:rerun-if-env-changed=OCCT_STATIC");
@@ -83,6 +85,7 @@ fn main() {
         .std("c++17")
         .file("cpp/shim.cpp")
         .file("cpp/brep.cpp")
+        .file("cpp/fault.cpp")
         .include(&include)
         .warnings(false)
         .compile("shapecraft_occt_shim");

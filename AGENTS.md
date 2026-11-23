@@ -55,7 +55,8 @@ The GUI and UX feeling extremely close to the reference is the most important fe
 - No `unwrap`/`expect`/`panic!`/`todo!`/`unreachable!` in non-test code. Errors are `Result` with `?`.
 - `unsafe` only inside `kernel-occt`'s FFI boundary, plus the one documented call in `plugin-host` that loads a
   precompiled plugin whose checksum was verified (`runtime::load`). Every OCCT call is wrapped in C++ `try/catch` (including
-  `Standard_Failure`) and returns an error code, so C++ exceptions never cross into Rust.
+  `Standard_Failure`) and returns an error code, so C++ exceptions never cross into Rust; a bad memory read
+  inside OCCT also comes back as an error (`cpp/fault.cpp`), so every entry point goes through `guard`.
 - Command execution runs under `catch_unwind`, and a failure restores the document.
 - Input-derived numbers (files, MCP params, typed values) are hostile: validate, check for NaN, cap sizes.
 

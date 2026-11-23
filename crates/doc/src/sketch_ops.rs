@@ -2,8 +2,11 @@
 
 use std::f64::consts::{PI, TAU};
 
+use std::collections::BTreeSet;
+
 use glam::{DAffine2, DVec2};
 
+use crate::constraints::{self, Constraint, Element};
 use crate::sketch::{SketchEntity, circle_through};
 
 const EPS: f64 = 1e-9;
@@ -187,16 +190,172 @@ fn distance_to(e: &SketchEntity, p: DVec2) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
+/// What [`trim`] did to a sketch's curves.
+#[derive(Clone, Debug)]
+pub struct Trimmed {
+    /// The sketch's new curves.
+    pub entities: Vec<SketchEntity>,
+    /// The piece that goes.
+    pub removed: SketchEntity,
+    /// The curves before the cut, with a rectangle or polygon already taken apart into its sides.
+    whole: Vec<SketchEntity>,
+    /// The curve that was asked for, and how many sides it was taken apart into (1 when it wasn't).
+    asked: usize,
+    sides: usize,
+    /// The curve (in `whole`) that was cut, and how many pieces of it are left, side by side from that place on.
+    cut: usize,
+    pieces: usize,
+}
+
+impl Trimmed {
+    /// Where a curve that wasn't cut is now.
+    fn moved(&self, whole: usize) -> usize {
+        if whole > self.cut { whole + self.pieces - 1 } else { whole }
+    }
+
+    /// The construction curves among the old ones, under their new numbers (what's left of one stays one).
+    pub fn construction(&self, old: &BTreeSet<u32>) -> BTreeSet<u32> {
+        let mut out = BTreeSet::new();
+        for &e in old {
+            let e = e as usize;
+            let whole = if e == self.asked { e..e + self.sides } else { self.to_whole(e)..self.to_whole(e) + 1 };
+            for w in whole {
+                let now = if w == self.cut { w..w + self.pieces } else { self.moved(w)..self.moved(w) + 1 };
+                out.extend(now.map(|i| i as u32));
+            }
+        }
+        out
+    }
+
+    fn to_whole(&self, old: usize) -> usize {
+        if old > self.asked { old + self.sides - 1 } else { old }
+    }
+
+    /// An element of the old curves as one of `whole`; `None` for what a taken-apart shape no longer has (its center).
+    fn element_in_whole(&self, el: Element, old: &[SketchEntity]) -> Option<Element> {
+        let entity = match el {
+            Element::Origin { .. } => return Some(el),
+            _ => el.entity() as usize,
+        };
+        if entity != self.asked || self.sides == 1 {
+            let e = self.to_whole(entity) as u32;
+            return Some(match el {
+                Element::Point { index, .. } => Element::Point { entity: e, index },
+                Element::Segment { index, .. } => Element::Segment { entity: e, index },
+                _ => Element::Curve { entity: e },
+            });
+        }
+        let side = |k: u32| ((k as usize) < self.sides).then_some(self.asked as u32 + k);
+        match (el, old.get(entity)?) {
+            (Element::Segment { index, .. }, _) => side(index).map(|entity| Element::Segment { entity, index: 0 }),
+            // A rectangle's corners come first; a polygon's follow its center.
+            (Element::Point { index, .. }, SketchEntity::Rectangle { .. }) => side(index).map(|entity| Element::Point { entity, index: 0 }),
+            (Element::Point { index, .. }, SketchEntity::Polygon { .. }) => {
+                side(index.checked_sub(1)?).map(|entity| Element::Point { entity, index: 0 })
+            }
+            _ => None,
+        }
+    }
+
+    /// What an element of `whole` can be on the new curves: itself under its new number, or any piece that still has it.
+    /// The end that was cut away is nothing any more.
+    fn elements_now(&self, el: Element) -> Vec<Element> {
+        if matches!(el, Element::Origin { .. }) {
+            return vec![el];
+        }
+        let entity = el.entity() as usize;
+        let at = |entity: usize| match el {
+            Element::Point { index, .. } => Element::Point { entity: entity as u32, index },
+            Element::Segment { index, .. } => Element::Segment { entity: entity as u32, index },
+            _ => Element::Curve { entity: entity as u32 },
+        };
+        if entity != self.cut {
+            return vec![at(self.moved(entity))];
+        }
+        let pieces = entity..entity + self.pieces;
+        let Element::Point { index, .. } = el else { return pieces.map(at).collect() };
+        // The point must still be where it was: an end that is left, a center.
+        let Some(was) = self.whole.get(entity).and_then(|e| constraints::points(e).get(index as usize).copied()) else { return Vec::new() };
+        let same = was.length().max(1.0) * 1e-7;
+        pieces
+            .flat_map(|j| {
+                let points = self.entities.get(j).map(constraints::points).unwrap_or_default();
+                let center = points.len() > 2;
+                // An arc's center only stands in for a center, an end for an end.
+                let was_center =
+                    matches!(self.whole.get(entity), Some(SketchEntity::Circle { .. } | SketchEntity::Ellipse { .. })) || index >= 2;
+                points
+                    .into_iter()
+                    .enumerate()
+                    .filter(move |(k, p)| (center && *k == 2) == was_center && p.distance(was) < same)
+                    .map(move |(k, _)| Element::Point { entity: j as u32, index: k as u32 })
+            })
+            .collect()
+    }
+
+    /// The constraints on the old curves, carried over to the new ones: every one that still holds on what is left.
+    /// The ends that were cut away and the sizes the cut changed go; without this the solver would pull the
+    /// neighbours after a cut end (#90).
+    pub fn constraints(&self, old: &[SketchEntity], list: &[Constraint]) -> Vec<Constraint> {
+        let mut out: Vec<Constraint> = Vec::new();
+        for c in list {
+            let options: Option<Vec<Vec<Element>>> =
+                c.elements().into_iter().map(|el| Some(self.elements_now(self.element_in_whole(el, old)?))).collect();
+            let Some(options) = options else { continue };
+            let touched = c.entities().iter().any(|e| *e as usize == self.asked);
+            // Directions hold on every piece; the rest stays on one.
+            let every = matches!(
+                c,
+                Constraint::Horizontal { .. }
+                    | Constraint::Vertical { .. }
+                    | Constraint::Parallel { .. }
+                    | Constraint::Perpendicular { .. }
+                    | Constraint::Concentric { .. }
+                    | Constraint::Radius { .. }
+                    | Constraint::Lock { .. }
+            );
+            for combo in combinations(&options) {
+                let Some(now) = c.with_elements(&combo) else { continue };
+                let holds = !touched
+                    || constraints::residuals(&self.entities, &now).is_some_and(|r| r.iter().all(|v| v.abs() < 1e-5))
+                        && constraints::residuals(old, c).is_some_and(|r| r.iter().all(|v| v.abs() < 1e-4));
+                if holds {
+                    out.push(now);
+                    if !every {
+                        break;
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Every way to take one of each.
+fn combinations(options: &[Vec<Element>]) -> Vec<Vec<Element>> {
+    options.iter().fold(vec![Vec::new()], |acc, opts| {
+        acc.iter()
+            .flat_map(|head| {
+                opts.iter().map(move |o| {
+                    let mut v = head.clone();
+                    v.push(*o);
+                    v
+                })
+            })
+            .collect()
+    })
+}
+
 /// Removes the piece of curve `index` around `at`, between the nearest crossings with the other curves
-/// (the whole curve if nothing crosses it). Returns the sketch's new entity list and the piece that goes.
-pub fn trim(entities: &[SketchEntity], index: usize, at: DVec2) -> Result<(Vec<SketchEntity>, SketchEntity), &'static str> {
+/// (the whole curve if nothing crosses it).
+pub fn trim(entities: &[SketchEntity], index: usize, at: DVec2) -> Result<Trimmed, &'static str> {
     let target = entities.get(index).ok_or("no such sketch curve")?;
     if let Some(sides) = explode(target) {
         let pick = sides.iter().enumerate().min_by(|a, b| distance_to(a.1, at).total_cmp(&distance_to(b.1, at))).map_or(0, |(i, _)| i);
         let mut list: Vec<SketchEntity> = entities[..index].to_vec();
         list.extend(sides.iter().cloned());
         list.extend(entities[index + 1..].iter().cloned());
-        return trim(&list, index + pick, at);
+        return Ok(Trimmed { asked: index, sides: sides.len(), ..trim(&list, index + pick, at)? });
     }
     let cutters: Vec<Prim> = entities.iter().enumerate().filter(|(j, _)| *j != index).flat_map(|(_, e)| prims(e)).collect();
     let (pieces, removed): (Vec<SketchEntity>, SketchEntity) = match *target {
@@ -261,9 +420,10 @@ pub fn trim(entities: &[SketchEntity], index: usize, at: DVec2) -> Result<(Vec<S
         SketchEntity::Rectangle { .. } | SketchEntity::Polygon { .. } => return Err("could not split the shape"),
     };
     let mut list: Vec<SketchEntity> = entities[..index].to_vec();
+    let count = pieces.len();
     list.extend(pieces);
     list.extend(entities[index + 1..].iter().cloned());
-    Ok((list, removed))
+    Ok(Trimmed { entities: list, removed, whole: entities.to_vec(), asked: index, sides: 1, cut: index, pieces: count })
 }
 
 /// A copy of the curve moved sideways by `d`: outwards for closed shapes and arcs (away from the center),
@@ -421,19 +581,19 @@ mod tests {
             SketchEntity::Line { a: v(3.0, -1.0), b: v(3.0, 1.0) },
             SketchEntity::Line { a: v(7.0, -1.0), b: v(7.0, 1.0) },
         ];
-        let out = trim(&es, 0, v(5.0, 0.1)).unwrap().0;
+        let out = trim(&es, 0, v(5.0, 0.1)).unwrap().entities;
         assert_eq!(out.len(), 4);
         assert_eq!(out[0], SketchEntity::Line { a: v(0.0, 0.0), b: v(3.0, 0.0) });
         assert_eq!(out[1], SketchEntity::Line { a: v(7.0, 0.0), b: v(10.0, 0.0) });
         // An end piece goes, and an uncrossed line goes entirely.
-        assert_eq!(trim(&es, 0, v(1.0, 0.0)).unwrap().0[0], SketchEntity::Line { a: v(3.0, 0.0), b: v(10.0, 0.0) });
-        assert_eq!(trim(&es[..1], 0, v(1.0, 0.0)).unwrap().0.len(), 0);
+        assert_eq!(trim(&es, 0, v(1.0, 0.0)).unwrap().entities[0], SketchEntity::Line { a: v(3.0, 0.0), b: v(10.0, 0.0) });
+        assert_eq!(trim(&es[..1], 0, v(1.0, 0.0)).unwrap().entities.len(), 0);
     }
 
     #[test]
     fn trim_a_circle_across_a_line_leaves_an_arc() {
         let es = vec![SketchEntity::Circle { center: v(0.0, 0.0), radius: 5.0 }, SketchEntity::Line { a: v(-6.0, 0.0), b: v(6.0, 0.0) }];
-        let (out, gone) = trim(&es, 0, v(0.0, 5.0)).unwrap();
+        let Trimmed { entities: out, removed: gone, .. } = trim(&es, 0, v(0.0, 5.0)).unwrap();
         let SketchEntity::Arc { mid: gm, .. } = gone else { panic!() };
         assert!(gm.distance(v(0.0, 5.0)) < 1e-9);
         let SketchEntity::Arc { a, mid, b } = out[0] else { panic!("{out:?}") };
@@ -445,7 +605,7 @@ mod tests {
     fn trim_one_side_of_a_rectangle() {
         let es =
             vec![SketchEntity::Rectangle { min: v(0.0, 0.0), max: v(10.0, 4.0) }, SketchEntity::Line { a: v(5.0, -1.0), b: v(5.0, 5.0) }];
-        let out = trim(&es, 0, v(2.0, 0.0)).unwrap().0;
+        let out = trim(&es, 0, v(2.0, 0.0)).unwrap().entities;
         // Four sides, one of them shortened, plus the cutting line.
         assert_eq!(out.len(), 5);
         assert_eq!(out[0], SketchEntity::Line { a: v(5.0, 0.0), b: v(10.0, 0.0) });
@@ -457,7 +617,7 @@ mod tests {
             SketchEntity::Arc { a: v(5.0, 0.0), mid: v(0.0, 5.0), b: v(-5.0, 0.0) },
             SketchEntity::Line { a: v(0.0, 0.0), b: v(0.0, 10.0) },
         ];
-        let out = trim(&es, 0, v(3.0, 4.0)).unwrap().0;
+        let out = trim(&es, 0, v(3.0, 4.0)).unwrap().entities;
         assert_eq!(out.len(), 2);
         let SketchEntity::Arc { a, b, .. } = out[0] else { panic!() };
         assert!(a.distance(v(0.0, 5.0)) < 1e-9 && b.distance(v(-5.0, 0.0)) < 1e-9, "{a} {b}");

@@ -150,6 +150,7 @@ impl Workspace {
             Some(Ok(out)) => {
                 self.remember(id);
                 self.live_step = None;
+                self.say_note(&out.value);
                 Some(out.value)
             }
             Some(Err(e)) => {
@@ -164,6 +165,13 @@ impl Workspace {
                 None
             }
             None => None,
+        }
+    }
+
+    /// What a step that worked has to say about it (a Union that joined nothing).
+    pub(super) fn say_note(&mut self, value: &Value) {
+        if let Some(note) = value["note"].as_str() {
+            self.toast(note);
         }
     }
 

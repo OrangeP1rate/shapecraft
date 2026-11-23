@@ -3,6 +3,8 @@
 // Every entry point returns 0 on success or 1 on failure (message in sk_last_error()). No C++ exception
 // ever leaves this file.
 
+#include "fault.hpp"
+
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -92,6 +94,7 @@
 #include <Message_ProgressIndicator.hxx>
 #include <Message_ProgressScope.hxx>
 #include <atomic>
+#include <type_traits>
 #include <chrono>
 #include <gp_GTrsf.hxx>
 #include <gp_Mat.hxx>
@@ -218,8 +221,15 @@ void quiet_messenger() {
   (void)done;
 }
 
+// Stopping long OCCT work (#21, #22). An import running on its own thread marks itself cancellable; Cancel then sets
+// g_cancel. A deadline (per thread) bounds one step, such as repairing one shape. Only the calls that take a
+// progress range look at these, between their own pieces of work.
+std::atomic<bool> g_cancel{false};
+thread_local bool g_cancellable = false;
+thread_local double g_deadline = 0.0;
+
 template <typename F>
-int guard(F&& f) {
+int catching(F& f) {
   try {
     quiet_messenger();
     return f();
@@ -228,16 +238,21 @@ int guard(F&& f) {
   } catch (const std::exception& e) {
     return fail(e.what());
   } catch (...) {
-    return fail("unknown C++ exception");
+    return fail(kFailed);  // on Windows a memory fault ends up here too
   }
 }
 
-// Stopping long OCCT work (#21, #22). An import running on its own thread marks itself cancellable; Cancel then sets
-// g_cancel. A deadline (per thread) bounds one step, such as repairing one shape. Only the calls that take a
-// progress range look at these, between their own pieces of work.
-std::atomic<bool> g_cancel{false};
-thread_local bool g_cancellable = false;
-thread_local double g_deadline = 0.0;
+// Every entry point that runs OCCT goes through here: no exception leaves, and a bad read inside OCCT fails the
+// operation instead of ending the app (fault.cpp).
+template <typename F>
+int guard(F&& f) {
+  const double deadline = g_deadline;
+  int faulted = 0;
+  const int code = sk_protect([](void* p) { return catching(*static_cast<std::remove_reference_t<F>*>(p)); }, &f, &faulted);
+  if (!faulted) return code;
+  g_deadline = deadline;
+  return fail(kFailed);
+}
 
 double now_s() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
@@ -2264,6 +2279,11 @@ bool face_level(const TopoDS_Face& f, gp_Dir& n, double& h) {
 
 
 // Delete Face: the faces come out and their neighbours extend to close the body (BRepAlgoAPI_Defeaturing).
+// For the test of guard: reads from an address nothing is at.
+int sk_fault_test(uint64_t where) {
+  return guard([&] { return sk_bad_read(reinterpret_cast<void*>(uintptr_t(where))); });
+}
+
 int sk_remove_faces(const SkShape* s, const uint32_t* ids, size_t n, SkShape** out) {
   return guard([&] {
     TopTools_IndexedMapOfShape map;

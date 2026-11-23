@@ -2,7 +2,7 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
-## 0.12.5-alpha
+## 0.12.6-alpha
 **Everything moves now: popups grow in and out, the side columns slide.**
 ### New
 - **F2 renames the thing you picked.** Not the project. The thing you picked. Revolutionary, we know. It works on
@@ -33,6 +33,15 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
 - **Preferences ▸ General ▸ Animations ▸ Fancy animations** turns all of this off, for slower computers. It's also
   off with the system's Reduce Motion (macOS; Animation effects on Windows).
 ### Fixed
+- **A fault inside the geometry kernel no longer ends the app.** Offset Face on a swept tube (and Shell on one swept
+  round a corner) could run OpenCASCADE into a missing edge and crash ShapeCraft. Such a fault now fails that one step,
+  with a message, and your part stays as it was. Thanks [@movh](https://github.com/movh) (#91).
+- **Trim takes only the piece you click.** Cutting part of a rectangle's side pulled the next side along, so it looked
+  deleted. The other curves now stay put; what still holds on the rest is kept, and dimensions the cut made wrong go.
+  Thanks [@micide0606](https://github.com/micide0606) (#90).
+- **Union says when bodies don't touch.** Nothing was joined, nothing was said, and both bodies came out under one
+  name. Now a message says so and each body keeps its own name; the step stays, and joins them if you later change
+  them to overlap. Thanks [@jan-tdy](https://github.com/jan-tdy) (#92).
 - The Escape that closes Preferences, Search or another popup no longer also reaches the workspace behind it (it
   used to leave the sketch too).
 - **Renaming something inside a closed folder** opens the folder. It used to leave every key dead, with no field to

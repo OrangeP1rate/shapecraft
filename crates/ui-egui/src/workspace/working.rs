@@ -161,9 +161,10 @@ impl Workspace {
             Ok((fork, out)) => {
                 let Some(w) = self.working.take() else { return false };
                 match out {
-                    Ok(_) => {
+                    Ok(out) => {
                         self.session = fork;
                         self.remember(w.id);
+                        self.say_note(&out.value);
                         if w.live {
                             self.live_step = Some(self.session.revision);
                         } else {

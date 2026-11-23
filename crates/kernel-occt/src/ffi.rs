@@ -127,6 +127,8 @@ unsafe extern "C" {
     pub fn sk_offset_faces_way(s: *const SkShape, ids: *const u32, n: usize, distance: f64, way: i32, out: *mut *mut SkShape) -> i32;
     pub fn sk_volume(s: *const SkShape, volume: *mut f64) -> i32;
     pub fn sk_face_level(s: *const SkShape, face: u32, normal: *mut f64, level: *mut f64, found: *mut i32) -> i32;
+    #[cfg(test)]
+    pub fn sk_fault_test(at: u64) -> i32;
     pub fn sk_remove_faces(s: *const SkShape, ids: *const u32, n: usize, out: *mut *mut SkShape) -> i32;
     pub fn sk_split_plane(
         s: *const SkShape,

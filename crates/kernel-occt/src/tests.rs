@@ -1431,3 +1431,27 @@ fn unclamped_closed_band_keeps_its_area() {
     let (area, _) = k().measure(&s, SubShape::Face(face)).unwrap();
     assert!((area - length * h).abs() < 0.01 * length * h, "band area {area}, want {}", length * h);
 }
+
+/// A bad read inside the kernel (#91) fails the operation; the app, the thread and the next operation go on.
+#[test]
+fn a_bad_read_inside_the_kernel_is_an_error() {
+    let k = k();
+    // Through a null pointer, from an address nothing is mapped at, and from one no memory can have.
+    for at in [0x60, 0x7000_0000_1000, 0x5555_5560_885c_55d0, 0x60] {
+        // SAFETY: reads one byte; the fault it raises is what's being tested.
+        let e = check("fault", unsafe { ffi::sk_fault_test(at) }).unwrap_err().to_string();
+        assert!(e.contains("geometry kernel failed on this shape"), "{e}");
+        let block = k.make_box(DVec3::ZERO, DVec3::splat(10.0)).unwrap();
+        assert!((k.mass_props(&block).unwrap().volume - 1000.0).abs() < 1e-6);
+    }
+    // On other threads too, several at once.
+    let threads: Vec<_> = (0..4)
+        .map(|_| {
+            std::thread::spawn(|| {
+                // SAFETY: as above.
+                (0..50).all(|_| check("fault", unsafe { ffi::sk_fault_test(0x60) }).is_err())
+            })
+        })
+        .collect();
+    assert!(threads.into_iter().all(|t| t.join().unwrap()));
+}

@@ -752,3 +752,49 @@ fn wrap_emboss_wide_past_the_rim_and_again() {
     s.execute("wrap_emboss", &json!({"sketch": sk, "regions": [0, 1], "body": body, "depth": -0.5})).unwrap();
     assert!((before - volume(&mut s) - 5.8264).abs() < 0.01, "{}", before - volume(&mut s));
 }
+
+/// #91: offsetting the side of a bent swept tube walked the kernel into a missing edge and ended the app. Now it's a
+/// distance that doesn't work, and the body is as it was.
+#[test]
+fn offsetting_a_bent_tube_too_far_is_refused() {
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xz"})).unwrap();
+    s.execute("line", &json!({"a": [0, 0], "b": [0, 40]})).unwrap();
+    s.execute("line", &json!({"a": [0, 40], "b": [25, 60]})).unwrap();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 4})).unwrap();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 2})).unwrap();
+    s.execute("sweep", &json!({"profile": {"sketch": 2, "region": 0}, "path": {"sketch": 1}, "result": "new", "orientation": "parallel"}))
+        .unwrap();
+    let before = volume(&mut s);
+    for face in 0..4 {
+        for distance in [8.0, -8.0, 30.0] {
+            let offset = json!({"distance": distance, "body": 3, "faces": [face]});
+            let _ = s.preview("offset_face", &offset);
+        }
+    }
+    assert_eq!(s.doc.bodies.len(), 1);
+    assert!((volume(&mut s) - before).abs() < 1e-9);
+    // The kernel still works afterwards.
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("rectangle", &json!({"corner": [100, 0], "opposite": [110, 10]})).unwrap();
+    s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 10, "result": "new"})).unwrap();
+    assert_eq!(s.doc.bodies.len(), 2);
+}
+
+/// Found beside #91: the same for Shell, on a tube swept round a corner.
+#[test]
+fn shelling_a_round_cornered_tube_never_ends_the_app() {
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xz"})).unwrap();
+    s.execute("line", &json!({"a": [0, 0], "b": [0, 40]})).unwrap();
+    s.execute("line", &json!({"a": [0, 40], "b": [40, 75]})).unwrap();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 5})).unwrap();
+    s.execute("circle", &json!({"center": [0, 0], "radius": 2.5})).unwrap();
+    s.execute("sweep", &json!({"profile": {"sketch": 2, "region": 0}, "path": {"sketch": 1}, "result": "new", "corners": "round"}))
+        .unwrap();
+    let before = volume(&mut s);
+    let _ = s.preview("shell", &json!({"thickness": 0.8, "body": 3, "faces": [2]}));
+    assert!((volume(&mut s) - before).abs() < 1e-9);
+}

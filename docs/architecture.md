@@ -20,7 +20,7 @@ several (CLI, control channel, MCP).
 | Crate | What it owns |
 |---|---|
 | `kernel` | The solid-modeling interface: an opaque `Shape` handle, meshes, planar curves, axes, the neutral B-rep. No kernel types leak out. |
-| `kernel-occt` | The OpenCASCADE implementation. A C++ shim (`cpp/`) with every call in `try/catch`; all `unsafe` lives at its FFI boundary. |
+| `kernel-occt` | The OpenCASCADE implementation. A C++ shim (`cpp/`) with every call in `try/catch` and bad memory reads inside OCCT turned into errors (`cpp/fault.cpp`); all `unsafe` lives at its FFI boundary. |
 | `doc` | The project document: bodies, sketches (entities, regions, constraints), planes, axes, images, visual settings, project folders on disk. Cheap to clone, so undo is a list of snapshots. |
 | `engine` | The editing session: document + kernel + undo/redo + selection, and **every command** (`cmd/`). Mesh and sketch file formats live in `formats/`; STEP and IGES go through the kernel. |
 | `render` | The wgpu viewport: camera, scene assembly, shaders, picking, headless PNGs. Knows nothing about the UI toolkit. |

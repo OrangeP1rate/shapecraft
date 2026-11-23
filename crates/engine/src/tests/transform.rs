@@ -22,6 +22,50 @@ fn booleans_and_fillet() {
     assert!(volume(&mut s) < 1500.0);
 }
 
+/// #92: a Union of bodies that don't meet is a step that joins nothing. Each stays itself, and it says so.
+#[test]
+fn union_leaves_bodies_that_dont_touch_as_they_are() {
+    let mut s = session();
+    let mut block = |x: f64| {
+        s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+        s.execute("rectangle", &json!({"corner": [x, 0], "opposite": [x + 10.0, 10]})).unwrap();
+        s.execute("extrude", &json!({"sketch": s.active_sketch.unwrap().0, "region": 0, "distance": 10})).unwrap();
+        s.doc.bodies.last().unwrap().id.0
+    };
+    let (a, b, touching, apart) = (block(0.0), block(30.0), block(10.0), block(60.0));
+    let names = |s: &Session| {
+        let mut n: Vec<String> = s.doc.bodies.iter().map(|b| b.name.clone()).collect();
+        n.sort();
+        n
+    };
+    let before = names(&s);
+    let steps = s.doc.history.len();
+    let out = s.execute("union", &json!({"target": a, "tools": [b]})).unwrap().value;
+    assert!(out["note"].as_str().unwrap().contains("nothing was joined"), "{out}");
+    assert_eq!(names(&s), before, "every body keeps its own name");
+    assert_eq!(s.doc.history.len(), steps + 1, "the step counts");
+    assert!((volume(&mut s) - 4000.0).abs() < 1e-6);
+    s.execute("undo", &json!({})).unwrap();
+    // One that joins and one that doesn't.
+    let alone = s.doc.body(shapecraft_doc::ItemId(apart)).unwrap().name.clone();
+    let out = s.execute("union", &json!({"target": a, "tools": [touching, apart]})).unwrap().value;
+    assert!(out["note"].as_str().unwrap().starts_with(&alone), "{out}");
+    assert_eq!(s.doc.bodies.len(), 3);
+    assert!(names(&s).contains(&alone));
+    s.execute("undo", &json!({})).unwrap();
+    // The target apart from two that join: they take a name of their own, not the target's.
+    let out = s.execute("union", &json!({"target": apart, "tools": [a, touching]})).unwrap().value;
+    assert!(out["note"].as_str().unwrap().starts_with(&alone), "{out}");
+    assert_eq!(names(&s).iter().filter(|n| **n == alone).count(), 1);
+    assert_eq!(s.doc.bodies.len(), 3);
+    s.execute("undo", &json!({})).unwrap();
+    // Sharing a face is enough, and then there's nothing to say.
+    let out = s.execute("union", &json!({"target": a, "tools": [touching]})).unwrap().value;
+    assert!(out["note"].is_null());
+    assert_eq!(s.doc.bodies.len(), 3);
+    assert!((volume(&mut s) - 4000.0).abs() < 1e-6);
+}
+
 #[test]
 fn linear_pattern_copies_and_merges() {
     let mut s = session();

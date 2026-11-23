@@ -2,7 +2,7 @@
 
 use glam::DVec3;
 use serde_json::{Value, json};
-use shapecraft_kernel::BoolOp;
+use shapecraft_kernel::{BoolOp, Shape};
 
 use super::{add_mesh_body, add_result, face_frame, facets_of, put_result, selected_bodies, set_body_facets, target_bodies, working_shape};
 use crate::cmd::CommandSpec;
@@ -67,18 +67,37 @@ fn boolean(s: &mut Session, p: &Params, op: BoolOp) -> Result<Value> {
     if pieces.is_empty() {
         pieces.push(shape);
     }
-    let target_name = s.doc.body(target).map(|b| b.name.clone()).unwrap_or_default();
-    let mut made = Vec::new();
-    let mut pieces = pieces.into_iter();
-    if !keep_target && let Some(first) = pieces.next() {
-        put_result(s, target, first, mesh)?;
-        made.push(target);
-    }
-    for piece in pieces {
-        let id = add_result(s, piece, mesh)?;
-        if let Some(b) = s.doc.bodies.iter_mut().find(|b| b.id == id) {
-            b.name = target_name.clone();
+    let mut whose = vec![None; pieces.len()];
+    if op == BoolOp::Union && pieces.len() > 1 {
+        let mut measures = pieces.iter().map(|p| exact_measure(s, p)).collect::<Result<Vec<_>>>()?;
+        let mut wholes = Vec::new();
+        for id in std::iter::once(&target).chain(tools.iter().filter(|t| **t != target)) {
+            let (bounds, volume) = exact_measure(s, &working_shape(s, *id, true)?)?;
+            wholes.push(Whole { id: *id, bounds, volume });
         }
+        whose = untouched(&mut pieces, &mut measures, &wholes, target);
+    }
+    let note = apart_note(s, &whose, 1 + tool_shapes.len());
+    let name = joined_name(s, &whose, target, tools.as_slice());
+    let mut made = Vec::new();
+    for (k, (piece, whose)) in pieces.into_iter().zip(whose).enumerate() {
+        if k == 0 && !keep_target {
+            if whose.is_none() {
+                put_result(s, target, piece, mesh)?;
+            }
+            made.push(target);
+            continue;
+        }
+        let id = match whose {
+            Some(w) => carry_over(s, w)?,
+            None => {
+                let id = add_result(s, piece, mesh)?;
+                if let Some(b) = s.doc.body_mut(id) {
+                    b.name = name.clone();
+                }
+                id
+            }
+        };
         made.push(id);
     }
     if !keep_tools {
@@ -88,7 +107,90 @@ fn boolean(s: &mut Session, p: &Params, op: BoolOp) -> Result<Value> {
     }
     // Nothing stays selected (observed 382, 385).
     s.selection.clear();
-    Ok(json!({ "body": made.first().map_or(target.0, |b| b.0), "bodies": made.iter().map(|b| b.0).collect::<Vec<_>>() }))
+    let mut out = json!({ "body": made.first().map_or(target.0, |b| b.0), "bodies": made.iter().map(|b| b.0).collect::<Vec<_>>() });
+    if let Some(note) = note {
+        out["note"] = json!(note);
+    }
+    Ok(out)
+}
+
+/// The name of the bodies a boolean makes: the target's, or (a Union the target met nothing in) the first tool's that
+/// met another.
+fn joined_name(s: &Session, whose: &[Option<ItemId>], target: ItemId, tools: &[ItemId]) -> String {
+    let from = if whose.contains(&Some(target)) { tools.iter().copied().find(|t| !whose.contains(&Some(*t))) } else { None };
+    s.doc.body(from.unwrap_or(target)).map(|b| b.name.clone()).unwrap_or_default()
+}
+
+/// Body `id` as it is (name, look, painted faces), under a new id.
+fn carry_over(s: &mut Session, id: ItemId) -> Result<ItemId> {
+    let mut body = s.doc.body(id).cloned().ok_or_else(|| EngineError::BadParams(format!("no body {}", id.0)))?;
+    body.id = s.doc.alloc_id();
+    let id = body.id;
+    s.doc.bodies.push(body);
+    Ok(id)
+}
+
+/// A body that met nothing in a Union: who it is, and how to tell its piece in the result.
+struct Whole {
+    id: ItemId,
+    bounds: (DVec3, DVec3),
+    volume: f64,
+}
+
+impl Whole {
+    fn is(&self, bounds: (DVec3, DVec3), volume: f64) -> bool {
+        let tol = 1e-6 * (self.bounds.1 - self.bounds.0).length().max(1.0);
+        bounds.0.distance(self.bounds.0) < tol
+            && bounds.1.distance(self.bounds.1) < tol
+            && (volume - self.volume).abs() < 1e-6 * self.volume.abs().max(1e-9)
+    }
+}
+
+fn exact_measure(s: &Session, shape: &Shape) -> Result<((DVec3, DVec3), f64)> {
+    let b = s.kernel.bounds(shape)?;
+    Ok(((b.min, b.max), s.kernel.mass_props(shape)?.volume))
+}
+
+fn mesh_measure(f: &Facets) -> ((DVec3, DVec3), f64) {
+    let inf = DVec3::splat(f64::INFINITY);
+    let bounds = f.points.iter().fold((inf, -inf), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+    let volume = f
+        .triangles
+        .iter()
+        .map(|t| {
+            let [a, b, c] = t.map(|i| f.points[i as usize]);
+            a.dot(b.cross(c)) / 6.0
+        })
+        .sum();
+    (bounds, volume)
+}
+
+/// Which of the bodies that went into a Union came out untouched (they met none of the others), by piece. The
+/// target's piece comes first: its own, or else the first joined one. Such a piece stays a body under its own name, as observed (the step still
+/// counts: edit the bodies until they meet and it joins them).
+fn untouched<T>(pieces: &mut [T], measures: &mut [((DVec3, DVec3), f64)], wholes: &[Whole], target: ItemId) -> Vec<Option<ItemId>> {
+    let mut left: Vec<&Whole> = wholes.iter().collect();
+    let mut out: Vec<Option<ItemId>> =
+        measures.iter().map(|(b, v)| left.iter().position(|w| w.is(*b, *v)).map(|i| left.remove(i).id)).collect();
+    if let Some(i) = out.iter().position(|o| *o == Some(target)).or_else(|| out.iter().position(Option::is_none)) {
+        pieces[..=i].rotate_right(1);
+        measures[..=i].rotate_right(1);
+        out[..=i].rotate_right(1);
+    }
+    out
+}
+
+/// What a Union says when some of its bodies met nothing (#92).
+fn apart_note(s: &Session, apart: &[Option<ItemId>], inputs: usize) -> Option<String> {
+    let names: Vec<&str> = apart.iter().flatten().filter_map(|id| s.doc.body(*id)).map(|b| b.name.as_str()).collect();
+    match names.as_slice() {
+        [] => None,
+        n if n.len() >= inputs => {
+            Some("These bodies don't touch, so nothing was joined. They join once they overlap or share a face.".into())
+        }
+        [one] => Some(format!("{one} doesn't touch the others, so it stays a body of its own.")),
+        many => Some(format!("{} don't touch the others, so they stay bodies of their own.", many.join(", "))),
+    }
 }
 
 /// A boolean among mesh bodies (and exact bodies with them), on triangles. Pieces that came apart become mesh bodies
@@ -119,20 +221,39 @@ fn mesh_boolean(s: &mut Session, p: &Params, op: BoolOp, target: ItemId, tools: 
         "all" | "true" => (true, true),
         _ => (false, false),
     };
-    let name = s.doc.body(target).map(|b| b.name.clone()).unwrap_or_default();
-    let mut made = Vec::new();
-    let mut pieces = pieces.into_iter();
-    if !keep_target && let Some(first) = pieces.next() {
-        let empty = s.kernel.empty()?;
-        if let Some(b) = s.doc.body_mut(target) {
-            b.shape = empty;
-        }
-        set_body_facets(s, target, first)?;
-        made.push(target);
+    let mut pieces = pieces;
+    let mut whose = vec![None; pieces.len()];
+    if op == BoolOp::Union && pieces.len() > 1 {
+        let mut measures: Vec<_> = pieces.iter().map(mesh_measure).collect();
+        let ids = std::iter::once(target).chain(tools.iter().copied().filter(|t| *t != target));
+        let wholes: Vec<Whole> = ids
+            .zip(std::iter::once(&target_facets).chain(&tool_facets))
+            .map(|(id, f)| {
+                let (bounds, volume) = mesh_measure(f);
+                Whole { id, bounds, volume }
+            })
+            .collect();
+        whose = untouched(&mut pieces, &mut measures, &wholes, target);
     }
-    for piece in pieces {
-        let id = add_mesh_body(s, piece, name.clone())?;
-        made.push(id);
+    let note = apart_note(s, &whose, 1 + tool_facets.len());
+    let name = joined_name(s, &whose, target, tools);
+    let mut made = Vec::new();
+    for (k, (piece, whose)) in pieces.into_iter().zip(whose).enumerate() {
+        if k == 0 && !keep_target {
+            if whose.is_none() {
+                let empty = s.kernel.empty()?;
+                if let Some(b) = s.doc.body_mut(target) {
+                    b.shape = empty;
+                }
+                set_body_facets(s, target, piece)?;
+            }
+            made.push(target);
+            continue;
+        }
+        made.push(match whose {
+            Some(w) => carry_over(s, w)?,
+            None => add_mesh_body(s, piece, name.clone())?,
+        });
     }
     if !keep_tools {
         for t in tools.iter().filter(|t| **t != target) {
@@ -140,7 +261,11 @@ fn mesh_boolean(s: &mut Session, p: &Params, op: BoolOp, target: ItemId, tools: 
         }
     }
     s.selection.clear();
-    Ok(json!({ "body": made.first().map_or(target.0, |b| b.0), "bodies": made.iter().map(|b| b.0).collect::<Vec<_>>() }))
+    let mut out = json!({ "body": made.first().map_or(target.0, |b| b.0), "bodies": made.iter().map(|b| b.0).collect::<Vec<_>>() });
+    if let Some(note) = note {
+        out["note"] = json!(note);
+    }
+    Ok(out)
 }
 
 /// Split Body (s12-002..020): the bodies are cut by each tool in "with" (an origin plane given as origin + normal,

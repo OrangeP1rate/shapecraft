@@ -181,6 +181,28 @@ impl Constraint {
         self.elements().iter().map(|e| e.entity()).filter(|e| *e != NO_ENTITY).collect()
     }
 
+    /// The same constraint on other elements, given in the order of [`Constraint::elements`].
+    pub fn with_elements(&self, els: &[Element]) -> Option<Constraint> {
+        let el = |i: usize| els.get(i).copied();
+        Some(match *self {
+            Constraint::Horizontal { .. } => Constraint::Horizontal { a: el(0)? },
+            Constraint::Vertical { .. } => Constraint::Vertical { a: el(0)? },
+            Constraint::Parallel { .. } => Constraint::Parallel { a: el(0)?, b: el(1)? },
+            Constraint::Perpendicular { .. } => Constraint::Perpendicular { a: el(0)?, b: el(1)? },
+            Constraint::Equal { .. } => Constraint::Equal { a: el(0)?, b: el(1)? },
+            Constraint::Coincident { .. } => Constraint::Coincident { a: el(0)?, b: el(1)? },
+            Constraint::Midpoint { .. } => Constraint::Midpoint { a: el(0)?, b: el(1)? },
+            Constraint::Concentric { .. } => Constraint::Concentric { a: el(0)?, b: el(1)? },
+            Constraint::Tangent { inside, .. } => Constraint::Tangent { a: el(0)?, b: el(1)?, inside },
+            Constraint::Symmetric { .. } => Constraint::Symmetric { a: el(0)?, b: el(1)?, axis: el(2)? },
+            Constraint::Lock { .. } => Constraint::Lock { entity: el(0)?.entity() },
+            Constraint::Distance { value, along, .. } => Constraint::Distance { a: el(0)?, value, along },
+            Constraint::Radius { value, .. } => Constraint::Radius { a: el(0)?, value },
+            Constraint::Angle { value, .. } => Constraint::Angle { a: el(0)?, b: el(1)?, value },
+            Constraint::PointDistance { value, .. } => Constraint::PointDistance { a: el(0)?, b: el(1)?, value },
+        })
+    }
+
     /// The same constraint on renumbered elements, or `None` when one of them is gone.
     pub fn remapped(&self, map: &dyn Fn(u32) -> Option<u32>) -> Option<Constraint> {
         let m = |e: Element| match e {

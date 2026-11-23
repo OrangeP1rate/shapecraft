@@ -67,6 +67,8 @@ pub struct Session {
     pub(crate) shapr_steps: Vec<[String; 2]>,
     /// A rebuild from the history: commands don't ask for follow-ups (they are steps of their own already).
     pub(crate) replaying: bool,
+    /// The sketch whose constraints and construction marks the command that just ran renumbered itself.
+    pub(crate) renumbered: Option<ItemId>,
     /// What the History keeps for the command that just ran, when that isn't its params (an Unlinked Copy keeps
     /// the copies' geometry, so later edits of what it copied leave it alone).
     pub(crate) log_params: Option<Value>,
@@ -113,6 +115,7 @@ impl Session {
             adopt: None,
             shapr_steps: Vec::new(),
             replaying: false,
+            renumbered: None,
             log_params: None,
             replayed: Arc::new(Vec::new()),
             progress: None,
@@ -151,6 +154,7 @@ impl Session {
             adopt: None,
             shapr_steps: Vec::new(),
             replaying: false,
+            renumbered: None,
             log_params: None,
             replayed: self.replayed.clone(),
             progress: None,
@@ -180,6 +184,7 @@ impl Session {
             adopt: None,
             shapr_steps: Vec::new(),
             replaying: false,
+            renumbered: None,
             log_params: None,
             replayed: self.replayed.clone(),
             progress: None,

@@ -888,10 +888,13 @@ fn trim(s: &mut Session, p: &Params) -> Result<Value> {
         return Err(EngineError::BadParams("trim needs a curve index and a finite point".into()));
     }
     let sketch = s.doc.sketch_mut(id).ok_or_else(|| EngineError::BadParams(format!("no sketch {}", id.0)))?;
-    let (list, _) = shapecraft_doc::sketch_ops::trim(&sketch.entities, entity as usize, glam::DVec2::from_array(at))
+    let trimmed = shapecraft_doc::sketch_ops::trim(&sketch.entities, entity as usize, glam::DVec2::from_array(at))
         .map_err(|m| EngineError::NotAvailable(m.into()))?;
-    sketch.entities = list;
+    sketch.constraints = trimmed.constraints(&sketch.entities, &sketch.constraints);
+    sketch.construction = trimmed.construction(&sketch.construction);
+    sketch.entities = trimmed.entities;
     let count = sketch.entities.len();
+    s.renumbered = Some(id);
     s.selection.retain(|pk| !matches!(pk, Pick::SketchEntity { sketch, .. } if *sketch == id));
     Ok(json!({ "sketch": id.0, "entities": count }))
 }

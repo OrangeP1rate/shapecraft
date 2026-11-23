@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-version="0.12.0-alpha">
+<html lang="en" data-version="0.12.7-alpha">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -155,7 +155,7 @@ h1{font-size:clamp(44px,6vw,84px);letter-spacing:-.045em;line-height:1;margin:18
 h2{font-size:clamp(30px,3.4vw,48px);letter-spacing:-.035em;line-height:1.05;margin:12px 0 16px}
 p{color:var(--ink-2);font-size:17px;line-height:1.6}
 .lede{font-size:clamp(17px,1.4vw,20px);max-width:640px;margin:0 0 26px}
-.lede.center{margin-bottom:34px}
+.lede.center{margin:0 auto 34px;text-align:center}
 .ctas{display:flex;flex-wrap:wrap;gap:10px}
 .ctas.center{justify-content:center}
 .meta{margin-top:14px;font-size:13px;color:var(--ink-3)}
@@ -308,6 +308,8 @@ pre.term .c{color:#777}
 .soon5>div{border:1.5px dashed var(--chip-2);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:6px}
 .soon5 .tag{align-self:flex-start;font:600 10.5px var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--amber);background:rgba(232,162,58,.15);padding:3px 8px;border-radius:99px}
 .soon5 b{font-size:16px} .soon5 span:not(.tag){font-size:14px;color:var(--ink-2)}
+.soon5.done>div{border-style:solid;border-color:var(--line);background:var(--canvas)} .soon5.done .tag{color:var(--green);background:rgba(47,191,113,.14)}
+.people{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:26px auto 0;max-width:820px} .people a{font:500 13px var(--mono);padding:6px 12px;border-radius:99px;border:1px solid var(--line);background:var(--canvas);text-decoration:none;color:var(--ink-2)} .people a:hover{color:var(--ink);border-color:var(--blue)} .people a.code{color:var(--ink);border-color:var(--chip-2)}
 .soon5 i{display:block;height:5px;border-radius:5px;margin-top:auto;background:linear-gradient(90deg,var(--amber) var(--w),var(--chip) var(--w))}
 .bmc{display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:12px 20px;border-radius:12px;background:#ffdd00;color:#111;font-weight:700;text-decoration:none}
 .bmc:hover{filter:brightness(1.05)}
@@ -384,6 +386,7 @@ html.cubing .hint,html.cubing .status{opacity:0}
   <nav>
     <a class="m-hide" href="#sketch">Features</a>
     <a class="m-hide" href="#agents">Agents</a>
+    <a class="m-hide" href="#print">Printing</a>
     <a class="m-hide" href="#files">Files</a>
     <a href="https://github.com/jackharvest/shapecraft">GitHub</a>
     <button class="btn theme" id="theme" aria-label="Switch light or dark">◐</button>
@@ -430,7 +433,10 @@ html.cubing .hint,html.cubing .status{opacity:0}
     <a class="rowlink" href="#extrude"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 12h12v5H4zM10 11V3M7 6l3-3 3 3"/></svg><span class="tx">Extrude 01</span></a>
     <a class="rowlink" href="#fillet"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 16V9a5 5 0 0 1 5-5h7"/></svg><span class="tx">Fillet 01</span></a>
     <a class="rowlink" href="#move"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3v14M3 10h14"/></svg><span class="tx">Move 01</span></a>
+    <a class="rowlink" href="#thread"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h8M5 6.5l10 1.5M5 10l10 1.5M5 13.5 15 15M7.5 17.5h5"/></svg><span class="tx">Thread 01</span></a>
     <a class="rowlink" href="#render"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="m5 13 3.5-3.5 2.5 2.5 2-2 2 2"/><circle cx="13.5" cy="8" r="1"/></svg><span class="tx">Render 01</span></a>
+    <a class="rowlink" href="#print"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 3h12v5H4zM10 8v3M8 11h4M5 17h10M6.5 14.2h7"/></svg><span class="tx">Print 01</span></a>
+    <a class="rowlink" href="#latest"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3v3M10 14v3M3 10h3M14 10h3M5.2 5.2l2 2M12.8 12.8l2 2M14.8 5.2l-2 2M7.2 12.8l-2 2"/></svg><span class="tx">Lately</span></a>
     <a class="rowlink" href="#agents"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6l4 4-4 4M10 15h6"/></svg><span class="tx">Command 01</span></a>
     <a class="rowlink" href="#files"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h5l2 2h7v8H3z"/></svg><span class="tx">Export 01</span></a>
     <a class="rowlink" href="#download"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg><span class="tx">Download</span></a>
@@ -449,7 +455,9 @@ html.cubing .hint,html.cubing .status{opacity:0}
   <a class="tool" href="#extrude" data-for="extrude"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 12h12v5H4zM10 11V3M7 6l3-3 3 3"/></svg></span><span class="lb">Extrude</span></a>
   <a class="tool" href="#fillet" data-for="fillet"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 16V9a5 5 0 0 1 5-5h7"/></svg></span><span class="lb">Fillet</span></a>
   <a class="tool" href="#move" data-for="move"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3v14M3 10h14M10 3 8 5M10 3l2 2M17 10l-2-2M17 10l-2 2"/></svg></span><span class="lb">Move</span></a>
+  <a class="tool" href="#thread" data-for="thread"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3h8M5 6.5l10 1.5M5 10l10 1.5M5 13.5 15 15M7.5 17.5h5"/></svg></span><span class="lb">Thread</span></a>
   <a class="tool" href="#render" data-for="render"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="m5 13 3.5-3.5 2.5 2.5 2-2 2 2"/><circle cx="13.5" cy="8" r="1"/></svg></span><span class="lb">Render</span></a>
+  <a class="tool" href="#print" data-for="print"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 3h12v5H4zM10 8v3M8 11h4M5 17h10M6.5 14.2h7"/></svg></span><span class="lb">Print</span></a>
   <a class="tool" href="#agents" data-for="agents"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6l4 4-4 4M10 15h6"/></svg></span><span class="lb">Automate</span></a>
   <a class="tool" href="#files" data-for="files"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h5l2 2h7v8H3z"/></svg></span><span class="lb">Files</span></a>
   <a class="tool" href="#download" data-for="download"><span class="ic"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></svg></span><span class="lb">Download</span></a>
@@ -474,7 +482,7 @@ html.cubing .hint,html.cubing .status{opacity:0}
         <a class="btn go lg" href="#download">Download for <span id="os">your computer</span></a>
         <a class="btn ghost lg" href="https://github.com/jackharvest/shapecraft">View on GitHub</a>
       </div>
-      <div class="opens"><span>Opens what you already have</span><a href="#files">.shapr</a><a href="#files">.step</a><a href="#files">.x_t</a><a href="#files">.sldprt</a><a href="#files">.prt</a><a href="#files">.par</a><a href="#files">.jt</a><a href="#files">.igs</a><a href="#files">.stl</a><a href="#files">.obj</a><a href="#files">.dxf</a><a href="#files">.svg</a></div>
+      <div class="opens"><span>Opens what you already have</span><a href="#files">.shapr</a><a href="#files">.step</a><a href="#files">.x_t</a><a href="#files">.sldprt</a><a href="#files">.prt</a><a href="#files">.par</a><a href="#files">.jt</a><a href="#files">.igs</a><a href="#files">.stl</a><a href="#files">.obj</a><a href="#files">.3mf</a><a href="#files">.dxf</a><a href="#files">.svg</a></div>
       <div class="meta">Free and open source · MIT OR Apache-2.0 · Made in Rust</div>
     </div>
     <div class="media stage reveal">
@@ -510,7 +518,7 @@ html.cubing .hint,html.cubing .status{opacity:0}
       <div class="label"><span>01</span>Sketch</div>
       <h2>Draw first.<br>Type numbers when you know them.</h2>
       <p>Press <span class="kbd">R</span> on the top of a part and drag out a rectangle. Type 28, press <span class="kbd">Tab</span>, type 20. Snapping, inference and constraints work while you draw, so it moves like a pencil and holds like a drawing.</p>
-      <ul class="ticks"><li>Lines, arcs, splines, polygons and text</li><li>Constraints and driving dimensions</li><li>Linked sketch patterns</li></ul>
+      <ul class="ticks"><li>Lines, arcs, splines, slots, polygons and text</li><li>Trim and Extend to the next curve, ring and all</li><li>Constraints and driving dimensions</li><li>Linked sketch patterns</li></ul>
     </div>
     <div class="media reveal"><img src="media/sketch.gif" alt="Drawing a rectangle and a circle on the top of a mounting plate, typing their sizes" loading="lazy">
       <div class="float-card"><div class="title">Rectangle</div><div class="row"><span class="k">Width</span><span class="v on">28 mm</span></div><div class="row"><span class="k">Height</span><span class="v">20 mm</span></div></div></div>
@@ -559,12 +567,26 @@ html.cubing .hint,html.cubing .status{opacity:0}
   </div>
 </section>
 
-<section id="render" class="s-feat" data-hint="Describe a <b>scene</b>. Your model stays exactly as you drew it" data-name="Render 01">
+<section id="thread" class="s-feat" data-hint="Pick a <b>round face</b>, press Thread. A hole becomes a nut" data-name="Thread 01">
+  <div class="glint br gridded"></div>
+  <div class="wrap split marks">
+    <div class="txt">
+      <div class="label"><span>05</span>Thread</div>
+      <h2>A bolt, and the nut that fits it.</h2>
+      <p>Pick a round face and press Thread. A cylinder becomes a bolt, a hole becomes a nut, in real geometry you can print, cut or export. <b>Print Fit</b> leaves the room a 3D-printed thread needs to turn. Every thread is checked against the exact volume it should have before you get it.</p>
+      <ul class="ticks"><li>ISO metric, ANSI inch and ACME sizes</li><li>Right or left hand, the whole face or part of it</li><li>A bolt and its nut always line up, turn for turn</li></ul>
+    </div>
+    <div class="media reveal"><video autoplay muted loop playsinline preload="metadata" poster="media/thread.jpg" width="920" height="662" aria-label="A plain bolt and a plain nut get M8 threads, then the nut lifts over the bolt and screws down onto it"><source src="media/thread.mp4" type="video/mp4"></video>
+      <div class="float-card"><div class="title">Thread <small>M8 × 1.25</small></div><div class="row"><span class="k">Standard</span><span class="v">ISO metric</span></div><div class="row"><span class="k">Hand</span><span class="v on">Right</span></div></div></div>
+  </div>
+</section>
+
+<section id="render" class="s-feat alt" data-hint="Describe a <b>scene</b>. Your model stays exactly as you drew it" data-name="Render 01">
   <div class="glint br gridded"></div>
   <div class="wrap">
     <div class="split marks">
       <div class="txt">
-        <div class="label"><span>05</span>Generative Render · a plugin</div>
+        <div class="label"><span>06</span>Generative Render · a plugin</div>
         <h2>Put your model in any scene.</h2>
         <p>Describe a place, the light and the mood, and Generative Render paints the world around the view you're looking at. <b>Keep It Exact</b> keeps every pixel of your model, so the shape you designed is the shape in the picture, sitting in its scene with real shadows.</p>
         <ul class="ticks"><li>Your own AI: OpenRouter, OpenAI or Google Gemini</li><li>Free and offline with ComfyUI on your own computer</li><li>No account at all? Take your view to a free chat</li><li>Every picture kept in History, with the words that made it</li></ul>
@@ -593,6 +615,22 @@ html.cubing .hint,html.cubing .status{opacity:0}
   </div>
 </section>
 
+<section id="print" class="s-feat" data-hint="Open a <b>3MF</b>, change it, send it back to your slicer" data-name="Print 01">
+  <div class="glint tl gridded"></div>
+  <div class="wrap">
+    <div class="split flip">
+      <div class="txt">
+        <div class="label"><span>07</span>3D printing</div>
+        <h2>From the slicer.<br>Back to the slicer.</h2>
+        <p>Open a 3MF and every part lands where it sat on the plate, with its name and its color. Files from Bambu Studio and OrcaSlicer bring their part names and filament colors along. Add what's missing, cut what isn't, and send it back with one click.</p>
+        <ul class="ticks"><li>Bambu Studio, OrcaSlicer, PrusaSlicer, Cura and more, if you have them</li><li>In Bambu Studio and OrcaSlicer each color lands on its own filament slot</li><li>Union, Subtract and Intersect work on meshes too</li><li>Threads with Print Fit, and exports at a tolerance you type</li></ul>
+      </div>
+      <div class="media reveal"><img src="media/print.jpg" width="1380" height="993" alt="A clamshell handheld opened from a 3MF: eight named parts in the Items list, each in its own color" loading="lazy">
+        <div class="float-card"><div class="title">Handheld.3mf <small>8 parts</small></div><div class="row"><span class="k">Names</span><span class="v">Kept</span></div><div class="row"><span class="k">Colors</span><span class="v on">Kept</span></div></div></div>
+    </div>
+  </div>
+</section>
+
 <section class="s-tiles" data-hint="Everything else that comes in the box" data-name="Move 01">
   <div class="glint tr gridded"></div>
   <div class="wrap">
@@ -611,7 +649,7 @@ html.cubing .hint,html.cubing .status{opacity:0}
       <div><b>Drawings</b><span>Views of your part out to PDF, SVG, DXF and DWG.</span></div>
       <div><b>Tutorials, eleven languages</b><span>Guided first parts in seven minutes each. English, German, French, Spanish, Japanese, Chinese and more.</span></div>
       <div><b>Never lose work</b><span>Atomic saves, autosave when you switch away, and a project that reopens even after a crash.</span></div>
-      <div><b>Straight to your slicer</b><span>One click opens the part as a 3MF in Bambu Studio, PrusaSlicer, OrcaSlicer, Cura or another slicer you have. In Bambu Studio and OrcaSlicer each colour lands on its own filament slot.</span></div>
+      <div><b>It moves</b><span>Popups grow out of where you clicked, columns slide, buttons press in and the camera settles. One switch turns it all off.</span></div>
       <div><b>Measure and section</b><span>Distances (center to center and parallel too), angles, areas, volumes and overlaps between parts. Cut the model open with a section plane you can drag and tilt.</span></div>
       <div><b>Variables</b><span>Name a size once and use it everywhere, in expressions with units. Change it, and every step that uses it follows.</span></div>
     </div>
@@ -623,11 +661,29 @@ html.cubing .hint,html.cubing .status{opacity:0}
   </div>
 </section>
 
+<section id="latest" class="s-feat alt" data-hint="A new version most <b>weeks</b>. It updates itself" data-name="Lately">
+  <div class="glint br gridded"></div>
+  <div class="wrap">
+    <div class="label center"><span>+</span>Lately</div>
+    <h2 class="center">What's been landing.</h2>
+    <p class="lede center">Newest first. Version <span class="vnum"></span> is out now, and ShapeCraft keeps itself up to date.</p>
+    <div class="soon5 done reveal">
+      <div><span class="tag">0.12.7</span><b>3MF in, threads right, Slot and Extend</b><span>3MF files open with names and colors. Threads are built a new way and checked. Slot and Extend join the sketch tools, and Trim cuts splines and ellipses.</span></div>
+      <div><span class="tag">0.12.6</span><b>Everything moves</b><span>Motion all through the app, F2 to rename what you picked, and steps that fail tell you a size that works.</span></div>
+      <div><span class="tag">0.12.0</span><b>SolidWorks, NX, Solid Edge, JT</b><span>Parts open exactly, without the other program. Export to FBX and VRML. A second kernel, in Rust, to try.</span></div>
+      <div><span class="tag">0.11.0</span><b>Plugins and Generative Render</b><span>Sandboxed plugins you add yourself, starting with a render that keeps your model exact.</span></div>
+      <div><span class="tag">0.10.0</span><b>Threads</b><span>Bolts and nuts in three standards, with Print Fit for 3D printers.</span></div>
+      <div><span class="tag">0.9.0</span><b>iPhone Duo</b><span>The whole modeler in a native app that unfolds into the model.</span></div>
+    </div>
+    <p class="center small reveal"><a href="https://github.com/jackharvest/shapecraft/blob/main/CHANGELOG.md">Every version's notes</a></p>
+  </div>
+</section>
+
 <section id="agents" class="s-dark" data-hint="Everything is a <b>command</b>: menus, keys, scripts and agents" data-name="Command 01">
   <div class="glint bl gridded"></div>
   <div class="wrap split">
     <div class="txt">
-      <div class="label"><span>06</span>Automate</div>
+      <div class="label"><span>08</span>Automate</div>
       <h2>Every button is a command.</h2>
       <p>Menus, shortcuts, command search, scripts, the CLI, a JSON control channel and a built-in MCP server all call the same command list. Run it headless on a server, or connect to the open app and watch the model being built. The handheld at the top of this page was made that way, one command at a time.</p>
       <div class="ctas"><a class="btn ghost" href="https://github.com/jackharvest/shapecraft/blob/main/docs/mcp.md">Read the MCP guide</a></div>
@@ -646,17 +702,17 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
 <section id="files" class="s-feat" data-hint="Your files stay <b>yours</b>" data-name="Export 01">
   <div class="glint bl gridded"></div>
   <div class="wrap">
-    <div class="label center"><span>07</span>Exchange</div>
+    <div class="label center"><span>09</span>Exchange</div>
     <h2 class="center">Plain folders. Open formats.</h2>
     <p class="lede center">Open the files you already have, from <code>.shapr</code> projects to STEP, Parasolid, SolidWorks, NX, Solid Edge and JT parts. A project is a folder: a readable <code>project.json</code> with the History, and the bodies as STEP. An imported file is never written over. Drawings go out as PDF, SVG, DXF and DWG, and a sketch can go out as DWG.</p>
     <div class="formats reveal">
       <div><b>STEP · IGES</b><span>Open and save</span></div>
       <div><b>Parasolid XT</b><span>Open and save</span></div>
       <div><b>.shapr</b><span>Open and save</span></div>
-      <div><b>STL · OBJ</b><span>Open and save</span></div>
+      <div><b>STL · OBJ · 3MF</b><span>Open and save</span></div>
       <div><b>DXF · SVG</b><span>Open as sketches</span></div>
       <div><b>SolidWorks · NX · Solid Edge · JT</b><span>Open, exactly</span></div>
-      <div><b>3MF · glTF · USDZ</b><span>Export, 3MF straight to your slicer</span></div>
+      <div><b>glTF · USDZ</b><span>Export</span></div>
       <div><b>FBX · VRML</b><span>Export to 3D apps</span></div>
       <div><b>PDF · DWG</b><span>Drawings out</span></div>
     </div>
@@ -671,7 +727,7 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
 <section id="download" class="s-blue" data-hint="Pick your <b>platform</b>. Alpha builds: keep backups" data-name="Download">
   <div class="glint mid gridded"></div>
   <div class="wrap marks">
-    <div class="label center light"><span>08</span>Download</div>
+    <div class="label center light"><span>10</span>Download</div>
     <h2 class="center">Get ShapeCraft.</h2>
     <p class="lede center">Download, double-click, model. Everything it needs is inside, and it keeps itself up to date.</p>
     <div class="dl3 reveal">
@@ -689,14 +745,14 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
 <section id="soon" class="s-feat" data-hint="Coming next. Your <b>feedback</b> decides what's first" data-name="Nearing completion">
   <div class="glint tr gridded"></div>
   <div class="wrap">
-    <div class="label center"><span>09</span>Nearing completion</div>
+    <div class="label center"><span>11</span>Nearing completion</div>
     <h2 class="center">What's next.</h2>
     <p class="lede center">What you report from the apps shapes these, so tell us how you use it.</p>
     <div class="soon5 reveal">
       <div><span class="tag">In testing</span><b>iPad</b><span>ShapeCraft is a native iPhone app now (iPhone Duo included). On an iPad, model in Safari with an Apple Pencil today, served from your computer (Preferences ▸ Tablet). Next: the native app laid out for iPad.</span><i style="--w:50%"></i></div>
       <div><span class="tag">In testing</span><b>In the browser</b><span>ShapeCraft already serves itself to a browser on your network. Next: the kernel on your server and drawing in the browser with WebGPU, so there is nothing to install.</span><i style="--w:35%"></i></div>
       <div><span class="tag">Soon</span><b>Proxmox / LXC</b><span>A container script for headless modeling and agents over MCP is in the repository today (packaging/proxmox). Next: a one-line install from the releases.</span><i style="--w:70%"></i></div>
-      <div><span class="tag">In testing</span><b>A second kernel, in Rust</b><span>Open CASCADE is the default; Arris, a kernel written entirely in Rust, is one switch away in Preferences ▸ Advanced and already passes 179 of 190 modeling checks. Two kernels mean no single point of failure, and no one library deciding what ShapeCraft can become.</span><i style="--w:68%"></i></div>
+      <div><span class="tag">In testing</span><b>A second kernel, in Rust</b><span>Open CASCADE is the default; Arris, a kernel written entirely in Rust, is one switch away in Preferences ▸ Advanced and already passes 192 of 203 modeling checks. Two kernels mean no single point of failure, and no one library deciding what ShapeCraft can become.</span><i style="--w:68%"></i></div>
       <div><span class="tag">In progress</span><b>Your cloud, connected</b><span>Work Folder and backups in Google Drive, OneDrive, Dropbox or iCloud Drive work today, through their desktop apps, and every project's older versions are a right-click away. Next: connecting to them from inside the app.</span><i style="--w:45%"></i></div>
     </div>
   </div>
@@ -705,7 +761,7 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
 <section id="donate" class="s-coffee" data-hint="Free forever. <b>Tips</b> keep it moving" data-name="Support">
   <div class="glint tr gridded"></div>
   <div class="wrap split">
-    <div class="txt"><div class="label"><span>10</span>Support</div>
+    <div class="txt"><div class="label"><span>12</span>Support</div>
       <h2>Free. If it saved you a subscription…</h2>
       <p>No paid tier, ever. Building it still costs money in test hardware, build machines and development tools. My wife is fairly sure that's where my evenings and our money disappear to. A coffee is the best counter-argument I have. It buys no features and no priority, only more hours on the work.</p></div>
     <div class="center reveal"><a class="bmc big" href="https://www.buymeacoffee.com/jackharvest">☕ Prove my wife wrong</a><p class="small">Can't tip? A star or a good bug report helps as much.</p></div>
@@ -715,7 +771,7 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
 <section id="contribute" class="s-feat alt" data-hint="Found a bug? <b>Report it</b> on GitHub" data-name="Your step next">
   <div class="glint br gridded"></div>
   <div class="wrap">
-    <div class="label center"><span>11</span>Contribute</div>
+    <div class="label center"><span>13</span>Contribute</div>
     <h2 class="center">Help shape it.</h2>
     <div class="trio reveal">
       <a href="https://github.com/jackharvest/shapecraft/issues/new/choose"><b>Report a bug →</b><span>What you did, what you expected, and the project folder if you can.</span></a>
@@ -723,6 +779,8 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
       <a href="https://github.com/jackharvest/shapecraft/blob/main/CONTRIBUTING.md"><b>Send code →</b><span>Read the clean-room rules first. Small, tested pull requests merge fastest.</span></a>
     </div>
     <p class="center small reveal">Questions, tips, or a part to show off? <a href="https://discord.gg/qHW22aC8Rn">Join the Discord</a>. Bugs and ideas still go to GitHub Issues, so nothing gets lost in chat.</p>
+    <p class="center small reveal" style="margin-top:34px">Code, translations, and the bug reports that made it better:</p>
+    <div class="people reveal"><a class="code" href="https://github.com/chickey">@chickey</a><a class="code" href="https://github.com/pablohc">@pablohc</a><a class="code" href="https://github.com/eamondo2">@eamondo2</a><a class="code" href="https://github.com/Hardo12">@Hardo12</a><a href="https://github.com/jan-tdy">@jan-tdy</a><a href="https://github.com/joravarsinghing">@joravarsinghing</a><a href="https://github.com/movh">@movh</a><a href="https://github.com/leo-smi">@leo-smi</a><a href="https://github.com/barnabasjohnthomas">@barnabasjohnthomas</a><a href="https://github.com/micide0606">@micide0606</a><a href="https://github.com/kiroandyor-create">@kiroandyor-create</a><a href="https://github.com/Hobbesdcc">@Hobbesdcc</a><a href="https://github.com/Capdan83">@Capdan83</a><a href="https://github.com/bootNoob">@bootNoob</a><a href="https://github.com/ryansinclair14">@ryansinclair14</a><a href="https://github.com/mhdthoriq14">@mhdthoriq14</a></div>
     <div class="made reveal" id="made"><b>How it's made</b>
       <p>ShapeCraft is built by one applications engineer with more than twelve years in the trade, working with AI coding agents. The agents write much of the code. A person decides what gets built and how it should behave, and checks that it's right: by hand on real parts, with automated tests, on all three operating systems, and side by side with the tools it's measured against. It's clean-room: no code, files or artwork from other CAD products. The command list the agents build it with is the same one the MCP server hands to yours.</p></div>
   </div>
@@ -732,7 +790,7 @@ shapecraft-cli run part.jsonl --save out/ --png part.png</pre>
   <div class="in">
     <div class="brand"><img src="media/icon.svg" alt="ShapeCraft icon" width="96" height="96"><span class="wm">Shape<span class="grad">Craft</span></span>
       <p>Direct-modeling CAD, free and local.<br>Made in Rust.</p></div>
-    <div><h5>Product</h5><a href="#sketch">Features</a><a href="#download">Download</a><a href="https://github.com/jackharvest/shapecraft/releases">Releases</a><a href="https://github.com/jackharvest/shapecraft/blob/main/CHANGELOG.md">Changelog</a></div>
+    <div><h5>Product</h5><a href="#sketch">Features</a><a href="#download">Download</a><a href="https://github.com/jackharvest/shapecraft/releases">Releases</a><a href="https://github.com/jackharvest/shapecraft/blob/main/CHANGELOG.md">Changelog</a><a href="press/">Press kit</a></div>
     <div><h5>Project</h5><a href="https://github.com/jackharvest/shapecraft">GitHub</a><a href="https://github.com/jackharvest/shapecraft/issues">Issues</a><a href="https://discord.gg/qHW22aC8Rn">Discord</a><a href="https://github.com/jackharvest/shapecraft/blob/main/CONTRIBUTING.md">Contribute</a><a href="https://www.buymeacoffee.com/jackharvest">Prove my wife wrong ☕</a></div>
     <div><h5>Legal</h5><a href="https://github.com/jackharvest/shapecraft/blob/main/LICENSE-MIT">Licence</a><a href="https://github.com/jackharvest/shapecraft/blob/main/NOTICE">Notices</a><a href="https://github.com/jackharvest/shapecraft/blob/main/DISCLAIMER.md">Disclaimer</a><a href="https://github.com/jackharvest/shapecraft/blob/main/SECURITY.md">Security</a></div>
     <div class="legal">© 2026 the ShapeCraft contributors. MIT OR Apache-2.0, at your option. Open CASCADE Technology is used under the LGPL 2.1 with its exception.

@@ -1,6 +1,6 @@
 # ShapeCraft website
 
-A static page for `jackharvest.com/shapecraft`: `index.html` plus `media/`. It uses no build step and no
+A static page for `jackharvest.com/shapecraft`: `index.html` plus `media/` and a press page in `press/`. It uses no build step and no
 server code. Google Fonts (Inter, JetBrains Mono) is its only outside request.
 
 ## Layout idea
@@ -35,7 +35,7 @@ To look at the page without opening a window: `cargo xtask site-shot file://$PWD
 Never put screenshots or recordings of the reference app here.
 
 ## Deploying to IIS (jackharvest.com/shapecraft)
-`sh website/deploy.sh` copies `media/`, `web.config` and `index.html` over ssh (key `~/.ssh/id_ed25519_web`).
+`sh website/deploy.sh` copies `media/`, `press/`, `web.config` and `index.html` over ssh (key `~/.ssh/id_ed25519_web`).
 `WEB_HOST` and `WEB_DIR` override the server and folder. `web.config` makes `index.html` the default document and
 caches media for a week (the page itself for 5 minutes).
 

@@ -6,3 +6,4 @@ website/deploy.env
 
 # device pairing identity (private key) — never commit
 selfIdentity.plist
+website/press/ShapeCraft-press-kit.zip

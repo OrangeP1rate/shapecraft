@@ -349,10 +349,81 @@ fn rotate() -> Scene {
     s
 }
 
+/// Threads: a blank bolt gets its thread, a blank nut gets its own, and the nut screws on, its turns meeting the bolt's
+/// (a pitch of rise for each turn). The camera drifts round the whole time.
+fn thread() -> Scene {
+    let hexagon = |x: f64| ex("polygon", json!({ "center": p(x, 0.0), "radius": 7.5, "sides": 6, "angle": 0 }));
+    let setup = vec![
+        ex("sketch", plane_at(0.0)),
+        hexagon(0.0),
+        ex("extrude", json!({ "sketch": 1, "region": 0, "distance": 5.5 })),
+        ex("sketch", plane_at(5.5)),
+        ex("circle", json!({ "center": p(0.0, 0.0), "radius": 4 })),
+        ex("extrude", json!({ "sketch": 3, "region": 0, "distance": 24, "result": "union" })),
+        ex("sketch", plane_at(0.0)),
+        hexagon(24.0),
+        ex("circle", json!({ "center": p(24.0, 0.0), "radius": 3.9 })),
+        ex("extrude", json!({ "sketch": 4, "region": 0, "distance": 6.5, "result": "new" })),
+        ex(
+            "set_appearance",
+            json!({ "items": [2], "appearance": { "name": "Zinc", "color": [0.66, 0.69, 0.75], "metal": 0.3, "gloss": 0.5 } }),
+        ),
+        ex(
+            "set_appearance",
+            json!({ "items": [5], "appearance": { "name": "Brass", "color": [0.86, 0.66, 0.30], "metal": 0.3, "gloss": 0.5 } }),
+        ),
+    ];
+    let mut s = Scene::feature("thread", setup);
+    let total = 150usize;
+    let mut k = 0usize;
+    let mut frame = |s: &mut Scene, steps: Vec<Value>, n: usize| {
+        let mut steps = steps;
+        for _ in 0..n {
+            let t = k as f64 / total as f64;
+            k += 1;
+            let cam = json!({ "control": "ui.camera", "params": { "target": [10, 0, 16], "yaw": -1.0 + 0.75 * t, "pitch": 0.48 - 0.06 * t, "distance": 104, "ortho": 0 } });
+            s.add(std::mem::take(&mut steps));
+            s.add([cam, json!({ "wait": 0.03 })]);
+            s.shot(1);
+        }
+    };
+    let press = |label: &str| json!({ "control": "ui.press", "params": { "label": label } });
+    let pick = |face: &str| {
+        ex("select", json!({ "picks": [{ "kind": "face", "body": if face.starts_with("@face:2") { 2 } else { 5 }, "face": face }] }))
+    };
+    frame(&mut s, vec![], 8);
+    frame(&mut s, vec![pick("@face:2:4,0,17")], 8);
+    frame(&mut s, vec![press("Thread"), json!({ "sleep": 6 }), json!({ "wait": 0.5 })], 22);
+    frame(&mut s, vec![press("Done"), ex0("deselect_all")], 3);
+    frame(&mut s, vec![pick("@face:5:27.9,0,3")], 8);
+    frame(&mut s, vec![press("Thread"), json!({ "sleep": 6 }), json!({ "wait": 0.5 })], 18);
+    // The nut over the bolt's end, then down it: each frame takes its move and turn back and makes the next ones.
+    let place = |by: [f64; 3], angle: f64, first: bool| {
+        let mut v = if first { vec![press("Done")] } else { vec![ex0("undo"), ex0("undo")] };
+        v.push(ex("translate", json!({ "by": by, "items": [5] })));
+        v.push(ex("rotate", json!({ "origin": [0, 0, 0], "axis": [0, 0, 1], "angle": angle, "items": [5] })));
+        v.push(ex0("deselect_all"));
+        v
+    };
+    frame(&mut s, place([0.0, 0.0, 0.001], 0.001, true), 2);
+    for i in 1..=22 {
+        let t = ease(f64::from(i) / 22.0);
+        let up = 30.0 * (1.0 - (1.0 - t).powi(2));
+        frame(&mut s, place([round_to(-24.0 * t * t, 3), 0.0, round_to(up, 3)], 0.001, false), 1);
+    }
+    for i in 1..=44 {
+        let down = -7.5 * ease(f64::from(i) / 44.0);
+        frame(&mut s, place([-24.0, 0.0, round_to(30.0 + down, 4)], round_to(down / 1.25 * 360.0, 3) + 0.001, false), 1);
+    }
+    let left = total.saturating_sub(8 + 8 + 22 + 3 + 8 + 18 + 2 + 22 + 44);
+    frame(&mut s, vec![], left.max(12));
+    s
+}
+
 // ------------------------------------------------------------------ the handheld (speed-lapse model)
 
 const LID_OPEN: f64 = 32.0;
-const NOT_IN_HISTORY: [&str; 7] = ["select", "deselect_all", "exit_sketching", "rectangle", "circle", "sketch_fillet", "text"];
+const NOT_IN_HISTORY: [&str; 8] = ["show_hide", "select", "deselect_all", "exit_sketching", "rectangle", "circle", "sketch_fillet", "text"];
 
 /// A sketch on a z plane has u along -Y and v along +X, so world (x, y) is (-y, x) there.
 fn p(x: f64, y: f64) -> Value {
@@ -447,6 +518,8 @@ fn handheld_steps() -> Vec<(&'static str, Value)> {
         ("text", json!({ "at": p(-14.0, 90.5), "text": "SHAPECRAFT", "size": 4.2, "angle": 90 })),
         ("exit_sketching", json!({})),
         ("extrude", json!({ "sketch": 20, "regions": (0..10).collect::<Vec<_>>(), "distance": -0.5, "result": "subtract" })),
+        // (The letters' holes are profiles of their own, so the sketch would stay shown.)
+        ("show_hide", json!({ "items": [20], "visible": false })),
         // 10 · colour
         ("set_appearance", json!({ "items": [2, 4, 6], "appearance": cobalt })),
         ("set_appearance", json!({ "items": [12, 14, 16, 19], "appearance": graphite })),
@@ -585,7 +658,7 @@ fn stills() -> Scene {
 }
 
 fn all_scenes() -> Vec<Scene> {
-    vec![sketch_rect(), push_pull(), fillet(), rotate(), handheld(), stills()]
+    vec![sketch_rect(), push_pull(), fillet(), rotate(), thread(), handheld(), stills()]
 }
 
 pub fn scenes(args: &[String]) -> Result<()> {
@@ -597,6 +670,40 @@ pub fn scenes(args: &[String]) -> Result<()> {
         std::fs::write(&path, scene.text())?;
         println!("{}", path.display());
     }
+    // The handheld as a 3MF with named parts in colors (shapecraft-cli writes it), and it coming back in (snap).
+    let file = out.join("Handheld.3mf");
+    let parts: [(u64, &str, [f64; 3]); 8] = [
+        (2, "Base", [0.10, 0.23, 0.78]),
+        (4, "Hinge", [0.10, 0.23, 0.78]),
+        (6, "Lid", [0.93, 0.35, 0.22]),
+        (9, "Screen", [0.03, 0.03, 0.05]),
+        (12, "D-pad", [0.16, 0.16, 0.18]),
+        (14, "Buttons", [0.98, 0.80, 0.18]),
+        (16, "Start, Select", [0.85, 0.85, 0.88]),
+        (19, "Feet", [0.16, 0.16, 0.18]),
+    ];
+    let line = |c: &str, p: Value| format!("{}\n", json!({ "command": c, "params": p }));
+    let mut script: String = handheld_steps().iter().map(|(c, p)| line(c, p.clone())).collect();
+    for (item, name, color) in parts {
+        script += &line("rename", json!({ "item": item, "name": name }));
+        script +=
+            &line("set_appearance", json!({ "items": [item], "appearance": { "name": name, "color": color, "metal": 0, "gloss": 0.4 } }));
+    }
+    script += &line("export_3mf", json!({ "path": file }));
+    std::fs::write(out.join("handheld-3mf.jsonl"), script)?;
+    let mut back = Scene::new("print");
+    back.add([
+        ex("import_file", json!({ "path": file })),
+        json!({ "control": "ui.toggle", "params": { "panel": "grid" } }),
+        ex0("deselect_all"),
+        json!({ "wait": 0.5 }),
+        json!({ "control": "ui.camera", "params": { "target": [0, 55, 32], "yaw": -0.62, "pitch": 0.5, "distance": 385, "ortho": 0 } }),
+        json!({ "click": [33, 147] }),
+        json!({ "hover": [900, 1200] }),
+        json!({ "wait": 0.8 }),
+        json!({ "shot": "print" }),
+    ]);
+    std::fs::write(out.join("print.jsonl"), back.text())?;
     // The handheld on its own, as shapecraft-cli runs it (`shapecraft-cli run handheld-model.jsonl --png out.png`).
     let model: String = handheld_steps().iter().map(|(c, p)| format!("{}\n", json!({ "command": c, "params": p }))).collect();
     std::fs::write(out.join("handheld-model.jsonl"), model)?;
@@ -638,12 +745,12 @@ pub fn media(args: &[String]) -> Result<()> {
         Ok(v)
     };
     let ffmpeg = |args: &[&str]| run("ffmpeg", &[&["-loglevel", "error", "-y"][..], args].concat());
-    for name in ["sketch", "extrude", "fillet", "rotate"] {
+    for name in ["sketch", "extrude", "fillet", "rotate", "thread"] {
         let dir = record(name)?;
-        if name == "rotate" {
-            // The camera moves in every frame of this one, so a video is a fifth of the size of the GIF.
+        if matches!(name, "rotate" | "thread") {
+            // The camera moves in every frame of these, so a video is a fifth of the size of the GIF.
             let pattern = dir.join("f%04d.png");
-            let mp4 = media.join("rotate.mp4");
+            let mp4 = media.join(format!("{name}.mp4"));
             ffmpeg(&[
                 "-framerate",
                 "15",
@@ -662,7 +769,8 @@ pub fn media(args: &[String]) -> Result<()> {
                 "-an",
                 s(&mp4),
             ])?;
-            ffmpeg(&["-i", s(&dir.join("f0040.png")), "-vf", "scale=920:-1", "-q:v", "4", s(&media.join("rotate.jpg"))])?;
+            let poster = dir.join(if name == "thread" { "f0146.png" } else { "f0040.png" });
+            ffmpeg(&["-i", s(&poster), "-vf", "scale=920:-1", "-q:v", "4", s(&media.join(format!("{name}.jpg")))])?;
             println!("{}", mp4.display());
             continue;
         }

@@ -828,6 +828,15 @@ mod undo_in_visualization {
         typed(&mut ws, "");
         assert_eq!(ws.session.active_sketch().unwrap().entities.len(), 10);
         assert!(ws.run("undo", json!({})).is_some());
+        // ⌘Z with a drawing tool: mid-shape nothing, else the last step, and the tool stays armed.
+        ws.session.execute("line", &json!({"a": [-50, 3], "b": [-40, 3]})).unwrap();
+        let depth = ws.session.undo_depth();
+        for (first, left) in [(Some(DVec2::ZERO), depth), (None, depth - 1)] {
+            ws.tool = Tool::Rectangle { first };
+            ws.act(Action::Command("undo"), "Undo");
+            assert_eq!(ws.session.undo_depth(), left);
+            assert!(matches!(ws.tool, Tool::Rectangle { first: f } if f == first));
+        }
         // A rectangle's typed width is fixed the same way, and the height is next.
         ws.tool = Tool::Rectangle { first: Some(DVec2::ZERO) };
         typed(&mut ws, "12");

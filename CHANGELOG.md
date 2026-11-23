@@ -2,11 +2,12 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
-## 0.12.1-alpha
+## 0.12.2-alpha
 **Everything moves now: popups grow in and out, the side columns slide.**
 ### Changed
 - **Popups open and close with motion.** Every menu, popover, card, toast and sheet grows out of the spot that
-  opened it and shrinks back into it when it closes, quick and decelerating in, accelerating away. A sheet over a
+  opened it and shrinks back into it when it closes, quick and decelerating in, accelerating away. Each one bounces:
+  it grows a few points past its size and settles back, and swells a little before it's pulled away. A sheet over a
   dimmed window (Preferences, Keyboard Shortcuts) grows out of its middle while the dim fades in under it.
 - **The side columns slide.** Hiding Items or History throws the column off the side after a small lean the other
   way; showing it springs it back in with a few points of overshoot, and the tools beside it ride along.

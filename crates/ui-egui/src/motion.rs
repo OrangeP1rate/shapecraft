@@ -4,7 +4,8 @@
 //! which is Picasa's opening as people remember it: the popup grows out of a single point, fast, decelerating into
 //! place, and closing pulls it back into that point, accelerating away so the eye lets go of it at once. A popover
 //! grows out of the spot that was clicked to open it; a sheet over a dimmed window grows out of its own middle while
-//! the dim fades in under it. Nobody calls anything: [`finish`] runs once at the end of every frame, finds the areas
+//! the dim fades in under it. Like the columns, it bounces: it grows a few points past its size and settles back, and
+//! before it goes it swells a few points the wrong way. Nobody calls anything: [`finish`] runs once at the end of every frame, finds the areas
 //! that appeared or went away, and closing replays the popup's last frame, so no caller keeps drawing a closed popup.
 //!
 //! **The side columns** slide like a cartoon ([`column_begin`] / [`column_end`]): in from the edge on a spring that
@@ -22,11 +23,22 @@ use egui::epaint::{ClippedShape, Color32, Shape};
 use egui::layers::ShapeIdx;
 use egui::{Context, Id, LayerId, Order, Pos2, Rect, Ui, vec2};
 
-/// A popup's opening (Casa: 0.26 s), and how long the dim takes to come up (the first third of it).
+/// A popup's growth (Casa: 0.26 s), and how long the dim takes to come up (the first third of it).
 const OPEN_S: f64 = 0.26;
 const VEIL_IN_S: f64 = OPEN_S * 0.35;
-/// A popup's closing (Casa: 0.17 s).
+/// After growing a little past its size, the popup settles back onto it.
+const SETTLE_S: f64 = 0.16;
+/// Opening, start to rest.
+const OPENED_S: f64 = OPEN_S + SETTLE_S;
+/// A popup's closing (Casa: 0.17 s), after a swell the wrong way (as long as a column's lean).
 const CLOSE_S: f64 = 0.17;
+const SWELL_S: f64 = 0.085;
+const CLOSED_S: f64 = SWELL_S + CLOSE_S;
+/// How far past its size a popup grows before it settles, and swells before it shrinks away: about as many points as a
+/// column overshoots and leans, so a small menu bounces visibly and a big sheet doesn't lurch.
+const BOUNCE_PT: f32 = 9.0;
+const BOUNCE_MIN: f32 = 0.022;
+const BOUNCE_MAX: f32 = 0.1;
 /// Arriving decelerates, but not so hard the growth is spent in the first two frames (a curve that front-loaded reads
 /// as a plain fade).
 const ARRIVE: [f32; 4] = [0.25, 0.6, 0.3, 1.0];
@@ -117,6 +129,7 @@ struct Ghost {
     alpha: f32,
     veil_alpha: f32,
     origin: Pos2,
+    card: Rect,
     shapes: Vec<ClippedShape>,
 }
 
@@ -281,12 +294,34 @@ fn fade(shape: &mut Shape, a: f32) {
     }
 }
 
-/// How far open a popup is `t` seconds after it appeared: (scale, the card's opacity, the dim's opacity).
-fn opening(t: f64, seed: f32) -> (f32, f32, f32) {
-    let e = (t / OPEN_S) as f32;
-    let scale = seed + (1.0 - seed) * bezier(ARRIVE, e);
+/// The bounce of a card this size (a fraction of its size).
+fn bounce(card: Rect) -> f32 {
+    (BOUNCE_PT * 2.0 / card.width().max(card.height()).max(1.0)).clamp(BOUNCE_MIN, BOUNCE_MAX)
+}
+
+/// How far open a popup is `t` seconds after it appeared: (scale, the card's opacity, the dim's opacity). It grows a
+/// little past its size and settles back.
+fn opening(t: f64, card: Rect) -> (f32, f32, f32) {
+    let (seed, over) = (seed(card), 1.0 + bounce(card));
+    let scale = if t < OPEN_S {
+        seed + (over - seed) * bezier(ARRIVE, (t / OPEN_S) as f32)
+    } else {
+        let u = (((t - OPEN_S) / SETTLE_S) as f32).clamp(0.0, 1.0);
+        over + (1.0 - over) * u * u * (3.0 - 2.0 * u)
+    };
     let a = ease_out((t / VEIL_IN_S) as f32);
     (scale, a, a)
+}
+
+/// How far gone a closing popup is `t` seconds in, from `scale0`: (scale, opacity left). It swells the wrong way
+/// first, then is pulled into its point.
+fn closing(t: f64, scale0: f32, card: Rect) -> (f32, f32) {
+    let swollen = scale0 * (1.0 + bounce(card));
+    if t < SWELL_S {
+        return (scale0 + (swollen - scale0) * ease_out((t / SWELL_S) as f32), 1.0);
+    }
+    let c = ((t - SWELL_S) / CLOSE_S) as f32;
+    ((swollen * (1.0 - bezier(LEAVE, c))).max(0.004), 1.0 - bezier(LIFT, c))
 }
 
 /// A pixel, near enough, of whatever size the card lands at.
@@ -351,10 +386,19 @@ pub fn finish(ctx: &Context) {
         if m.ghosts.len() >= MAX_GHOSTS || pop.shapes.is_empty() {
             continue;
         }
-        let (scale, alpha, veil_alpha) = opening(now - pop.born, seed(pop.card));
+        let (scale, alpha, veil_alpha) = opening(now - pop.born, pop.card);
         // Its own layer, named after the popup's, so a reopening finds it.
         m.ghosts.retain(|g| g.layer != ghost_layer(layer));
-        m.ghosts.push(Ghost { layer: ghost_layer(layer), start: now, scale, alpha, veil_alpha, origin: pop.origin, shapes: pop.shapes });
+        m.ghosts.push(Ghost {
+            layer: ghost_layer(layer),
+            start: now,
+            scale,
+            alpha,
+            veil_alpha,
+            origin: pop.origin,
+            card: pop.card,
+            shapes: pop.shapes,
+        });
     }
 
     let recent = m.touch.filter(|(_, t)| now - t <= OPENED_BY_S).map(|(p, _)| p);
@@ -368,11 +412,11 @@ pub fn finish(ctx: &Context) {
             let mut born = now;
             if let Some(i) = ghost_at {
                 let g = m.ghosts.remove(i);
-                let left = 1.0 - bezier(LEAVE, ((now - g.start) / CLOSE_S) as f32);
-                born = now - OPEN_S * f64::from((g.scale * left).clamp(0.0, 1.0)) * 0.5;
+                let (left, _) = closing(now - g.start, g.scale, g.card);
+                born = now - OPEN_S * f64::from(left.clamp(0.0, 1.0)) * 0.5;
             }
             if settled_births.contains(&layer) {
-                born = now - OPEN_S;
+                born = now - OPENED_S;
             }
             let origin = match recent {
                 Some(p) if !veiled => {
@@ -387,11 +431,11 @@ pub fn finish(ctx: &Context) {
         pop.card = card;
         pop.shapes = shapes;
         let t = now - pop.born;
-        if t >= OPEN_S {
+        if t >= OPENED_S {
             continue;
         }
         moving = true;
-        let (scale, alpha, veil_alpha) = opening(t, seed(card));
+        let (scale, alpha, veil_alpha) = opening(t, card);
         let origin = pop.origin;
         ctx.graphics_mut(|g| {
             if let Some(list) = g.get_mut(layer) {
@@ -410,12 +454,10 @@ pub fn finish(ctx: &Context) {
     }
 
     // Popups on their way out.
-    m.ghosts.retain(|g| now - g.start < CLOSE_S);
+    m.ghosts.retain(|g| now - g.start < CLOSED_S);
     for g in &m.ghosts {
         moving = true;
-        let c = ((now - g.start) / CLOSE_S) as f32;
-        let scale = (g.scale * (1.0 - bezier(LEAVE, c))).max(0.004);
-        let lift = 1.0 - bezier(LIFT, c);
+        let (scale, lift) = closing(now - g.start, g.scale, g.card);
         ctx.graphics_mut(|gr| {
             let list = gr.entry(g.layer);
             for s in &g.shapes {
@@ -623,7 +665,7 @@ pub fn popup_end(ui: &Ui, name: &str, begin: ShapeIdx, shown: bool) {
             _ => {
                 let recent = touch.filter(|(_, t)| now - t <= OPENED_BY_S + 0.05).map(|(p, _)| p);
                 Inline {
-                    born: if on { now } else { now - OPEN_S },
+                    born: if on { now } else { now - OPENED_S },
                     origin: recent.map_or(card.center(), |p| card.clamp(p)),
                     card,
                     seen: pass,
@@ -636,8 +678,8 @@ pub fn popup_end(ui: &Ui, name: &str, begin: ShapeIdx, shown: bool) {
         p.card = card;
         p.shapes = shapes;
         let t = now - p.born;
-        if on && t < OPEN_S {
-            let (scale, alpha, _) = opening(t, seed(card));
+        if on && t < OPENED_S {
+            let (scale, alpha, _) = opening(t, card);
             let origin = p.origin;
             ctx.graphics_mut(|g| {
                 let list = g.entry(layer);
@@ -653,15 +695,14 @@ pub fn popup_end(ui: &Ui, name: &str, begin: ShapeIdx, shown: bool) {
         pop = Some(p);
     } else if let Some(mut p) = pop.take() {
         if p.closing.is_none() && on && p.seen + 1 >= pass {
-            let (scale, alpha, _) = opening(now - p.born, seed(p.card));
+            let (scale, alpha, _) = opening(now - p.born, p.card);
             p.closing = Some((now, scale, alpha));
         }
         if let Some((t0, scale0, alpha0)) = p.closing.filter(|_| on)
-            && now - t0 < CLOSE_S
+            && now - t0 < CLOSED_S
         {
-            let c = ((now - t0) / CLOSE_S) as f32;
-            let scale = (scale0 * (1.0 - bezier(LEAVE, c))).max(0.004);
-            let alpha = alpha0 * (1.0 - bezier(LIFT, c));
+            let (scale, lift) = closing(now - t0, scale0, p.card);
+            let alpha = alpha0 * lift;
             ctx.graphics_mut(|g| {
                 let list = g.entry(layer);
                 for s in &p.shapes {
@@ -802,6 +843,23 @@ mod tests {
         // Arriving is mostly done by the middle, leaving has barely started.
         assert!(bezier(ARRIVE, 0.5) > 0.75);
         assert!(bezier(LEAVE, 0.5) < 0.35);
+    }
+
+    #[test]
+    fn a_popup_grows_past_its_size_settles_and_swells_before_it_goes() {
+        for card in [Rect::from_min_size(Pos2::ZERO, vec2(140.0, 90.0)), Rect::from_min_size(Pos2::ZERO, vec2(860.0, 600.0))] {
+            let over = bounce(card);
+            let size = card.width();
+            assert!(over * size / 2.0 > 6.0 && over * size / 2.0 < 12.0, "a few points each side: {}", over * size / 2.0);
+            let (peak, _, _) = opening(OPEN_S, card);
+            assert!((peak - (1.0 + over)).abs() < 1e-3);
+            let (rest, a, _) = opening(OPENED_S, card);
+            assert!((rest - 1.0).abs() < 1e-4 && a > 0.999);
+            let (swell, kept) = closing(SWELL_S, 1.0, card);
+            assert!(swell > 1.0 + over * 0.9 && kept > 0.999, "swells the wrong way first");
+            let (gone, lift) = closing(CLOSED_S, 1.0, card);
+            assert!(gone < 0.01 && lift < 0.01);
+        }
     }
 
     #[test]

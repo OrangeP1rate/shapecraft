@@ -27,7 +27,7 @@ pub(in crate::workspace) mod paint;
 mod picking;
 mod scene;
 pub(in crate::workspace) use scene::UNDO_FLASH_S;
-mod snap;
+pub(in crate::workspace) mod snap;
 mod thread_overlay;
 
 use egui::{Align2, Color32, Pos2, Rect, Sense, Ui, pos2, vec2};

@@ -38,12 +38,13 @@ pub enum Tool {
         center: Option<DVec2>,
     },
     /// Slot: the first end's center (or the middle), then the other end's center, then the cursor sets the radius.
-    /// `length`: the center line's length as typed, kept as a dimension.
+    /// `length`, `radius`: as typed and fixed with Return (the pointer goes on aiming), kept as dimensions.
     Slot {
         middle: bool,
         a: Option<DVec2>,
         b: Option<DVec2>,
         length: Option<f64>,
+        radius: Option<f64>,
     },
     /// Start, then end; the cursor bends it until the third click.
     Arc {
@@ -1244,7 +1245,7 @@ impl Tool {
             ToolKind::Rectangle => Tool::Rectangle { first: None },
             ToolKind::Circle => Tool::Circle { center: None },
             ToolKind::Polygon => Tool::Polygon { center: None },
-            ToolKind::Slot => Tool::Slot { middle: false, a: None, b: None, length: None },
+            ToolKind::Slot => Tool::Slot { middle: false, a: None, b: None, length: None, radius: None },
             ToolKind::Arc => Tool::Arc { a: None, b: None },
             ToolKind::Ellipse => Tool::Ellipse { center: None, major: None },
             ToolKind::Spline => Tool::Spline { points: Vec::new(), control: false },
@@ -1278,7 +1279,9 @@ impl Tool {
             Tool::Polygon { center: Some(_) } => Tool::Polygon { center: None },
             Tool::Arc { a, b } if a.is_some() || b.is_some() => Tool::Arc { a: None, b: None },
             Tool::Ellipse { center, major } if center.is_some() || major.is_some() => Tool::Ellipse { center: None, major: None },
-            Tool::Slot { middle, a, b, .. } if a.is_some() || b.is_some() => Tool::Slot { middle: *middle, a: None, b: None, length: None },
+            Tool::Slot { middle, a, b, .. } if a.is_some() || b.is_some() => {
+                Tool::Slot { middle: *middle, a: None, b: None, length: None, radius: None }
+            }
             Tool::Rect3 { a, b } if a.is_some() || b.is_some() => Tool::Rect3 { a: None, b: None },
             Tool::Spline { points, control } if !points.is_empty() => Tool::Spline { points: Vec::new(), control: *control },
             _ => return None,

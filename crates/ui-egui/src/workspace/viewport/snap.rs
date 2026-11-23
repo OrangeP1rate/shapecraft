@@ -444,8 +444,16 @@ pub(super) fn slot_ends(middle: bool, a: DVec2, b: DVec2) -> (DVec2, DVec2) {
     if middle { (a * 2.0 - b, b) } else { (a, b) }
 }
 
+/// Where a slot's second click lands: at the cursor, or on a fixed length's end toward it.
+pub(in crate::workspace) fn slot_end(middle: bool, a: DVec2, cursor: DVec2, length: Option<f64>) -> DVec2 {
+    match length {
+        Some(v) => a + (cursor - a).normalize_or(DVec2::X) * if middle { v / 2.0 } else { v },
+        None => cursor,
+    }
+}
+
 /// A slot's radius: the cursor's distance from its center line.
-pub(super) fn slot_radius(a: DVec2, b: DVec2, cursor: DVec2) -> f64 {
+pub(in crate::workspace) fn slot_radius(a: DVec2, b: DVec2, cursor: DVec2) -> f64 {
     ellipse_minor(a, b, cursor)
 }
 

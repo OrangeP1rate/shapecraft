@@ -9,7 +9,7 @@ use super::paint::{
     DASHED_RADIUS, DIAMETER, PILL_INK, RADIAL, axis_pill, axis_pill_ex, copy_pill, dashed_radius, diameter_dim, double_arrow, face_arrow,
     lead_drop, leader_dim, link_pill, padlock, pill, radius_dim, screen_dim, sketch_dimension, target_badge, value_box, value_field,
 };
-use super::snap::{ellipse_minor, slot_ends, slot_radius};
+use super::snap::{ellipse_minor, slot_end, slot_ends, slot_radius};
 use crate::theme::{self, Tokens, radius};
 use crate::workspace::Workspace;
 use crate::workspace::tools::{Handle, Tool};
@@ -66,14 +66,23 @@ impl Workspace {
                 }
             }
             // A slot: its center line's length, then (boxed, live) its radius, pointing in at the second end's side.
-            (Tool::Slot { middle, a: Some(a), b, .. }, Some(pl), Some(c)) => {
+            (Tool::Slot { middle, a: Some(a), b, length, radius }, Some(pl), Some(c)) => {
                 let s = |p: DVec2| self.to_screen(pl.to_world(p));
-                let (p, q) = slot_ends(*middle, *a, b.unwrap_or(c));
+                let (p, q) = slot_ends(*middle, *a, b.unwrap_or_else(|| slot_end(*middle, *a, c, *length)));
                 if let (Some(sp), Some(sq)) = (s(p), s(q)) {
-                    screen_dim(&painter, sp, sq, 60.0, &format_length(p.distance(q), units), typed.filter(|_| b.is_none()), b.is_none());
+                    let (text, live) = (format_length(p.distance(q), units), b.is_none() || radius.is_some());
+                    screen_dim(&painter, sp, sq, 60.0, &text, typed.filter(|_| live), live);
+                    // A fixed length wears a padlock while it is the live value, like a line's.
+                    if live && length.is_some() && typed.is_none() && sp.distance(sq) >= 2.0 {
+                        let u = (sq - sp).normalized();
+                        let n = vec2(-u.y, u.x);
+                        let n = if n.y > 0.0 || (n.y == 0.0 && n.x < 0.0) { -n } else { n };
+                        let u = if u.x < 0.0 { -u } else { u };
+                        padlock(&painter, sp + (sq - sp) * 0.5 + n * 60.0 + u * (text.len() as f32 * 3.6 + 16.0));
+                    }
                 }
                 if let Some(b) = b {
-                    let r = slot_radius(*a, *b, c);
+                    let r = radius.unwrap_or_else(|| slot_radius(*a, *b, c));
                     let n = (q - p).normalize_or_zero().perp() * r;
                     let rim = |n: DVec2| s(q + n);
                     let up = match (rim(n), rim(-n)) {
@@ -81,7 +90,8 @@ impl Workspace {
                         _ => n,
                     };
                     if let (Some(from), Some(tip)) = (s(q), s(q + up)) {
-                        leader_dim(&painter, from, tip, &format!("R {}", format_length(r, units)), typed, true);
+                        let live = radius.is_none();
+                        leader_dim(&painter, from, tip, &format!("R {}", format_length(r, units)), typed.filter(|_| live), live);
                     }
                 }
             }

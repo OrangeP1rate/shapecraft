@@ -7,7 +7,7 @@ use glam::{DVec2, DVec3};
 use shapecraft_doc::{Pick, SketchEntity};
 use shapecraft_render::{Overlay, Rgba, SceneColors};
 
-use super::snap::{ellipse_minor, slot_ends, slot_radius};
+use super::snap::{ellipse_minor, slot_end, slot_ends, slot_radius};
 use crate::workspace::Workspace;
 use crate::workspace::tools::Tool;
 
@@ -238,18 +238,18 @@ impl Workspace {
                     out.push(Overlay::Dot { p: pl.to_world(*p), color: Rgba::hex(0x2e68ff), size: 5.0 });
                 }
             }
-            (Tool::Slot { middle, a: Some(a), b, .. }, Some(pl), Some((c, _))) => {
+            (Tool::Slot { middle, a: Some(a), b, length, radius }, Some(pl), Some((c, _))) => {
                 let blue = Rgba::hex(0x2e68ff);
                 let mut line = |p: DVec2, q: DVec2| {
                     out.push(Overlay::Line { a: pl.to_world(p), b: pl.to_world(q), color: preview, width: 2.0 });
                 };
-                let (p, q) = slot_ends(*middle, *a, b.unwrap_or(c));
+                let (p, q) = slot_ends(*middle, *a, b.unwrap_or_else(|| slot_end(*middle, *a, c, *length)));
                 let mut dots = vec![p, q];
                 match b {
                     // First just the center line, solid; then the slot round it, the line dash-dotted.
                     None => line(p, q),
                     Some(b) => {
-                        let (d, r) = ((q - p).normalize_or_zero(), slot_radius(*a, *b, c));
+                        let (d, r) = ((q - p).normalize_or_zero(), radius.unwrap_or_else(|| slot_radius(*a, *b, c)));
                         let n = d.perp() * r;
                         for arc in [(q + n, q + d * r, q - n), (p - n, p - d * r, p + n)] {
                             for w in shapecraft_doc::arc_points(arc.0, arc.1, arc.2, 32).windows(2) {

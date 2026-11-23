@@ -28,8 +28,15 @@ impl Workspace {
                 let before = self.session.selection.clone();
                 // The on-screen Undo / Redo (touch screens) end the running tool first, as ⌘Z does: a live
                 // result mustn't stay drawn over the step taken back.
+                // A drawing tool stays armed, and a half-drawn shape has nothing to take back yet.
                 if matches!(id, "undo" | "redo") {
-                    self.tool = Tool::Idle;
+                    let drawing = self.tool.is_sketch_tool();
+                    if drawing && !matches!(self.tool, Tool::Line { .. }) && self.tool.without_pending().is_some() {
+                        return;
+                    }
+                    if !drawing || self.tool.without_pending().is_some() {
+                        self.tool = Tool::Idle;
+                    }
                     self.numeric = None;
                 }
                 let _ = self.run(id, json!({}));

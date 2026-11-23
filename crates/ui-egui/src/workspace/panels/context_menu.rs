@@ -99,6 +99,7 @@ pub(super) fn variant_menu(ws: &mut Workspace, ui: &mut Ui, label: &'static str,
             "Pattern" => ws.start_tool(if i == 1 { toolbar::ToolKind::CircularPattern } else { toolbar::ToolKind::Pattern }),
             "Offset Edge" => ws.start_tool(toolbar::ToolKind::OffsetEdge),
             "Scale" => ws.start_tool(if i == 0 { toolbar::ToolKind::Scale } else { toolbar::ToolKind::ScaleNonUniform }),
+            "Slot" => ws.tool = ws.sketch_tool(toolbar::ToolKind::Slot),
             "Spline" => ws.tool = ws.sketch_tool(toolbar::ToolKind::Spline),
             _ => {}
         }

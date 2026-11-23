@@ -4,7 +4,7 @@ use serde_json::json;
 use shapecraft_doc::Pick;
 use shapecraft_render::StandardView;
 
-use super::toolbar::{ToolKind, UiAction};
+use super::toolbar::{Action, ToolKind, UiAction};
 use super::tools::{self, Tool};
 use super::{Workspace, area, shortcuts};
 
@@ -256,13 +256,8 @@ impl Workspace {
             Key::Tab if typing => self.next_numeric_field(),
             Key::Backspace | Key::Delete if matches!(&self.tool, Tool::Spline { points, .. } if !points.is_empty()) => self.escape(),
             Key::Backspace | Key::Delete => self.delete_selection(),
-            Key::Z if cmd && m.shift => {
-                let _ = self.run("redo", json!({}));
-            }
-            Key::Z if cmd => {
-                self.tool = Tool::Idle;
-                let _ = self.run("undo", json!({}));
-            }
+            Key::Z if cmd && m.shift => self.act(Action::Command("redo"), "Redo"),
+            Key::Z if cmd => self.act(Action::Command("undo"), "Undo"),
             Key::Backslash if cmd && m.shift => self.ui_action(UiAction::Drawings),
             Key::F if cmd => self.ui_action(UiAction::Search),
             Key::V if cmd && m.shift => self.ui_action(UiAction::Variables),
@@ -717,7 +712,7 @@ mod undo_in_visualization {
                 frame(&ctx, &mut ws, Vec::new());
             }
             for _ in 0..2 {
-                ws.act(crate::workspace::toolbar::Action::Command("undo"), "Undo");
+                ws.act(Action::Command("undo"), "Undo");
                 frame(&ctx, &mut ws, Vec::new());
             }
             frame(&ctx, &mut ws, vec![undo_key(true), undo_key(false)]);
@@ -753,9 +748,9 @@ mod undo_in_visualization {
                 frame(&ctx, &mut ws, Vec::new());
             }
             // The first takes the pick back (a change of selection is a step of its own), the second the extrude.
-            ws.act(crate::workspace::toolbar::Action::Command("undo"), "Undo");
+            ws.act(Action::Command("undo"), "Undo");
             frame(&ctx, &mut ws, Vec::new());
-            ws.act(crate::workspace::toolbar::Action::Command("undo"), "Undo");
+            ws.act(Action::Command("undo"), "Undo");
             for _ in 0..5 {
                 frame(&ctx, &mut ws, Vec::new());
             }
@@ -805,7 +800,7 @@ mod undo_in_visualization {
         s.execute("sketch", &json!({"plane": "xy"})).unwrap();
         let mut ws = crate::workspace::Workspace::new(s, crate::settings::Settings::default());
         ws.add_slot(false, DVec2::new(2.0, 3.0), DVec2::new(12.0, 3.0), 2.5, Some(10.0), true);
-        assert!(matches!(ws.tool, Tool::Slot { middle: false, a: None, b: None, length: None }), "ready for the next one");
+        assert!(matches!(ws.tool, Tool::Slot { middle: false, a: None, b: None, length: None, radius: None }), "ready for the next one");
         assert!(ws.session.selection.is_empty());
         let sk = ws.session.active_sketch().unwrap();
         assert!(
@@ -814,6 +809,32 @@ mod undo_in_visualization {
             )
         );
         assert!(sk.constraints.iter().any(|c| matches!(c, shapecraft_doc::Constraint::Radius { value, .. } if (value - 2.5).abs() < 1e-9)));
+        // One undo takes the slot with both its sizes.
+        let depth = ws.session.undo_depth();
+        ws.add_slot(true, DVec2::new(40.0, 3.0), DVec2::new(45.0, 3.0), 2.5, Some(10.0), true);
+        assert_eq!(ws.session.undo_depth(), depth + 1);
+        assert!(ws.run("undo", json!({})).is_some());
+        assert_eq!(ws.session.active_sketch().unwrap().entities.len(), 5);
+        // Return fixes a typed length and radius one by one; Return alone then finishes.
+        let typed = |ws: &mut crate::workspace::Workspace, v: &str| {
+            ws.numeric = (!v.is_empty()).then(|| v.to_string());
+            ws.commit_tool();
+        };
+        ws.tool = Tool::Slot { middle: false, a: Some(DVec2::new(0.0, 50.0)), b: Some(DVec2::new(9.0, 50.0)), length: None, radius: None };
+        typed(&mut ws, "2");
+        assert!(matches!(ws.tool, Tool::Slot { radius: Some(r), .. } if (r - 2.0).abs() < 1e-9));
+        typed(&mut ws, "12");
+        assert!(matches!(ws.tool, Tool::Slot { b: Some(b), length: Some(_), .. } if (b.x - 12.0).abs() < 1e-9));
+        typed(&mut ws, "");
+        assert_eq!(ws.session.active_sketch().unwrap().entities.len(), 10);
+        assert!(ws.run("undo", json!({})).is_some());
+        // A rectangle's typed width is fixed the same way, and the height is next.
+        ws.tool = Tool::Rectangle { first: Some(DVec2::ZERO) };
+        typed(&mut ws, "12");
+        assert_eq!(ws.rect_width, Some(12.0));
+        assert!(matches!(ws.tool, Tool::Rectangle { first: Some(_) }));
+        ws.rect_width = None;
+        ws.tool = Tool::Idle;
         ws.session.execute("line", &json!({"a": [-5, 3], "b": [-3, 3]})).unwrap();
         for keep in [false, true] {
             ws.start_tool(crate::workspace::toolbar::ToolKind::Extend);

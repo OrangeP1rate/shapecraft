@@ -340,6 +340,16 @@ impl Session {
         }
     }
 
+    /// Makes the last step one with the one before it, so one undo takes both (a drawn shape and its typed size).
+    pub fn join_last_step(&mut self) {
+        if let [.., before, last] = self.undo.as_slice()
+            && before.doc.is_some()
+            && last.doc.is_some()
+        {
+            self.undo.pop();
+        }
+    }
+
     /// Takes the last step back without keeping it for redo (a live pull dragged back to nothing).
     pub fn drop_last_step(&mut self) -> bool {
         let Some(snap) = self.undo.pop() else { return false };

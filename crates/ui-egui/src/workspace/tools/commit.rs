@@ -7,6 +7,7 @@ use shapecraft_doc::{ItemId, Pick, SketchEntity};
 
 use super::*;
 use crate::workspace::Workspace;
+use crate::workspace::viewport::snap::{slot_end, slot_radius};
 
 impl Workspace {
     /// Replace Face / Project as Edge with new picks or options: tries it live (from the model as it was), keeping
@@ -350,17 +351,31 @@ impl Workspace {
                     }
                 }
             }
-            // Slot: the typed length places the second center the way the pointer aims; the typed radius finishes it.
-            Tool::Slot { middle, a: Some(a), b: None, .. } => {
-                if let (Some(v), Some(cursor)) = (typed.filter(|v| v.abs() > 1e-6), self.sketch_cursor()) {
-                    let reach = if middle { v.abs() / 2.0 } else { v.abs() };
-                    let b = a + (cursor - a).normalize_or(DVec2::X) * reach;
-                    self.tool = Tool::Slot { middle, a: Some(a), b: Some(b), length: Some(v.abs()) };
-                }
-            }
-            Tool::Slot { middle, a: Some(a), b: Some(b), length } => {
-                if let Some(r) = typed {
-                    self.add_slot(middle, a, b, r.abs(), length, true);
+            // Slot: Return on a typed value fixes it, and the pointer goes on aiming; Return with nothing
+            // typed goes on (the length to the radius, the radius to the finished slot). With the radius fixed, the
+            // length is the live value again.
+            Tool::Slot { middle, a: Some(a), b, length, radius } => {
+                let v = typed.map(f64::abs).filter(|v| *v > 1e-6);
+                match (b, v) {
+                    (None, Some(v)) => self.tool = Tool::Slot { middle, a: Some(a), b, length: Some(v), radius },
+                    (None, None) => {
+                        if let (Some(_), Some(cursor)) = (length, self.sketch_cursor()) {
+                            let b = Some(slot_end(middle, a, cursor, length));
+                            self.tool = Tool::Slot { middle, a: Some(a), b, length, radius };
+                        }
+                    }
+                    (Some(_), Some(v)) if radius.is_none() => {
+                        self.tool = Tool::Slot { middle, a: Some(a), b, length, radius: Some(v) };
+                    }
+                    (Some(b), Some(v)) => {
+                        let b = Some(slot_end(middle, a, b, Some(v)));
+                        self.tool = Tool::Slot { middle, a: Some(a), b, length: Some(v), radius };
+                    }
+                    (Some(b), None) => {
+                        if let Some(r) = radius.or_else(|| self.sketch_cursor().map(|c| slot_radius(a, b, c))) {
+                            self.add_slot(middle, a, b, r, length, radius.is_some());
+                        }
+                    }
                 }
             }
             // Return keeps what Extend grew.
@@ -372,7 +387,11 @@ impl Workspace {
                     self.add_rect3(a, b, b + n * w);
                 }
             }
-            // Width fixed with Tab: the typed value (or the cursor) gives the height, on the cursor's side.
+            // Return on a typed width fixes it, like Tab, and the height is live.
+            Tool::Rectangle { first: Some(_) } if self.rect_width.is_none() && typed.is_some_and(|v| v.abs() > 1e-9) => {
+                self.rect_width = typed.map(f64::abs);
+            }
+            // Width fixed: the typed value (or the cursor) gives the height, on the cursor's side.
             Tool::Rectangle { first: Some(a) } if self.rect_width.is_some() => {
                 let fixed_w = self.rect_width;
                 if let Some(cursor) = self.sketch_cursor() {
@@ -387,26 +406,6 @@ impl Workspace {
                     };
                     self.add_rectangle(self.rect_corner(a, c), c);
                     self.drive_rect(fixed_w, typed);
-                }
-            }
-            Tool::Rectangle { first: Some(a) } if self.variant("Rectangle") == 0 => {
-                if let (Some(v), Some(cursor)) = (typed, self.sketch_cursor()) {
-                    // Center: the typed width is the whole width, keeping the cursor's aspect.
-                    let d = (cursor - a).abs();
-                    let h = if d.x > 1e-9 { (d.y / d.x * v).max(1e-6) } else { v };
-                    self.add_rectangle(a - DVec2::new(v, h) / 2.0, a + DVec2::new(v, h) / 2.0);
-                    self.drive_rect(Some(v.abs()), None);
-                }
-            }
-            Tool::Rectangle { first: Some(a) } => {
-                if let (Some(v), Some(cursor)) = (typed, self.sketch_cursor()) {
-                    // A typed width keeps the direction the cursor is pulling in, with a square aspect.
-                    let d = cursor - a;
-                    let sx = if d.x < 0.0 { -1.0 } else { 1.0 };
-                    let sy = if d.y < 0.0 { -1.0 } else { 1.0 };
-                    let h = if d.x.abs() > 1e-9 { (d.y.abs() / d.x.abs() * v).max(1e-6) } else { v };
-                    self.add_rectangle(a, a + DVec2::new(sx * v, sy * h));
-                    self.drive_rect(Some(v.abs()), None);
                 }
             }
             Tool::Circle { center: Some(c) } => {
@@ -614,7 +613,7 @@ impl Workspace {
         let first = if middle { "middle" } else { "a" };
         if let Some(v) = self.run("slot", json!({ first: [a.x, a.y], "b": [b.x, b.y], "radius": r })) {
             self.select_new_entity(&v);
-            self.tool = Tool::Slot { middle, a: None, b: None, length: None };
+            self.tool = Tool::Slot { middle, a: None, b: None, length: None, radius: None };
             if let Some(len) = length {
                 // The center line: the one whose middle is the slot's.
                 let m = if middle { a } else { (a + b) / 2.0 };
@@ -706,14 +705,20 @@ impl Workspace {
             && score > f64::NEG_INFINITY
         {
             let keep = self.session.selection.clone();
-            let _ = self.run("constrain", json!({ "kind": kind, "value": value, "entities": [entity] }));
+            // One undo takes the shape and its typed sizes together.
+            let depth = self.session.undo_depth();
+            if self.run("constrain", json!({ "kind": kind, "value": value, "entities": [entity] })).is_some()
+                && self.session.undo_depth() > depth
+            {
+                self.session.join_last_step();
+            }
             self.session.selection = keep;
         }
     }
 
     /// Typed rectangle sizes stay as dimensions: the width on its most sideways side, the height on its most
     /// upright one.
-    fn drive_rect(&mut self, width: Option<f64>, height: Option<f64>) {
+    pub(in crate::workspace) fn drive_rect(&mut self, width: Option<f64>, height: Option<f64>) {
         let along = |e: &SketchEntity, x: bool| match *e {
             // Ties go to the top side for the width and the right side for the height, as shown (s11-056).
             SketchEntity::Line { a, b } => {

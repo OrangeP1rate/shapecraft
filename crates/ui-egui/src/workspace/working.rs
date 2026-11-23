@@ -49,6 +49,54 @@ pub(crate) struct PreviewJob {
     rx: Receiver<Result<Document, EngineError>>,
 }
 
+/// How long a failed step may go on looking for a value that works, and how many it tries.
+const ADVICE_BUDGET: Duration = Duration::from_millis(800);
+const ADVICE_TRIES: usize = 7;
+
+/// After a wall, radius or distance that didn't work: a smaller one that does, rounded down to read well and tried
+/// as written (`None` when none is found in time). Only a step being applied asks, never a live preview.
+fn working_value(s: &mut Session, id: &str, params: &Value, amend: bool) -> Option<String> {
+    let key = match id {
+        "shell" => "thickness",
+        "fillet" if params.get("radius2").is_none_or(Value::is_null) => "radius",
+        "chamfer" if params.get("distance2").is_none_or(Value::is_null) => "distance",
+        "offset_face" if params.get("distance_type").and_then(Value::as_str).is_none_or(|t| t == "offset") => "distance",
+        _ => return None,
+    };
+    let asked = params.get(key)?.as_f64().filter(|v| v.is_finite() && v.abs() > 1e-6)?;
+    let units = s.doc.units;
+    let until = Instant::now() + ADVICE_BUDGET;
+    let mut works = |v: f64| {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        let mut p = params.clone();
+        p[key] = serde_json::json!(v);
+        s.kernel.time_limit(Some(left.as_secs_f64()));
+        let ok = if amend { s.preview_amend(id, &p) } else { s.preview(id, &p) }.is_ok();
+        s.kernel.time_limit(None);
+        Some(ok)
+    };
+    let (mut good, mut bad) = (0.0, asked);
+    for _ in 0..ADVICE_TRIES {
+        let mid = (good + bad) / 2.0;
+        match works(mid) {
+            Some(true) => good = mid,
+            Some(false) => bad = mid,
+            None => break,
+        }
+    }
+    // Two figures in the project's unit, toward zero.
+    let shown = good / units.scale();
+    if shown == 0.0 {
+        return None;
+    }
+    let step = 10f64.powf(shown.abs().log10().floor() - 1.0);
+    let rounded = (shown / step).trunc() * step * units.scale();
+    works(rounded)?.then(|| shapecraft_doc::format_length(rounded, units))
+}
+
 impl Workspace {
     /// Runs a heavy step (`amend`: in place of the last one) on a fork. Some(result) when it was done within a
     /// moment (the session already holds it), None while it goes on in the background.
@@ -67,6 +115,10 @@ impl Workspace {
             std::thread::sleep(Duration::from_millis(delay));
             fork.kernel.cancellable(true);
             let out = if amend { fork.amend(id, &params) } else { fork.execute(id, &params) };
+            let out = out.map_err(|e| match working_value(&mut fork, id, &params, amend) {
+                Some(v) => EngineError::NotAvailable(format!("{e}. Try {v}.")),
+                None => e,
+            });
             let _ = tx.send((fork, out));
         });
         if let Err(e) = spawned {
@@ -238,6 +290,39 @@ mod tests {
     fn volume(ws: &Workspace) -> f64 {
         let b = &ws.session.doc.bodies[0];
         ws.session.kernel.mass_props(&b.shape).unwrap().volume
+    }
+
+    /// A wall or a radius that's too big says one that works, and that one does.
+    #[test]
+    fn a_failed_step_says_a_value_that_works() {
+        for (id, params, key) in [
+            ("shell", json!({"thickness": 12}), "thickness"),
+            ("fillet", json!({"radius": 35, "edges": [0]}), "radius"),
+            ("chamfer", json!({"distance": 35, "edges": [0]}), "distance"),
+        ] {
+            let (mut ws, body, top) = block();
+            ws.heavy_wait = Duration::from_secs(20);
+            let mut params = params;
+            params["body"] = json!(body);
+            if id == "shell" {
+                params["faces"] = json!([top]);
+            }
+            assert!(!ws.run_live(id, params.clone(), false), "{id} is too big");
+            let said = ws.toasts.last().map(|t| t.text.clone()).unwrap_or_default();
+            let v: f64 = said.rsplit_once("Try ").and_then(|(_, t)| t.split(' ').next()?.parse().ok()).unwrap_or_else(|| panic!("{said}"));
+            assert!(v > 1.0, "{said}");
+            params[key] = json!(v);
+            assert!(ws.run_live(id, params, false), "{id}: {v} works");
+        }
+    }
+
+    /// A step that works says nothing.
+    #[test]
+    fn a_good_step_gets_no_advice() {
+        let (mut ws, body, top) = block();
+        ws.heavy_wait = Duration::from_secs(20);
+        assert!(ws.run_live("shell", json!({"body": body, "faces": [top], "thickness": 2}), false));
+        assert!(ws.toasts.is_empty());
     }
 
     /// #59: a quick Offset Face lands at once, as before; pulled again it replaces its own step.

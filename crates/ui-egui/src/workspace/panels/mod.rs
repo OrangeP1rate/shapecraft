@@ -26,7 +26,7 @@ mod variables;
 
 pub(super) use command_search::run_command_id;
 pub(crate) use command_search::select_all;
-pub(super) use items::items_sidebar;
+pub(super) use items::{items_sidebar, picked_folder};
 pub(super) use popups::popups;
 pub(super) use titlebar::{titlebar, touch_title, viewer_welcome};
 

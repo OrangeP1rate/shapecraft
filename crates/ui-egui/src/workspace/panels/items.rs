@@ -119,6 +119,9 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
     {
         let c = pos2(r.center().x, r.center().y - 10.0);
         p.text(c, Align2::CENTER_CENTER, crate::i18n::tr("Workspace is empty"), theme::strong(12.5), Tokens::text_strong());
+        if matches!(ws.renaming, Some((Some(_), ..))) {
+            ws.renaming = None;
+        }
         p.text(c + vec2(0.0, 20.0), Align2::CENTER_CENTER, "Start modeling to see your items here", theme::body(11.0), Tokens::text_dim());
         return;
     }
@@ -188,6 +191,19 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
         ws.items_scroll = (ws.items_scroll - wheel_y).clamp(0.0, max_scroll);
     } else {
         ws.items_scroll = ws.items_scroll.clamp(0.0, max_scroll);
+    }
+    // The row being renamed stays in sight: out of it, it would have no field and the typing nowhere to go. One with
+    // no row at all (filtered out, its folder closed, deleted) isn't renamed any more.
+    let order: Vec<shapecraft_doc::ItemId> = rows.iter().map(|r| r.0).collect();
+    if let Some((Some(id), ..)) = ws.renaming {
+        match order.iter().position(|r| *r == id) {
+            Some(i) => {
+                let y = i as f32 * row_h;
+                let low = (y + row_h - view.height()).max(0.0);
+                ws.items_scroll = ws.items_scroll.clamp(low.min(y), y).clamp(0.0, max_scroll);
+            }
+            None => ws.renaming = None,
+        }
     }
     // Where a dragged row would land, from the pointer over the (evenly spaced, scrolled) rows.
     let top = rows_top - ws.items_scroll;
@@ -365,7 +381,15 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
             if let Some((_, text, focus)) = &mut ws.renaming {
                 let field = Rect::from_min_max(pos2(row.left() + 48.0, row.top() + 1.0), pos2(row.right() - 30.0, row.bottom() - 1.0));
                 let edit_id = ui.scope_id().with(("rename-item", id.0));
-                let resp = ui.put(field, egui::TextEdit::singleline(text).id(edit_id).font(theme::body(12.0)));
+                // Tab keeps the name and goes on to the next row's, ⇧Tab to the one above.
+                let step = ui.input_mut(|i| {
+                    if i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab) {
+                        -1
+                    } else {
+                        isize::from(i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
+                    }
+                });
+                let resp = ui.put(field, egui::TextEdit::singleline(text).id(edit_id).font(theme::body(12.0)).lock_focus(true));
                 if *focus {
                     resp.request_focus();
                     select_all(ui.ctx(), edit_id, text.chars().count());
@@ -376,10 +400,16 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
                 let (enter, esc) = ui.input_mut(|i| {
                     (i.consume_key(egui::Modifiers::NONE, egui::Key::Enter), i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
                 });
-                if enter || resp.lost_focus() && !esc {
+                if enter || step != 0 || resp.lost_focus() && !esc {
                     let new = text.clone();
                     ws.renaming = None;
                     let _ = ws.run("rename", json!({ "item": id.0, "name": new }));
+                    if step != 0
+                        && let Some(next) = idx.checked_add_signed(step).and_then(|i| order.get(i)).copied()
+                    {
+                        let name = ws.session.doc.item_name(next).unwrap_or_default().to_string();
+                        ws.renaming = Some((Some(next), name, true));
+                    }
                     ui.ctx().request_discard("an item was renamed");
                 } else if esc {
                     ws.renaming = None;
@@ -671,7 +701,7 @@ fn drop_at(doc: &shapecraft_doc::Document, rows: &[Row], item: shapecraft_doc::I
 }
 
 /// The folder whose whole contents are what's picked (a click on its row picks them), if any.
-fn picked_folder(ws: &Workspace) -> Option<shapecraft_doc::ItemId> {
+pub(in crate::workspace) fn picked_folder(ws: &Workspace) -> Option<shapecraft_doc::ItemId> {
     let picked: std::collections::BTreeSet<u64> = ws.session.selection.iter().filter_map(|p| p.item()).map(|i| i.0).collect();
     if picked.is_empty() {
         return None;
@@ -878,6 +908,79 @@ mod rename_tests {
             type_name(&ctx, &mut ws, "Lid");
             assert!(names(&ws).iter().any(|n| n == "Lid"), "row {i}: renamed, names now {:?}", names(&ws));
         }
+    }
+
+    fn press(ctx: &egui::Context, ws: &mut Workspace, key: Key, modifiers: Modifiers) {
+        let ev = |pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+        frame(ctx, ws, vec![ev(true), ev(false)]);
+        frame(ctx, ws, Vec::new());
+    }
+
+    /// F2 renames what's picked; with nothing picked it renames nothing, the project least of all.
+    #[test]
+    fn f2_renames_the_picked_item_and_never_the_project() {
+        let (ctx, mut ws, _) = setup();
+        press(&ctx, &mut ws, Key::F2, Modifiers::NONE);
+        assert!(ws.renaming.is_none());
+        assert_eq!(ws.toasts.last().map(|t| t.text.as_str()), Some("Select something to rename"));
+        let body = ws.session.doc.bodies[0].id;
+        // A face picked in the view stands for its body.
+        ws.session.selection = vec![Pick::Face { body, face: 0 }];
+        ws.show_items = false;
+        press(&ctx, &mut ws, Key::F2, Modifiers::NONE);
+        assert!(matches!(ws.renaming, Some((Some(id), ..)) if id == body));
+        type_name(&ctx, &mut ws, "Lid");
+        assert_eq!(ws.session.doc.item_name(body), Some("Lid"));
+        assert_eq!(ws.session.doc.name, "M");
+    }
+
+    /// The row's folders open for it, however deep; a name being typed for something with no row lets the keyboard go.
+    #[test]
+    fn renaming_inside_closed_folders_opens_them() {
+        let (ctx, mut ws, _) = setup();
+        let body = ws.session.doc.bodies[0].id;
+        let inner = ws.session.execute("new_folder", &json!({"items": [body.0]})).unwrap().value["folder"].as_u64().unwrap();
+        ws.session.execute("new_folder", &json!({"items": [inner]})).unwrap();
+        ws.session.selection = vec![Pick::Body { body }];
+        ws.items_expanded.clear();
+        ws.items_filter = 2;
+        frame(&ctx, &mut ws, Vec::new());
+        press(&ctx, &mut ws, Key::F2, Modifiers::NONE);
+        assert!(matches!(ws.renaming, Some((Some(id), ..)) if id == body), "the body, not the folder it's alone in");
+        frame(&ctx, &mut ws, Vec::new());
+        assert!(ws.renaming.is_some(), "its row is there to type in");
+        type_name(&ctx, &mut ws, "Deep");
+        assert_eq!(ws.session.doc.item_name(body), Some("Deep"));
+
+        ws.items_expanded.clear();
+        ws.renaming = Some((Some(body), "Deep".into(), true));
+        frame(&ctx, &mut ws, Vec::new());
+        assert!(ws.renaming.is_none(), "no row, no rename holding the keys");
+        ws.renaming = Some((Some(body), "Deep".into(), true));
+        ws.show_items = false;
+        frame(&ctx, &mut ws, Vec::new());
+        assert!(ws.renaming.is_none(), "no list either");
+    }
+
+    /// Tab keeps the name and goes on to the row below, ⇧Tab to the one above; the last row's Tab just ends it.
+    #[test]
+    fn tab_goes_on_to_the_next_name() {
+        let (ctx, mut ws, row) = setup();
+        let at = row(&ws, 0);
+        click(&ctx, &mut ws, at, PointerButton::Primary);
+        press(&ctx, &mut ws, Key::F2, Modifiers::NONE);
+        let Some((Some(first), ..)) = ws.renaming.clone() else { panic!("renaming") };
+        frame(&ctx, &mut ws, vec![Event::Text("One".into())]);
+        press(&ctx, &mut ws, Key::Tab, Modifiers::NONE);
+        let Some((Some(second), ..)) = ws.renaming.clone() else { panic!("the next row's") };
+        assert_ne!(first, second);
+        frame(&ctx, &mut ws, vec![Event::Text("Two".into())]);
+        press(&ctx, &mut ws, Key::Tab, Modifiers::SHIFT);
+        assert!(matches!(ws.renaming, Some((Some(id), ..)) if id == first), "back up");
+        type_name(&ctx, &mut ws, "Uno");
+        assert_eq!(ws.session.doc.item_name(first), Some("Uno"));
+        assert_eq!(ws.session.doc.item_name(second), Some("Two"));
+        assert!(ws.renaming.is_none());
     }
 
     /// A click on the empty space under the rows clears the selection, like a click on nothing in the view.

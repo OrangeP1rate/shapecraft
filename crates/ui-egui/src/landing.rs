@@ -1039,7 +1039,9 @@ impl Landing {
         // Return opens the picked card, Escape lets it go.
         if self.renaming.is_none() && action.is_none() && !ui.ctx().egui_wants_keyboard_input() {
             let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
-            if esc {
+            if ui.input(|i| i.key_pressed(egui::Key::F2)) {
+                self.command(HomeCmd::Rename, now);
+            } else if esc {
                 self.selected = None;
             } else if enter && let Some(d) = self.selected.clone() {
                 if self.folders.contains(&d) {

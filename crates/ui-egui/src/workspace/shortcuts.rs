@@ -33,6 +33,7 @@ Deselect All|⇧⌘A
 Select Through…|⇧⌘S
 #
 Item
+Rename|F2
 Show/Hide|⇧⌘H
 Isolate|
 Exit Isolation|
@@ -506,6 +507,11 @@ pub(super) fn combo(key: egui::Key, m: egui::Modifiers) -> String {
 pub(super) fn run_label(ws: &mut Workspace, label: &str) {
     let plain = |t: &str| t.trim_end_matches('…').trim_end_matches("...").trim().to_lowercase();
     let want = plain(label);
+    // The command needs a name; the key opens the field to type it in.
+    if want == "rename" {
+        ws.ui_action(super::toolbar::UiAction::Rename);
+        return;
+    }
     if let Some(c) = shapecraft_engine::registry().iter().find(|c| plain(c.label) == want) {
         super::panels::run_command_id(ws, c.id);
         return;

@@ -913,6 +913,30 @@ impl Workspace {
         self.toasts.push(Toast { text, until: self.now + 6.0, since: self.now, failure: Some(failure) });
     }
 
+    /// Opens the Items list so that `id` has a row in it: every folder holding it opens, and a filter that leaves it
+    /// out goes back to All Items.
+    pub(crate) fn reveal_item(&mut self, id: ItemId) {
+        self.show_items = true;
+        let doc = &self.session.doc;
+        let listed = match self.items_filter {
+            1 => doc.body(id).is_some(),
+            2 => doc.sketch(id).is_some(),
+            3 => doc.plane(id).is_some() || doc.axes.iter().any(|a| a.id == id),
+            4 => doc.images.iter().any(|i| i.id == id),
+            _ => true,
+        };
+        if !listed {
+            self.items_filter = 0;
+        }
+        let mut up = self.session.doc.folder_of(id);
+        while let Some(f) = up {
+            if !self.items_expanded.insert(f) {
+                break;
+            }
+            up = self.session.doc.folder_of(f);
+        }
+    }
+
     /// Move/Rotate's Auto-orientation (on unless switched off; remembered like a variant).
     pub(crate) fn auto_orient(&self) -> bool {
         self.variants.get(AUTO_ORIENT) != Some(&1)
@@ -1216,6 +1240,11 @@ impl Workspace {
                     self.settings.items_width = w.round();
                 }
             }
+        }
+        // No list on screen (a drawing, the list hidden): a name being typed there ends, or it would go on holding
+        // the keyboard with nothing to type into.
+        if (!self.show_items || self.drawings.is_some() || teaching) && matches!(self.renaming, Some((Some(_), ..))) {
+            self.renaming = None;
         }
         crate::motion::column_end(ui, "items", items_begin);
         let side_begin = crate::motion::column_begin(ui);

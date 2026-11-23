@@ -216,7 +216,10 @@ impl Workspace {
             UiAction::ShowHiddenBodies => self.show_hidden_bodies(),
             UiAction::InvertVisibility => self.invert_body_visibility(),
             UiAction::ZoomToSelection => self.zoom_to_selection(),
-            UiAction::RevealInItems => self.show_items = true,
+            UiAction::RevealInItems => match self.session.selection.iter().find_map(Pick::item) {
+                Some(id) => self.reveal_item(id),
+                None => self.show_items = true,
+            },
             UiAction::RenameProject => self.renaming = Some((None, self.session.doc.name.clone(), true)),
             UiAction::Visualized => self.toggle_visualized(),
             UiAction::MeasureMode(i) => {
@@ -244,11 +247,13 @@ impl Workspace {
                 }
             }
             UiAction::Rename => {
-                let item = self.session.selection.iter().find_map(Pick::item);
-                if let Some(id) = item {
+                // A folder's row picks everything in it: the folder is what's renamed then (one thing picked is itself).
+                let several = self.session.selection.iter().filter_map(Pick::item).collect::<std::collections::BTreeSet<_>>().len() > 1;
+                let folder = (self.items_focus && several).then(|| super::panels::picked_folder(self)).flatten();
+                if let Some(id) = folder.or_else(|| self.session.selection.iter().find_map(Pick::item)) {
                     let name = self.session.doc.item_name(id).unwrap_or_default().to_string();
                     self.renaming = Some((Some(id), name, true));
-                    self.show_items = true;
+                    self.reveal_item(id);
                 }
             }
             UiAction::Shortcuts => {

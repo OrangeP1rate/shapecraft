@@ -2,8 +2,13 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
-## 0.12.4-alpha
+## 0.12.5-alpha
 **Everything moves now: popups grow in and out, the side columns slide.**
+### New
+- **F2 renames the thing you picked.** Not the project. The thing you picked. Revolutionary, we know. It works on
+  anything in Items, on a face or edge (its body) and on the projects screen; Tab goes on to the next name, ⇧Tab back.
+- **A step that's too big says what fits.** When Shell, Fillet, Chamfer or Offset Face can't make the size you asked
+  for, the message offers one that works ("Try 9.9 mm"), tried on your part first.
 ### Changed
 - **Popups open and close with motion.** Every menu, popover, card, toast and sheet grows out of the spot that
   opened it and shrinks back into it when it closes, quick and decelerating in, accelerating away. Each one bounces:
@@ -30,6 +35,8 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
 ### Fixed
 - The Escape that closes Preferences, Search or another popup no longer also reaches the workspace behind it (it
   used to leave the sketch too).
+- **Renaming something inside a closed folder** opens the folder. It used to leave every key dead, with no field to
+  type in. Reveal in Items Sidebar opens nested folders too.
 
 ## 0.12.0-alpha
 **Open the parts other CAD systems save: SolidWorks, NX, Solid Edge and JT. Export FBX and VRML.**

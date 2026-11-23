@@ -403,10 +403,9 @@ pub(super) fn context_menu(ws: &mut Workspace, ui: &mut Ui, at: Pos2, under: Opt
         "Show Hidden Bodies" => ws.show_hidden_bodies(),
         "Invert Body Visibility" => ws.invert_body_visibility(),
         "Reveal in Items Sidebar" => {
-            ws.show_items = true;
-            // The folder holding it opens, so its row shows.
-            if let Some(f) = under.and_then(|p| p.item()).and_then(|i| ws.session.doc.folder_of(i)) {
-                ws.items_expanded.insert(f);
+            match under.and_then(|p| p.item()) {
+                Some(id) => ws.reveal_item(id),
+                None => ws.show_items = true,
             }
             if let Some(p) = under.filter(|p| p.item().is_some()) {
                 ws.session.selection = vec![match p.sketch() {

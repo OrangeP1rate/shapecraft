@@ -273,6 +273,9 @@ impl Workspace {
             Key::P if cmd && m.alt => self.show_history = !self.show_history,
             Key::R if cmd && m.alt => self.renaming = Some((None, self.session.doc.name.clone(), true)),
             Key::R if cmd => self.ui_action(UiAction::Rename),
+            // F2 renames what's picked, as in a file browser (never the project).
+            Key::F2 if self.session.selection.iter().all(|p| p.item().is_none()) => self.toast("Select something to rename"),
+            Key::F2 => self.ui_action(UiAction::Rename),
             Key::C if cmd && m.shift => self.copy_shot = true,
             Key::Z if m.alt && !cmd => self.display = shapecraft_render::DisplayMode::Zebra { vertical: false, scale: 100 },
             Key::C if m.alt && !cmd => self.display = shapecraft_render::DisplayMode::Curvature { scale: 100 },

@@ -957,6 +957,10 @@ pub fn group_full(
         let chip_resp = chip_rect.map(|cr| ui.interact(cr, ui.scope_id().with((id, i, "chip")), Sense::click()));
         let is_active = active.get(i).copied().unwrap_or(false);
         let inner = r.shrink(3.0);
+        let button_id = ui.scope_id().with((id, i));
+        let lit = crate::motion::lit(ui.ctx(), button_id, hovered && !disabled);
+        let held = !disabled && (resp.is_pointer_button_down_on() || chip_resp.as_ref().is_some_and(Response::is_pointer_button_down_on));
+        let pressed_from = crate::motion::press_begin(ui);
         // A tool's Done and Cancel are tinted, with a blue ✓ and a red ✕ (measured, 326).
         let tint = match def.action {
             Action::Ui(UiAction::ToolDone | UiAction::ViewDone) => Some((theme::c(0x2e385b), Tokens::sketch_blue())),
@@ -972,8 +976,8 @@ pub fn group_full(
             ui.painter().rect_filled(inner, radius(7), Color32::WHITE);
         } else if is_active {
             ui.painter().rect_filled(inner, radius(7), Tokens::button_active());
-        } else if hovered && !disabled {
-            ui.painter().rect_filled(inner, radius(7), Tokens::button_hover());
+        } else if lit > 0.0 {
+            ui.painter().rect_filled(inner, radius(7), Tokens::button_hover().gamma_multiply(lit));
         }
         let color = if disabled {
             Tokens::text_ghost()
@@ -996,6 +1000,7 @@ pub fn group_full(
                 Stroke::NONE,
             ));
         }
+        crate::motion::press_end(ui, button_id, held, r.center(), pressed_from);
         let was_clicked = resp.clicked() || chip_resp.is_some_and(|c| c.clicked());
         if was_clicked && !disabled {
             clicked = Some(i);

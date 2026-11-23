@@ -2743,6 +2743,7 @@ impl eframe::App for ShapeCraftApp {
         }
         // Last: the projects screen and a project dissolve into each other, and popups that appeared or went away
         // this frame grow out of / shrink into their point.
+        crate::motion::set_fancy(self.settings_now().fancy_animations);
         crate::motion::screen(ui.ctx(), u64::from(self.ws.is_some()), self.ws.is_some());
         crate::motion::finish(ui.ctx());
     }

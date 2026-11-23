@@ -38,6 +38,9 @@ pub struct Settings {
     /// The View popover's Appearance tab: camera animations, and the field of view (0° = always orthographic).
     pub animate_camera: bool,
     pub field_of_view: f64,
+    /// Preferences ▸ General ▸ Animations: popups that grow and bounce, sliding columns, pressed buttons, gliding
+    /// rows and fades (`crate::motion`). Off, things just appear, for the slowest machines.
+    pub fancy_animations: bool,
     /// Points on this screen per real millimetre, from View ▸ Calibrate Actual Size (0 = not calibrated yet).
     pub screen_points_per_mm: f64,
     /// The Items sidebar's width; its right edge drags between 200 and 500 (as observed).
@@ -155,6 +158,7 @@ impl Default for Settings {
             tutorial_keys: false,
             animate_camera: true,
             field_of_view: 45.0,
+            fancy_animations: true,
             screen_points_per_mm: 0.0,
             items_width: 300.0,
             auto_constrain: true,

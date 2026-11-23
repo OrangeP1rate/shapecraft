@@ -396,6 +396,13 @@ pub(super) fn axis_pill(painter: &egui::Painter, center: Pos2, dir: egui::Vec2, 
 
 /// [`axis_pill`], saying whether a click on it opens the tool's value field (`value`) apart from its blue edge.
 pub(super) fn axis_pill_ex(painter: &egui::Painter, center: Pos2, dir: egui::Vec2, text: &str, blue_edge: bool, value: bool) -> Rect {
+    let from = crate::motion::pop_begin(painter);
+    let r = axis_pill_drawn(painter, center, dir, text, blue_edge, value);
+    crate::motion::pop_end(painter, "axis-pill", from, center);
+    r
+}
+
+fn axis_pill_drawn(painter: &egui::Painter, center: Pos2, dir: egui::Vec2, text: &str, blue_edge: bool, value: bool) -> Rect {
     // Keep text upright; near-vertical text reads upwards, as in the reference.
     let mut angle = dir.y.atan2(dir.x);
     let q = std::f32::consts::FRAC_PI_2;
@@ -532,6 +539,12 @@ pub(in crate::workspace) const PILL_INK: Color32 = Color32::from_rgb(0x1c, 0x1c,
 
 /// A small white rounded label (blue-edged for angles), like the reference's handle values.
 pub(super) fn pill(painter: &egui::Painter, center: Pos2, text: &str, blue_edge: bool) {
+    let from = crate::motion::pop_begin(painter);
+    pill_drawn(painter, center, text, blue_edge);
+    crate::motion::pop_end(painter, "pill", from, center);
+}
+
+fn pill_drawn(painter: &egui::Painter, center: Pos2, text: &str, blue_edge: bool) {
     let galley = painter.layout_no_wrap(text.to_string(), theme::strong(10.5), PILL_INK);
     let r = Rect::from_center_size(center, vec2(galley.size().x + 12.0, 18.0));
     painter.rect_filled(r, radius(5), Color32::WHITE);
@@ -543,6 +556,13 @@ pub(super) fn pill(painter: &egui::Painter, center: Pos2, text: &str, blue_edge:
 }
 
 pub(super) fn value_box(painter: &egui::Painter, center: Pos2, text: &str, typed: Option<&str>) {
+    let from = crate::motion::pop_begin(painter);
+    value_box_drawn(painter, center, text, typed);
+    // The typed field pops on its own when typing starts.
+    crate::motion::pop_end(painter, if typed.is_some() { "value-field" } else { "value" }, from, center);
+}
+
+fn value_box_drawn(painter: &egui::Painter, center: Pos2, text: &str, typed: Option<&str>) {
     let (shown, editing) = match typed {
         Some(t) => (t.to_string(), true),
         None => (text.to_string(), false),

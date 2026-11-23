@@ -17,10 +17,13 @@ use crate::workspace::tools::Tool;
 
 fn icon_button(ui: &mut Ui, r: Rect, icon: Icon, id: &str) -> bool {
     let resp = ui.interact(r, ui.scope_id().with(id), Sense::click());
-    if resp.hovered() {
-        ui.painter().rect_filled(r, radius(6), Tokens::button_hover());
+    let lit = crate::motion::lit(ui.ctx(), resp.id, resp.hovered());
+    let from = crate::motion::press_begin(ui);
+    if lit > 0.0 {
+        ui.painter().rect_filled(r, radius(6), Tokens::button_hover().gamma_multiply(lit));
     }
     icons::paint(ui.painter(), r.shrink(r.width() * 0.18), icon, Tokens::icon());
+    crate::motion::press_end(ui, resp.id, resp.is_pointer_button_down_on(), r.center(), from);
     resp.clicked()
 }
 
@@ -231,9 +234,14 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
     let mut fills: Vec<(egui::layers::ShapeIdx, Rect, Option<Color32>)> = Vec::new();
     for (idx, (id, name, visible, kind, depth)) in rows.into_iter().enumerate() {
         let y = rows_top + idx as f32 * row_h - ws.items_scroll;
+        // Rows glide when items come, go or move (their place in the whole list, so scrolling doesn't).
+        let row_key = egui::Id::unique(("item-row", id.0));
+        let list_y = idx as f32 * row_h;
         if y + row_h <= rows_top || y >= view.bottom() {
+            crate::motion::row_seen(ui.ctx(), "items", row_key, list_y);
             continue;
         }
+        let row_from = crate::motion::row_begin(ui);
         let indent = 13.0 * depth as f32;
         let row = Rect::from_min_size(pos2(r.left(), y), vec2(r.width(), row_h)).intersect(view);
         let resp = ui.interact(row, ui.scope_id().with(("item", id.0)), Sense::click_and_drag());
@@ -461,6 +469,11 @@ pub(in crate::workspace) fn items_sidebar(ws: &mut Workspace, ui: &mut Ui, r: Re
         if resp.double_clicked() {
             ws.renaming = Some((Some(id), name.clone(), true));
             ui.ctx().request_discard("a row switched to renaming");
+        }
+        let (dy, a) = crate::motion::row_end(ui, "items", row_key, list_y, row_from);
+        if let Some(f) = fills.last_mut().filter(|f| f.1 == row) {
+            f.1 = row.translate(vec2(0.0, dy));
+            f.2 = f.2.map(|c| c.gamma_multiply(a));
         }
     }
     // Fills join with the rows above and below of the same colour into one block, rounded only at its ends.

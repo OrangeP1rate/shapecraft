@@ -545,7 +545,9 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
         let g = p.layout_no_wrap(t.text.clone(), theme::body(12.0), Tokens::text());
         // A failed step's message ends with Report…, set off by a hairline.
         let extra = if t.failure.is_some() { 74.0 } else { 0.0 };
-        let r = Rect::from_center_size(pos2(vp.center().x, y), vec2(g.size().x + 24.0 + extra, 30.0));
+        // A new message pushes the older ones up: they glide to their new places (crate::motion).
+        let shown_y = crate::motion::tween(ui.ctx(), &format!("toast-{}", t.since.to_bits()), y, 0.24);
+        let r = Rect::from_center_size(pos2(vp.center().x, shown_y), vec2(g.size().x + 24.0 + extra, 30.0));
         y -= 36.0;
         // Each in an area of its own, so it grows in and shrinks away like any popup (crate::motion).
         let area = egui::Area::new(ui.scope_id().with(("toast", &t.text, t.since.to_bits())))

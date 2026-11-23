@@ -11,6 +11,11 @@ use super::snap::ellipse_minor;
 use crate::workspace::Workspace;
 use crate::workspace::tools::Tool;
 
+/// Undo / Redo's flash: how long, how far toward its colour at the brightest, and the colour.
+pub(in crate::workspace) const UNDO_FLASH_S: f64 = 0.7;
+const UNDO_FLASH_PEAK: f32 = 0.55;
+const UNDO_FLASH_COLOR: Rgba = Rgba(0x9c, 0xc4, 0xff, 255);
+
 impl Workspace {
     pub(super) fn overlays(&self) -> Vec<Overlay> {
         let mut out = Vec::new();
@@ -428,6 +433,31 @@ impl Workspace {
     /// Split Body applied, before Done: the pieces grey-teal, the cuts showing as edges (s12-018).
     /// A face growing out (Extrude): the grown body in its own grey, see-through.
     pub(super) fn split_tints(&self) -> Vec<(shapecraft_doc::ItemId, Rgba)> {
+        let mut tints = self.split_tints_of_tool();
+        // What Undo or Redo just changed lights up blue-white and fades back to its own colour.
+        if let Some((ids, since)) = &self.undo_flash
+            && tints.is_empty()
+        {
+            let grey = if theme::is_light() { SceneColors::light() } else { SceneColors::default() }.body;
+            let u = ((self.now - since) / UNDO_FLASH_S).clamp(0.0, 1.0) as f32;
+            // Up fast, then a long fade.
+            let k = UNDO_FLASH_PEAK * if u < 0.15 { u / 0.15 } else { 1.0 - (u - 0.15) / 0.85 };
+            let k = k.clamp(0.0, 1.0);
+            for id in ids {
+                let Some(b) = self.session.doc.body(*id) else { continue };
+                let own = b
+                    .appearance
+                    .as_ref()
+                    .map_or(grey, |a| Rgba((a.color[0] * 255.0) as u8, (a.color[1] * 255.0) as u8, (a.color[2] * 255.0) as u8, 255));
+                let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * k).round() as u8;
+                let hi = UNDO_FLASH_COLOR;
+                tints.push((*id, Rgba(mix(own.0, hi.0), mix(own.1, hi.1), mix(own.2, hi.2), 255)));
+            }
+        }
+        tints
+    }
+
+    fn split_tints_of_tool(&self) -> Vec<(shapecraft_doc::ItemId, Rgba)> {
         let grey = if theme::is_light() { SceneColors::light() } else { SceneColors::default() }.body;
         if let Some((body, _)) = self.growing_face() {
             return vec![(body, Rgba(grey.0, grey.1, grey.2, 150))];

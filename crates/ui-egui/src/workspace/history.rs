@@ -431,6 +431,12 @@ pub(super) fn sidebar(ws: &mut Workspace, ui: &mut Ui, r: Rect) {
             y += 6.0;
         }
         let row = Rect::from_min_size(pos2(left, y), vec2(right - left, ROW_H));
+        // Rows glide when steps come and go: told apart by what they are and which of that kind they are.
+        let row_key = {
+            let nth = steps.iter().take_while(|(j, _)| *j < i).filter(|(_, s)| s.label == step.label && s.kind == step.kind).count();
+            egui::Id::unique(("history-step", &step.label, &step.kind, step.sketch, nth))
+        };
+        let (row_top, row_from) = (y, crate::motion::row_begin(ui));
         // A thin line between rows (measured: #3e3d3e, 16 px in from the left, 14 from the right).
         if drawn > 0 {
             p.line_segment(
@@ -462,6 +468,7 @@ pub(super) fn sidebar(ws: &mut Workspace, ui: &mut Ui, r: Rect) {
         );
         let resp = ui.interact(row, ui.scope_id().with(("history-row", i)), Sense::click());
         let hovered = (resp.hovered() || ui.rect_contains_pointer(row)) && !locked && !ws.history.bp_drag;
+        let hover_lit = crate::motion::lit(ui.ctx(), resp.id, hovered);
         if open && carded {
             // The step whose card is up is lit blue (s16-010).
             p.rect_filled(row, radius(6), Tokens::accent());
@@ -470,8 +477,8 @@ pub(super) fn sidebar(ws: &mut Workspace, ui: &mut Ui, r: Rect) {
             p.rect_filled(row, radius(6), theme::c(0x37373a));
         } else if lit {
             p.rect_filled(row, radius(6), theme::c(0x58575d));
-        } else if hovered {
-            p.rect_filled(row, radius(6), Tokens::row_hover());
+        } else if hover_lit > 0.0 {
+            p.rect_filled(row, radius(6), Tokens::row_hover().gamma_multiply(hover_lit));
         }
         icons::paint(
             &p,
@@ -624,6 +631,7 @@ pub(super) fn sidebar(ws: &mut Workspace, ui: &mut Ui, r: Rect) {
             if carded {
                 y = block.bottom();
                 y += ROW_PITCH - ROW_H;
+                let _ = crate::motion::row_end(ui, "history", row_key, row_top, row_from);
                 continue;
             }
             let mut fy = y + 12.0 + FIELD_PITCH / 2.0;
@@ -720,6 +728,7 @@ pub(super) fn sidebar(ws: &mut Workspace, ui: &mut Ui, r: Rect) {
             y = block.bottom();
         }
         y += ROW_PITCH - ROW_H;
+        let _ = crate::motion::row_end(ui, "history", row_key, row_top, row_from);
     }
     gaps.push((y - 1.0, plain(all_count)));
     if ws.history.bp_drag {

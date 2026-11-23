@@ -159,15 +159,10 @@ fn variables(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
 }
 
 pub(super) fn modals(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
-    if ws.variables_dialog.is_some() {
-        variables(ws, ui, full);
-    }
-    if ws.prefs_open {
-        preferences(ws, ui, full);
-    }
-    if ws.nav_presets.is_some() {
-        nav_presets(ws, ui, full);
-    }
+    use crate::motion::nested;
+    nested(ui, "variables", ws.variables_dialog.is_some(), |ui| variables(ws, ui, full));
+    nested(ui, "preferences", ws.prefs_open, |ui| preferences(ws, ui, full));
+    nested(ui, "nav-presets", ws.nav_presets.is_some(), |ui| nav_presets(ws, ui, full));
 }
 
 /// Escape closes the window, and only the window: the key is used up, so the workspace behind (a sketch, a tool)
@@ -1338,6 +1333,10 @@ fn general_tab(ui: &mut Ui, r: Rect, s: &mut Settings, shortcuts: bool) -> (bool
     y += pitch;
     row_label(&p, col, y, "Selection Extension:");
     check(ui, pos2(col, y), "pref-ext", &mut s.extend_needs_shift, "Require holding shift");
+    y += pitch;
+    // Everything in `crate::motion`: off for the slowest machines (the camera has its own switch in View).
+    row_label(&p, col, y, "Animations:");
+    check(ui, pos2(col, y), "pref-fancy", &mut s.fancy_animations, "Fancy animations");
     y += 24.0;
     sep(&p, y);
     y += 24.0;

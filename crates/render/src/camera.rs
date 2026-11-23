@@ -191,15 +191,20 @@ impl Camera {
     /// Smooth step between two cameras for view animations, taking the short way round in yaw.
     pub fn lerp(a: &Camera, b: &Camera, t: f64) -> Camera {
         let t = t.clamp(0.0, 1.0);
-        let s = t * t * (3.0 - 2.0 * t);
+        Camera::blend(a, b, t * t * (3.0 - 2.0 * t))
+    }
+
+    /// The camera `s` of the way from `a` to `b`, already eased; `s` may run a little past 1 (a move that overshoots
+    /// and settles). Never past straight up or down, and never more than fully flat.
+    pub fn blend(a: &Camera, b: &Camera, s: f64) -> Camera {
         let dyaw = short_turn(b.yaw - a.yaw);
         Camera {
             target: a.target.lerp(b.target, s),
             yaw: a.yaw + dyaw * s,
-            pitch: a.pitch + (b.pitch - a.pitch) * s,
+            pitch: (a.pitch + (b.pitch - a.pitch) * s).clamp(-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
             distance: a.distance * (b.distance / a.distance).powf(s),
             fov_y: a.fov_y + (b.fov_y - a.fov_y) * s,
-            ortho: a.ortho_amount() + (b.ortho_amount() - a.ortho_amount()) * s,
+            ortho: (a.ortho_amount() + (b.ortho_amount() - a.ortho_amount()) * s).clamp(0.0, 1.0),
             always_ortho: b.always_ortho,
             roll: a.roll + short_turn(b.roll - a.roll) * s,
         }

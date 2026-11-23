@@ -96,8 +96,24 @@ impl Workspace {
             self.toast(crate::tablet::VIEW_ONLY_NOTE);
             return None;
         }
+        // Undo and Redo flash what they changed (crate::motion's fancy animations).
+        // Each body's mesh by address: Undo puts back the very mesh an unchanged body had.
+        let mesh_at = |b: &shapecraft_doc::Body| std::sync::Arc::as_ptr(&b.mesh).cast::<()>() as usize;
+        let flash_before: Option<Vec<(shapecraft_doc::ItemId, usize)>> = (matches!(id, "undo" | "redo") && crate::motion::enabled())
+            .then(|| self.session.doc.bodies.iter().map(|b| (b.id, mesh_at(b))).collect());
         match self.session.execute(id, &params) {
             Ok(out) => {
+                if let Some(before) = flash_before {
+                    let changed: Vec<shapecraft_doc::ItemId> = self
+                        .session
+                        .doc
+                        .bodies
+                        .iter()
+                        .filter(|b| !before.iter().any(|(id, m)| *id == b.id && *m == mesh_at(b)))
+                        .map(|b| b.id)
+                        .collect();
+                    self.undo_flash = (!changed.is_empty()).then_some((changed, self.now));
+                }
                 self.remember(id);
                 if matches!(id, "select" | "select_all") {
                     self.repredict();
@@ -378,6 +394,36 @@ impl Workspace {
                 }
                 std::borrow::Cow::Owned(d)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod undo_flash {
+    use super::*;
+    use std::sync::Arc;
+
+    /// Redo flashes the body it brought back and not the one it left alone (an unchanged body keeps its very mesh).
+    #[test]
+    fn undo_and_redo_flash_only_what_they_changed() {
+        if crate::motion::enabled() {
+            let session = shapecraft_engine::Session::new(Arc::new(shapecraft_kernel_occt::OcctKernel::new()), "Flash");
+            let mut ws = Workspace::new(session, crate::settings::Settings::default());
+            for x in [0, 30] {
+                ws.session.execute("sketch", &serde_json::json!({"plane": "xy"})).unwrap();
+                ws.session.execute("circle", &serde_json::json!({"center": [x, 0], "radius": 5})).unwrap();
+                let k = ws.session.active_sketch.unwrap().0;
+                ws.session.execute("extrude", &serde_json::json!({"sketch": k, "region": 0, "distance": 10})).unwrap();
+            }
+            assert_eq!(ws.session.doc.bodies.len(), 2);
+            ws.run("undo", serde_json::json!({}));
+            assert_eq!(ws.session.doc.bodies.len(), 1);
+            assert!(ws.undo_flash.is_none(), "nothing left changed: {:?}", ws.undo_flash);
+            ws.run("redo", serde_json::json!({}));
+            assert_eq!(ws.session.doc.bodies.len(), 2);
+            let flashed = ws.undo_flash.as_ref().map(|f| f.0.len());
+            assert_eq!(flashed, Some(1), "only the body that came back");
         }
     }
 }

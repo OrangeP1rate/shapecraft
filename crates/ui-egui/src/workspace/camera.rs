@@ -49,7 +49,14 @@ impl Workspace {
             return;
         }
         // Measured: the reference's view moves take ~0.33 s (⌘1 timed off the view cube, s30 animtime).
-        self.anim = Some(Anim { from: self.camera, to, start: self.now, duration: 0.33 });
+        let settle = crate::motion::enabled();
+        self.anim = Some(Anim {
+            from: self.camera,
+            to,
+            start: self.now,
+            duration: if settle { crate::motion::SETTLE_CAMERA_S } else { 0.33 },
+            settle,
+        });
     }
 
     /// The standard view the camera is in right now, if any (the View popover checks it).
@@ -212,8 +219,13 @@ impl Workspace {
     pub(super) fn step_animation(&mut self) -> bool {
         let Some(a) = self.anim else { return false };
         let t = ((self.now - a.start) / a.duration).clamp(0.0, 1.0);
-        self.camera = Camera::lerp(&a.from, &a.to, t);
+        self.camera = if a.settle {
+            Camera::blend(&a.from, &a.to, crate::motion::settle((self.now - a.start) as f32).into())
+        } else {
+            Camera::lerp(&a.from, &a.to, t)
+        };
         if t >= 1.0 {
+            self.camera = a.to;
             self.anim = None;
         }
         true

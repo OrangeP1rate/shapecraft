@@ -26,6 +26,7 @@ mod navigate;
 pub(in crate::workspace) mod paint;
 mod picking;
 mod scene;
+pub(in crate::workspace) use scene::UNDO_FLASH_S;
 mod snap;
 mod thread_overlay;
 
@@ -134,6 +135,11 @@ impl Workspace {
             .or((self.view_opts.grid && !matches!(self.tool, Tool::PickPlane { .. })).then(|| {
                 [SketchPlane::XY, SketchPlane::YZ, SketchPlane { origin: DVec3::ZERO, x: DVec3::Z, y: DVec3::X }][self.grid_plane.min(2)]
             }));
+        // Going into a sketch the grid fades up as the camera turns to it, and fades away leaving it.
+        let (grid, grid_alpha) = match crate::motion::presence(ui.ctx(), "grid", grid, 0.3, 0.22) {
+            Some((g, a)) => (Some(g), a),
+            None => (None, 1.0),
+        };
         let live = self.has_live_preview();
         let shown = self.shown_doc().into_owned();
         // Highlights refer to the real document's faces; drop them while showing a preview. Moving keeps whole
@@ -173,9 +179,15 @@ impl Workspace {
             active_sketch: self.session.active_sketch,
             plane_tiles: &tiles,
             overlays: &overlays,
-            colors: SceneColors {
-                xray: self.xray_opacity,
-                ..if theme::is_light() { SceneColors::light() } else { SceneColors::default() }
+            colors: {
+                let mut c = SceneColors {
+                    xray: self.xray_opacity,
+                    ..if theme::is_light() { SceneColors::light() } else { SceneColors::default() }
+                };
+                for g in [&mut c.grid_minor, &mut c.grid_major] {
+                    g.3 = (f32::from(g.3) * grid_alpha).round() as u8;
+                }
+                c
             },
             show_axes: self.view_opts.axes,
             show_edges: self.view_opts.edges,

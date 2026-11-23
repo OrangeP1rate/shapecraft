@@ -2,7 +2,7 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
-## 0.12.2-alpha
+## 0.12.3-alpha
 **Everything moves now: popups grow in and out, the side columns slide.**
 ### Changed
 - **Popups open and close with motion.** Every menu, popover, card, toast and sheet grows out of the spot that
@@ -14,7 +14,18 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
 - Opening a project dissolves the projects screen into it (and closing one dissolves back). A newly picked
   Preferences tab fades in while the highlight glides over to it; History, Visualize and a drawing's properties
   fade into each other.
-- All of it turns off with the system's Reduce Motion (macOS; Animation effects on Windows).
+- **Buttons press in.** Tool buttons and the title bar's and Items' buttons squash a little under the pointer and
+  spring back when let go; their hover highlights fade in and out instead of flicking.
+- **The camera settles.** View changes, the view cube, Zoom to Fit and turning to a sketch plane run a hair past
+  and settle, and the grid fades in going into a sketch and away leaving it.
+- **Values pop onto the view.** Value pills and dimension boxes pop in from a little small, and a menu's rows come
+  in one after another as it opens.
+- **Lists glide.** History and Items rows slide to their new places when steps or items come and go, and a new
+  message pushes the older ones up instead of jumping them.
+- **Undo and Redo show what changed.** The bodies they change light up pale blue for a moment and fade back.
+- A dialog opened over another (Navigation Presets over Preferences, export and import sheets) grows in on its own.
+- **Preferences ▸ General ▸ Animations ▸ Fancy animations** turns all of this off, for slower computers. It's also
+  off with the system's Reduce Motion (macOS; Animation effects on Windows).
 ### Fixed
 - The Escape that closes Preferences, Search or another popup no longer also reaches the workspace behind it (it
   used to leave the sketch too).

@@ -17,8 +17,10 @@ fn home_button(ui: &mut Ui, center: Pos2, ink: Color32, bar: Color32, hit: Optio
     let round = hit.is_some();
     let hit = hit.unwrap_or(Rect::from_center_size(center, vec2(28.0, 26.0)));
     let resp = ui.interact(hit, ui.scope_id().with("home"), Sense::click());
-    if resp.hovered() && !round {
-        ui.painter().rect_filled(hit, radius(6), Tokens::button_hover());
+    let lit = crate::motion::lit(ui.ctx(), resp.id, resp.hovered() && !round);
+    let from = crate::motion::press_begin(ui);
+    if lit > 0.0 {
+        ui.painter().rect_filled(hit, radius(6), Tokens::button_hover().gamma_multiply(lit));
     }
     let p = ui.painter();
     let o = center - vec2(9.5, 8.5) * k;
@@ -31,6 +33,7 @@ fn home_button(ui: &mut Ui, center: Pos2, ink: Color32, bar: Color32, hit: Optio
     ));
     p.add(Shape::convex_polygon(vec![at(9.5, 4.5), at(16.0, 10.0), at(16.0, 17.0), at(3.0, 17.0), at(3.0, 10.0)], ink, Stroke::NONE));
     p.rect_filled(Rect::from_min_max(at(7.5, 11.0), at(11.5, 17.0)), 0.0, bar);
+    crate::motion::press_end(ui, resp.id, resp.is_pointer_button_down_on(), hit.center(), from);
     resp.clicked()
 }
 
@@ -41,10 +44,13 @@ const COMPACT_HOME_R: f32 = 23.0;
 fn bar_button(ui: &mut Ui, center: Pos2, id: &str, icon: Icon, ink: Color32) -> egui::Response {
     let hit = Rect::from_center_size(center, vec2(28.0, 26.0));
     let resp = ui.interact(hit, ui.scope_id().with(id), Sense::click());
-    if resp.hovered() {
-        ui.painter().rect_filled(hit, radius(6), Tokens::button_hover());
+    let lit = crate::motion::lit(ui.ctx(), resp.id, resp.hovered());
+    let from = crate::motion::press_begin(ui);
+    if lit > 0.0 {
+        ui.painter().rect_filled(hit, radius(6), Tokens::button_hover().gamma_multiply(lit));
     }
     icons::paint(ui.painter(), Rect::from_center_size(center, vec2(20.0, 20.0)), icon, ink);
+    crate::motion::press_end(ui, resp.id, resp.is_pointer_button_down_on(), center, from);
     resp
 }
 

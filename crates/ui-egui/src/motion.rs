@@ -58,18 +58,56 @@ const SPRING_Z: f32 = 0.74;
 const LEAN_PT: f32 = 7.0;
 const LEAN_S: f32 = 0.085;
 const THROW_S: f32 = 0.2;
+/// The camera's moves with fancy animations (a spring a hair past and back: about 1.5 % of the move), start to rest.
+pub const SETTLE_CAMERA_S: f64 = 0.55;
+const CAMERA_W: f32 = 17.0;
+const CAMERA_Z: f32 = 0.8;
+
+/// A hover highlight's fade (seconds).
+const LIT_S: f32 = 0.1;
+/// A pressed button: squashed this far, this fast; let go, a bouncier spring than the columns', settled in this long.
+const PRESSED: f32 = 0.9;
+const PRESS_DOWN_S: f32 = 0.07;
+const PRESS_W: f32 = 30.0;
+const PRESS_Z: f32 = 0.42;
+const PRESS_BACK_S: f64 = 0.35;
+
+/// A menu's rows dealt out: the last row starts this long after the first, each takes this long, rising this far.
+const DEAL_SPREAD_S: f64 = 0.09;
+const DEAL_S: f64 = 0.14;
+const DEAL_RISE_PT: f32 = 4.0;
+
+/// A list's rows: how long a row takes to glide to its new place, and how far above it a new row starts.
+const ROW_S: f64 = 0.24;
+const ROW_DROP_PT: f32 = 10.0;
+
+/// A label popping onto the view: from this size, on this spring, done in this long.
+const POP_FROM: f32 = 0.55;
+const POP_W: f32 = 26.0;
+const POP_Z: f32 = 0.5;
+const POP_S: f64 = 0.32;
+
 /// Past the window's edge, so a column's shadow goes too.
 const OFF_EDGE_PT: f32 = 24.0;
 
 static OFF: AtomicBool = AtomicBool::new(false);
+/// Preferences ▸ General ▸ Animations ▸ Fancy animations turned off.
+static PLAIN: AtomicBool = AtomicBool::new(false);
 
 /// Turns motion on or off for the whole app (the snapshot tool turns it off, so a shot is never mid-flight).
 pub fn set_enabled(on: bool) {
     OFF.store(!on, Ordering::Relaxed);
 }
 
-fn enabled() -> bool {
-    !OFF.load(Ordering::Relaxed) && !reduce_motion()
+/// Preferences ▸ General ▸ Fancy animations (set every frame from the settings).
+pub fn set_fancy(on: bool) {
+    PLAIN.store(!on, Ordering::Relaxed);
+}
+
+/// Whether things move: not in the snapshot tool (unless a script asks), not with the system's Reduce Motion, not with
+/// Fancy animations turned off.
+pub fn enabled() -> bool {
+    !OFF.load(Ordering::Relaxed) && !PLAIN.load(Ordering::Relaxed) && !reduce_motion()
 }
 
 /// The system's Reduce Motion (macOS, Windows' "Animation effects"), read once in the background at the start.
@@ -183,6 +221,26 @@ struct Motion {
     screen_ghost: Option<(f64, Vec<ClippedShape>, bool)>,
     /// Tooltip-order areas that are popups (asked for each frame by `include`).
     extra: HashSet<LayerId>,
+    /// Buttons squashing under a press or springing back: held, since when, from what scale.
+    presses: HashMap<Id, (bool, f64, f32)>,
+    /// Labels on the view (value pills, dimension boxes) by kind and their order this frame: how many drawn this
+    /// frame, and each one's last frame and when it appeared.
+    pop_counts: HashMap<Id, (u64, usize)>,
+    pop_seen: HashMap<Id, (u64, f64)>,
+    /// Rows of a list: where each is drawn, gliding from (y, since), where it belongs, and its last frame.
+    rows: HashMap<Id, Row>,
+    /// Lists: their last frame (a list that wasn't drawn last frame shows its rows where they are).
+    lists: HashMap<Id, u64>,
+}
+
+#[derive(Clone, Copy)]
+struct Row {
+    from: f32,
+    to: f32,
+    since: f64,
+    seen: u64,
+    /// New in a list already showing: it fades in and drops into place.
+    born: bool,
 }
 
 fn key() -> Id {
@@ -324,6 +382,25 @@ fn closing(t: f64, scale0: f32, card: Rect) -> (f32, f32) {
     ((swollen * (1.0 - bezier(LEAVE, c))).max(0.004), 1.0 - bezier(LIFT, c))
 }
 
+/// A menu's rows come in one after another, top to bottom, like cards dealt out: each a beat after the one above,
+/// fading in as it rises a few points into place. The card behind them (anything most of its height) isn't dealt.
+fn deal(s: &mut ClippedShape, card: Rect, t: f64) {
+    let r = s.shape.visual_bounding_rect();
+    if !r.is_finite() || r.height() > card.height() * 0.5 || card.height() < 1.0 {
+        return;
+    }
+    let down = ((r.center().y - card.top()) / card.height()).clamp(0.0, 1.0);
+    let u = ((t - f64::from(down) * DEAL_SPREAD_S) / DEAL_S) as f32;
+    if u >= 1.0 {
+        return;
+    }
+    let e = ease_out(u.max(0.0));
+    let clip = s.clip_rect;
+    s.transform(TSTransform::from_translation(vec2(0.0, DEAL_RISE_PT * (1.0 - e))));
+    s.clip_rect = clip;
+    fade(&mut s.shape, e);
+}
+
 /// A pixel, near enough, of whatever size the card lands at.
 fn seed(card: Rect) -> f32 {
     (2.0 / card.width().max(card.height()).max(1.0)).max(0.004)
@@ -444,6 +521,9 @@ pub fn finish(ctx: &Context) {
                         if veiled && is_veil(&s.shape, screen) {
                             fade(&mut s.shape, veil_alpha);
                         } else {
+                            if !veiled {
+                                deal(s, card, t);
+                            }
                             grow(s, origin, scale);
                             fade(&mut s.shape, alpha);
                         }
@@ -498,6 +578,16 @@ fn spring(x0: f32, t: f32) -> f32 {
     let wd = SPRING_W * (1.0 - SPRING_Z * SPRING_Z).sqrt();
     let decay = (-SPRING_Z * SPRING_W * t).exp();
     x0 * decay * ((wd * t).cos() + (SPRING_Z * SPRING_W / wd) * (wd * t).sin())
+}
+
+/// How far along a camera move is `t` seconds in (0 → 1, a little past 1 and back); exactly 1 once it's over.
+pub fn settle(t: f32) -> f32 {
+    if t >= SETTLE_CAMERA_S as f32 {
+        return 1.0;
+    }
+    let wd = CAMERA_W * (1.0 - CAMERA_Z * CAMERA_Z).sqrt();
+    let decay = (-CAMERA_Z * CAMERA_W * t).exp();
+    1.0 - decay * ((wd * t).cos() + (CAMERA_Z * CAMERA_W / wd) * (wd * t).sin())
 }
 
 /// Going out: a lean the wrong way, a beat, then thrown off the edge. (Where it is, whether it's gone.)
@@ -637,9 +727,258 @@ pub fn column_end(ui: &Ui, name: &str, begin: ShapeIdx) {
     });
 }
 
+/// How lit a hover highlight is (0 to 1): it brightens and dims over a tenth of a second instead of flicking.
+/// Paint the highlight whenever this is above 0, at this strength.
+pub fn lit(ctx: &Context, id: Id, on: bool) -> f32 {
+    if !enabled() {
+        return if on { 1.0 } else { 0.0 };
+    }
+    ctx.animate_bool_with_time(id.with("motion-lit"), on, LIT_S)
+}
+
+/// Something that comes and goes with a fade (the sketch grid): what to show now and how strongly. A new value
+/// fades in over `in_s`; once there's none, the last one fades out over `out_s`; one value swapped for another
+/// swaps at once.
+pub fn presence<T: Clone + PartialEq + Send + Sync + 'static>(
+    ctx: &Context,
+    name: &str,
+    value: Option<T>,
+    in_s: f64,
+    out_s: f64,
+) -> Option<(T, f32)> {
+    if !enabled() {
+        return value.map(|v| (v, 1.0));
+    }
+    let now = ctx.input(|i| i.time);
+    let id = key().with(("presence", name));
+    // (what's shown, since when, coming in)
+    let mut st: (Option<T>, f64, bool) = ctx.data(|d| d.get_temp(id)).unwrap_or((None, f64::NEG_INFINITY, false));
+    let out = match value {
+        Some(v) => {
+            if st.0.is_none() || !st.2 {
+                // Coming back while fading out picks up from as far as it had faded.
+                let left = if st.0.is_some() { 1.0 - ((now - st.1) / out_s).clamp(0.0, 1.0) } else { 0.0 };
+                st.1 = now - left * in_s;
+                st.2 = true;
+            }
+            st.0 = Some(v.clone());
+            Some((v, ease_out(((now - st.1) / in_s) as f32)))
+        }
+        None => {
+            if st.2 && st.0.is_some() {
+                let shown = ((now - st.1) / in_s).clamp(0.0, 1.0);
+                st.1 = now - (1.0 - shown) * out_s;
+                st.2 = false;
+            }
+            let u = (now - st.1) / out_s;
+            if u >= 1.0 {
+                st.0 = None;
+            }
+            st.0.clone().map(|v| (v, 1.0 - bezier(LIFT, u as f32)))
+        }
+    };
+    if out.as_ref().is_some_and(|(_, a)| *a < 1.0) {
+        ctx.request_repaint();
+    }
+    ctx.data_mut(|d| d.insert_temp(id, st));
+    out
+}
+
+/// Marks where a list's row starts.
+pub fn row_begin(ui: &Ui) -> ShapeIdx {
+    column_begin(ui)
+}
+
+/// Ends a list's row (`id` the same thing from frame to frame, `y` its top): a row whose place changed glides there,
+/// a new one fades in and drops into place, so a step added, undone or deleted moves its neighbours instead of
+/// making them jump. `y` is its place in the whole list (unscrolled), so scrolling never glides. Returns how far off
+/// its place it's drawn and how opaque, for anything of the row painted later.
+pub fn row_end(ui: &Ui, list: &str, id: Id, y: f32, begin: ShapeIdx) -> (f32, f32) {
+    let ctx = ui.ctx().clone();
+    if !enabled() {
+        return (0.0, 1.0);
+    }
+    let (offset, alpha) = row_place(&ctx, list, id, y);
+    if offset.abs() < 0.05 && alpha >= 0.999 {
+        return (0.0, 1.0);
+    }
+    let shift = TSTransform::from_translation(vec2(0.0, offset));
+    ctx.graphics_mut(|g| {
+        let list = g.entry(ui.layer_id());
+        for i in begin.0..list.next_idx().0 {
+            list.mutate_shape(ShapeIdx(i), |s| {
+                // The list's clip stays put: a row gliding past its edge is cut off there.
+                let clip = s.clip_rect;
+                s.transform(shift);
+                s.clip_rect = clip;
+                fade(&mut s.shape, alpha);
+            });
+        }
+    });
+    ctx.request_repaint();
+    (offset, alpha)
+}
+
+/// A row scrolled out of sight: kept track of, so it doesn't fade in as new when it scrolls back.
+pub fn row_seen(ctx: &Context, list: &str, id: Id, y: f32) {
+    if enabled() {
+        row_place(ctx, list, id, y);
+    }
+}
+
+fn row_place(ctx: &Context, list: &str, id: Id, y: f32) -> (f32, f32) {
+    let now = ctx.input(|i| i.time);
+    let pass = ctx.cumulative_pass_nr();
+    let list_id = key().with(("list", list));
+    let id = list_id.with(id);
+    with(ctx, |m| {
+        let listed_before = m.lists.insert(list_id, pass).is_some_and(|p| p + 1 >= pass);
+        let at = |r: &Row| r.from + (r.to - r.from) * bezier(ARRIVE, ((now - r.since) / ROW_S) as f32);
+        let r = match m.rows.get(&id).copied().filter(|r| r.seen + 1 >= pass) {
+            Some(mut r) => {
+                if (r.to - y).abs() > 0.5 {
+                    r = Row { from: at(&r), to: y, since: now, seen: pass, born: false };
+                }
+                r.seen = pass;
+                r
+            }
+            None if listed_before => Row { from: y - ROW_DROP_PT, to: y, since: now, seen: pass, born: true },
+            None => Row { from: y, to: y, since: now - ROW_S, seen: pass, born: false },
+        };
+        m.rows.insert(id, r);
+        if m.rows.len() > 1024 {
+            m.rows.retain(|_, r| r.seen + 2 >= pass);
+        }
+        let u = ((now - r.since) / ROW_S) as f32;
+        (at(&r) - y, if r.born { ease_out(u) } else { 1.0 })
+    })
+}
+
+/// Marks where a label on the view starts (a value pill, a dimension's box).
+pub fn pop_begin(painter: &egui::Painter) -> ShapeIdx {
+    painter.ctx().graphics_mut(|g| g.entry(painter.layer_id()).next_idx())
+}
+
+/// Ends a label on the view: one that wasn't there last frame pops in about `about`, from a little small, springing a
+/// hair past its size. Labels have no names, so they're told apart by `kind` and their order in the frame.
+pub fn pop_end(painter: &egui::Painter, kind: &str, begin: ShapeIdx, about: Pos2) {
+    let ctx = painter.ctx().clone();
+    if !enabled() {
+        return;
+    }
+    let now = ctx.input(|i| i.time);
+    let pass = ctx.cumulative_pass_nr();
+    let kind_id = key().with(("pop", kind));
+    let t = with(&ctx, |m| {
+        let c = m.pop_counts.entry(kind_id).or_insert((pass, 0));
+        if c.0 != pass {
+            *c = (pass, 0);
+        }
+        let slot = kind_id.with(c.1);
+        c.1 += 1;
+        let e = m.pop_seen.entry(slot).or_insert((0, now));
+        if e.0 + 1 < pass {
+            e.1 = now;
+        }
+        e.0 = pass;
+        let age = now - e.1;
+        if m.pop_seen.len() > 512 {
+            m.pop_seen.retain(|_, (seen, _)| *seen + 2 >= pass);
+        }
+        age
+    });
+    if t >= POP_S {
+        return;
+    }
+    let scale = 1.0 + (POP_FROM - 1.0) * press_spring((t) as f32, POP_W, POP_Z);
+    let alpha = ease_out((t / (POP_S * 0.35)) as f32);
+    ctx.graphics_mut(|g| {
+        let list = g.entry(painter.layer_id());
+        for i in begin.0..list.next_idx().0 {
+            list.mutate_shape(ShapeIdx(i), |s| {
+                grow(s, about, scale);
+                fade(&mut s.shape, alpha);
+            });
+        }
+    });
+    ctx.request_repaint();
+}
+
+/// A spring let go from 1 (rest at 0) after `t` seconds.
+fn press_spring(t: f32, w: f32, z: f32) -> f32 {
+    let wd = w * (1.0 - z * z).sqrt();
+    (-z * w * t).exp() * ((wd * t).cos() + (z * w / wd) * (wd * t).sin())
+}
+
+/// Marks where a pressable button's drawing starts.
+pub fn press_begin(ui: &Ui) -> ShapeIdx {
+    column_begin(ui)
+}
+
+/// Ends a button's drawing: while `held` it squashes a little toward `about` (its middle); let go, it springs back
+/// past its size and settles.
+pub fn press_end(ui: &Ui, id: Id, held: bool, about: Pos2, begin: ShapeIdx) {
+    let ctx = ui.ctx().clone();
+    let now = ctx.input(|i| i.time);
+    let id = id.with("motion-press");
+    let on = enabled();
+    let scale = with(&ctx, |m| {
+        let Some(&(was, since, from)) = m.presses.get(&id) else {
+            if held && on {
+                m.presses.insert(id, (true, now, 1.0));
+            }
+            return 1.0;
+        };
+        let at = press_scale(was, now - since, from);
+        if !on {
+            m.presses.remove(&id);
+            return 1.0;
+        }
+        if was != held {
+            m.presses.insert(id, (held, now, at));
+            return at;
+        }
+        if !held && now - since > PRESS_BACK_S {
+            m.presses.remove(&id);
+            return 1.0;
+        }
+        at
+    });
+    if (scale - 1.0).abs() < 1e-4 && !held {
+        return;
+    }
+    let layer = ui.layer_id();
+    ctx.graphics_mut(|g| {
+        let list = g.entry(layer);
+        for i in begin.0..list.next_idx().0 {
+            list.mutate_shape(ShapeIdx(i), |s| grow(s, about, scale));
+        }
+    });
+    ctx.request_repaint();
+}
+
+/// A button's scale: going down to [`PRESSED`] while held, springing back up to 1 (a little past) once let go.
+fn press_scale(held: bool, t: f64, from: f32) -> f32 {
+    let t = t as f32;
+    if held {
+        return from + (PRESSED - from) * ease_out(t / PRESS_DOWN_S);
+    }
+    1.0 + (from - 1.0) * press_spring(t, PRESS_W, PRESS_Z)
+}
+
 /// Marks where an in-line popup's drawing starts (one drawn on a shared layer, not in an area of its own).
 pub fn popup_begin(ui: &Ui) -> ShapeIdx {
     column_begin(ui)
+}
+
+/// A dialog drawn inside another popup's area (Navigation Presets over Preferences, an export sheet): it grows in and
+/// out on its own, as if it had an area of its own.
+pub fn nested(ui: &mut Ui, name: &str, shown: bool, draw: impl FnOnce(&mut Ui)) {
+    let begin = popup_begin(ui);
+    if shown {
+        draw(ui);
+    }
+    popup_end(ui, name, begin, shown);
 }
 
 /// Ends an in-line popup's drawing: `shown` says whether it was drawn this frame. It grows out of the spot that opened
@@ -652,7 +991,11 @@ pub fn popup_end(ui: &Ui, name: &str, begin: ShapeIdx, shown: bool) {
     let screen = ctx.content_rect();
     let id = key().with(("inline", name));
     let on = enabled();
-    let (mut pop, touch) = with(&ctx, |m| (m.inline.remove(&id), m.touch));
+    // An area showing for the first time grows as a whole (in `finish`): what's inside it doesn't grow again.
+    let (mut pop, touch, area_new) = with(&ctx, |m| {
+        let tracked = matches!(layer.order, Order::Middle | Order::Foreground) || m.extra.contains(&layer);
+        (m.inline.remove(&id), m.touch, tracked && !m.pops.contains_key(&layer))
+    });
     if shown {
         let end = ctx.graphics_mut(|g| g.entry(layer).next_idx());
         let shapes: Vec<ClippedShape> = ctx.graphics(|g| {
@@ -665,7 +1008,7 @@ pub fn popup_end(ui: &Ui, name: &str, begin: ShapeIdx, shown: bool) {
             _ => {
                 let recent = touch.filter(|(_, t)| now - t <= OPENED_BY_S + 0.05).map(|(p, _)| p);
                 Inline {
-                    born: if on { now } else { now - OPENED_S },
+                    born: if on && !area_new { now } else { now - OPENED_S },
                     origin: recent.map_or(card.center(), |p| card.clamp(p)),
                     card,
                     seen: pass,
@@ -685,6 +1028,12 @@ pub fn popup_end(ui: &Ui, name: &str, begin: ShapeIdx, shown: bool) {
                 let list = g.entry(layer);
                 for i in begin.0..end.0 {
                     list.mutate_shape(ShapeIdx(i), |s| {
+                        // A dialog's own dim only fades.
+                        if is_veil(&s.shape, screen) {
+                            fade(&mut s.shape, alpha);
+                            return;
+                        }
+                        deal(s, card, t);
                         grow(s, origin, scale);
                         fade(&mut s.shape, alpha);
                     });
@@ -707,7 +1056,9 @@ pub fn popup_end(ui: &Ui, name: &str, begin: ShapeIdx, shown: bool) {
                 let list = g.entry(layer);
                 for s in &p.shapes {
                     let mut s = s.clone();
-                    grow(&mut s, p.origin, scale);
+                    if !is_veil(&s.shape, screen) {
+                        grow(&mut s, p.origin, scale);
+                    }
                     fade(&mut s.shape, alpha);
                     list.add(s.clip_rect, s.shape);
                 }
@@ -860,6 +1211,23 @@ mod tests {
             let (gone, lift) = closing(CLOSED_S, 1.0, card);
             assert!(gone < 0.01 && lift < 0.01);
         }
+    }
+
+    #[test]
+    fn the_camera_runs_a_hair_past_and_settles() {
+        let peak = (0..=100).map(|i| settle(i as f32 / 200.0)).fold(0.0, f32::max);
+        assert!(peak > 1.005 && peak < 1.03, "peak {peak}");
+        let end = settle(SETTLE_CAMERA_S as f32 - 0.001);
+        assert!((end - 1.0).abs() < 0.004, "nearly there before the end: {end}");
+        assert!(settle(0.0).abs() < 1e-6 && settle(1.0) == 1.0);
+    }
+
+    #[test]
+    fn a_button_squashes_and_springs_back_past_its_size() {
+        assert!((press_scale(true, PRESS_DOWN_S as f64, 1.0) - PRESSED).abs() < 1e-3);
+        let peak = (0..=60).map(|i| press_scale(false, i as f64 / 200.0, PRESSED)).fold(0.0, f32::max);
+        assert!(peak > 1.01 && peak < 1.05, "springs past: {peak}");
+        assert!((press_scale(false, PRESS_BACK_S, PRESSED) - 1.0).abs() < 0.004);
     }
 
     #[test]

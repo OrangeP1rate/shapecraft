@@ -68,6 +68,8 @@ pub(crate) struct Anim {
     to: Camera,
     start: f64,
     duration: f64,
+    /// Fancy animations: it eases on a spring that runs a hair past and settles (`crate::motion::settle`).
+    settle: bool,
 }
 
 pub struct Toast {
@@ -269,6 +271,8 @@ pub struct Workspace {
     /// "Select Through This Point…": where its list opened and what's under the point; the entry hovered.
     pub(crate) through: Option<(Pos2, Vec<Pick>)>,
     pub(crate) menu_hover: Option<Pick>,
+    /// Fancy animations: the bodies Undo or Redo just changed, and when, so they flash and fade back.
+    pub(crate) undo_flash: Option<(Vec<ItemId>, f64)>,
     pub camera: Camera,
     /// The selection's box as last worked out, with what it was worked out for ([`Workspace::selection_bounds`]).
     pub(crate) selection_box: std::cell::Cell<camera::KeptBox>,
@@ -714,6 +718,7 @@ impl Workspace {
             cut_found: Default::default(),
             through: None,
             menu_hover: None,
+            undo_flash: None,
             view_opts: ViewOptions::default(),
             snap_opts: SnapOptions::default(),
             right_pop: None,
@@ -1084,6 +1089,13 @@ impl Workspace {
         if !self.toasts.is_empty() || self.notice.is_some() {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
+        if let Some((_, since)) = self.undo_flash {
+            if self.now - since < viewport::UNDO_FLASH_S {
+                ui.ctx().request_repaint();
+            } else {
+                self.undo_flash = None;
+            }
+        }
 
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, Tokens::window());
@@ -1249,23 +1261,16 @@ impl Workspace {
             // Modals sit above everything, the 3D view included, and take every click.
             egui::Area::new(ui.scope_id().with("modal-layer")).order(egui::Order::Foreground).fixed_pos(full.min).show(ui.ctx(), |ui| {
                 let _ = ui.allocate_rect(full, egui::Sense::click());
-                if self.drawing_prefs.is_some() {
-                    drawings::prefs_dialog(self, ui, full);
-                }
-                if self.export_choice.is_some() {
-                    drawings::export_dialog(self, ui, full);
-                }
-                if self.export.is_some() {
-                    export::dialog(self, ui, full);
-                }
-                if self.import_sheet.is_some() {
-                    import_project::dialog(self, ui, full);
-                }
-                if self.import_prefs.is_some() {
-                    import_prefs::dialog(self, ui, full);
-                }
-                importing::card(self, ui, full);
-                working::card(self, ui, full);
+                // Each grows in and out on its own, so one opened over another (Navigation Presets over Preferences)
+                // still moves (crate::motion::nested).
+                use crate::motion::nested;
+                nested(ui, "drawing-prefs", self.drawing_prefs.is_some(), |ui| drawings::prefs_dialog(self, ui, full));
+                nested(ui, "drawing-export", self.export_choice.is_some(), |ui| drawings::export_dialog(self, ui, full));
+                nested(ui, "export", self.export.is_some(), |ui| export::dialog(self, ui, full));
+                nested(ui, "import-sheet", self.import_sheet.is_some(), |ui| import_project::dialog(self, ui, full));
+                nested(ui, "import-prefs", self.import_prefs.is_some(), |ui| import_prefs::dialog(self, ui, full));
+                nested(ui, "importing", self.importing.is_some(), |ui| importing::card(self, ui, full));
+                nested(ui, "working", self.working.is_some(), |ui| working::card(self, ui, full));
                 prefs::modals(self, ui, full);
             });
         }

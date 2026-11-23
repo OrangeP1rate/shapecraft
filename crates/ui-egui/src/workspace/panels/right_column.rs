@@ -154,10 +154,11 @@ impl Workspace {
                 let r = cell(i);
                 let resp = ui.interact(r, ui.scope_id().with(("strip", i)), Sense::click());
                 let open = self.right_pop.is_some_and(|(p, ..)| p == *pop);
+                let lit = crate::motion::lit(ui.ctx(), resp.id, resp.hovered());
                 if open {
                     ui.painter().rect_filled(r.shrink(3.0), radius(7), Tokens::button_active());
-                } else if resp.hovered() {
-                    ui.painter().rect_filled(r.shrink(3.0), radius(7), Tokens::button_hover());
+                } else if lit > 0.0 {
+                    ui.painter().rect_filled(r.shrink(3.0), radius(7), Tokens::button_hover().gamma_multiply(lit));
                 }
                 if resp.clicked() {
                     self.right_pop = if open { None } else { Some((*pop, r.min, self.now)) };

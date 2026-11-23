@@ -71,6 +71,11 @@ pub fn current() -> &'static str {
     LANGUAGES.get(CURRENT.load(Ordering::Relaxed)).copied().unwrap_or("English")
 }
 
+/// [`tr`] for text that comes as a `String` or `&String` (a label picked at run time); the result is owned.
+pub fn tr_s(english: impl AsRef<str>) -> String {
+    tr(english.as_ref()).to_owned()
+}
+
 /// `english` in the current language (as it is when there's no translation).
 pub fn tr(english: &str) -> &str {
     let t = table(CURRENT.load(Ordering::Relaxed));

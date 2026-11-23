@@ -175,32 +175,59 @@ fn ring(s: &Session, f: &ThreadFace, r0: f64, r1: f64, a: f64, b: f64) -> Result
     Ok(s.kernel.revolve_polygon(&pts, f.axis, std::f64::consts::TAU)?)
 }
 
+/// The ways a coil is swept, tried in turn: path points a turn (16 is under a micron off the true helix at these radii),
+/// and where on the turn its seam lies (a part of a turn). The same thread every time, but the kernel's sweep and
+/// booleans trip over some sizes with one and not with another (#94).
+const ATTEMPTS: [(u32, f64); 6] = [(16, 0.0), (16, 0.37), (24, 0.13), (12, 0.71), (20, 0.55), (32, 0.83)];
+
+/// How far off its worked-out volume (as a part of the coil's) a thread may be and still count as right.
+const CLOSE: f64 = 0.01;
+
+/// The volume of the tooth (or groove) from `r0` to `r1` out, per mm of thread: a thread's section square to its axis
+/// has the same area all along, only turned.
+fn section(pr: &Profile, internal: bool, r0: f64, r1: f64) -> f64 {
+    // 2πr · w(r)/p with w linear in r: Simpson's rule is exact.
+    let g = |r: f64| std::f64::consts::TAU * r * pr.width_at(r, internal) / pr.pitch;
+    (r1 - r0) / 6.0 * (g(r0) + 4.0 * g((r0 + r1) / 2.0) + g(r1))
+}
+
 /// The tooth (a bolt) or the groove (a nut) swept along the helix over `a..b`, cut square at both ends.
-fn coil(s: &Session, f: &ThreadFace, pr: &Profile, left: bool, a: f64, b: f64) -> Result<Shape> {
+fn coil(s: &Session, f: &ThreadFace, pr: &Profile, left: bool, a: f64, b: f64, (per_turn, seam): (u32, f64)) -> Result<Shape> {
     let p = pr.pitch;
-    // Into the body a little (an overlap the union can't miss); the thread module checks it fits every size.
-    let rin = pr.minor - crate::thread::OVERLAP * p;
+    let rin = inner(pr);
     let rout = pr.major;
     // At the counting line (x) a tooth's middle sits on a whole number of pitches: the same for every face on
     // this axis line.
-    let start = ((a - p) / p).floor() * p;
+    let start = ((a - p) / p).floor() * p - p + seam * p;
     let turns = ((b + p - start) / p).ceil() + 1.0;
+    let turn = seam * std::f64::consts::TAU * if left { -1.0 } else { 1.0 };
+    let x = glam::DQuat::from_axis_angle(f.axis.dir, turn) * f.x;
+    let at = |r: f64, t: f64| f.axis.origin + x * r + f.axis.dir * t;
     let (wi, wo) = (pr.width_at(rin, f.internal) / 2.0, pr.width_at(rout, f.internal) / 2.0);
-    let corners = [f.at(rin, start - wi), f.at(rout, start - wo), f.at(rout, start + wo), f.at(rin, start + wi)];
-    let lines: Vec<PlanarCurve> = (0..4).map(|k| PlanarCurve::Line { a: corners[k], b: corners[(k + 1) % 4] }).collect();
-    let frame = PlaneFrame { origin: f.axis.origin, x: f.x, y: f.axis.dir };
-    let profile = s
-        .kernel
-        .planar_regions(frame, &lines)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| EngineError::NotAvailable("the thread's profile couldn't be made".into()))?;
+    let corners = [at(rin, start - wi), at(rout, start - wo), at(rout, start + wo), at(rin, start + wi)];
     let angle = turns * std::f64::consts::TAU * if left { -1.0 } else { 1.0 };
-    // 12 path points a turn: a few microns off the true helix at these radii, and half the surface of 24.
-    let swept = s.kernel.revolve_helix_with(&profile, f.axis, angle, turns * p, 12)?;
-    // A hair inside the extent: ends flush with the body's own end faces make the union fail on some sizes.
-    let bounds = ring(s, f, 0.0, rout + p, a + 1e-3, b - 1e-3)?;
+    let swept = match s.kernel.helix_coil(&corners, f.axis, angle, turns * p, per_turn) {
+        Ok(c) => c,
+        Err(_) => {
+            let lines: Vec<PlanarCurve> = (0..4).map(|k| PlanarCurve::Line { a: corners[k], b: corners[(k + 1) % 4] }).collect();
+            let frame = PlaneFrame { origin: f.axis.origin, x, y: f.axis.dir };
+            let profile = s
+                .kernel
+                .planar_regions(frame, &lines)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| EngineError::NotAvailable("the thread's profile couldn't be made".into()))?;
+            s.kernel.revolve_helix_with(&profile, f.axis, angle, turns * p, per_turn)?
+        }
+    };
+    let bounds = ring(s, f, 0.0, rout + p, a, b)?;
     Ok(s.kernel.boolean(BoolOp::Intersect, &swept, &bounds)?)
+}
+
+/// Where the tooth starts: into the body a little (an overlap the union can't miss); the thread module checks it fits
+/// every size.
+fn inner(pr: &Profile) -> f64 {
+    pr.minor - crate::thread::OVERLAP * pr.pitch
 }
 
 /// Threads one face of `shape` (worked out from where the face is, so it doesn't matter what its number is now).
@@ -217,23 +244,54 @@ pub fn thread_shape(s: &Session, shape: &Shape, f: &ThreadFace, spec: &ThreadSpe
     let past = (0.01 * f.radius).clamp(0.005, 0.05);
     // The wall goes to the thread's base: a bolt's roots, a nut's crests.
     let base = pr.minor;
-    let mut out = shape.clone();
-    if f.internal {
-        if f.radius > base {
-            out = s.kernel.boolean(BoolOp::Union, &out, &ring(s, f, base, f.radius + past, a, b)?)?;
-        } else {
-            out = s.kernel.boolean(BoolOp::Subtract, &out, &ring(s, f, (f.radius - past).max(0.0), base, a, b)?)?;
-        }
-        out = s.kernel.boolean(BoolOp::Subtract, &out, &coil(s, f, &pr, spec.left, a, b)?)?;
+    let grows = f.internal == (f.radius > base);
+    let rough = if grows {
+        let (r0, r1) = if f.internal { (base, f.radius + past) } else { ((f.radius - past).max(0.0), base) };
+        s.kernel.boolean(BoolOp::Union, shape, &ring(s, f, r0, r1, a, b)?)?
     } else {
-        if f.radius > base {
-            out = s.kernel.boolean(BoolOp::Subtract, &out, &ring(s, f, base, f.radius + past, a, b)?)?;
-        } else {
-            out = s.kernel.boolean(BoolOp::Union, &out, &ring(s, f, (f.radius - past).max(0.0), base, a, b)?)?;
+        let (r0, r1) = if f.internal { ((f.radius - past).max(0.0), base) } else { (base, f.radius + past) };
+        s.kernel.boolean(BoolOp::Subtract, shape, &ring(s, f, r0, r1, a, b)?)?
+    };
+    let before = s.kernel.mass_props(&rough)?.volume;
+    // A hair inside the extent: ends flush with the body's own end faces make the union fail on some sizes.
+    let (a, b) = (a + 1e-3, b - 1e-3);
+    let whole = section(&pr, f.internal, inner(&pr), pr.major) * (b - a);
+    // What it adds to a bolt (or takes out of a nut) whose wall is all there.
+    let expected = section(&pr, f.internal, base, pr.major) * (b - a);
+    let (mut best, mut last): (Option<(f64, Shape)>, _) = (None, None);
+    for way in ATTEMPTS {
+        let made = coil(s, f, &pr, spec.left, a, b, way).and_then(|c| {
+            let v = s.kernel.mass_props(&c)?.volume;
+            if (v - whole).abs() > whole * CLOSE {
+                return Err(EngineError::NotAvailable("the thread couldn't be swept".into()));
+            }
+            let op = if f.internal { BoolOp::Subtract } else { BoolOp::Union };
+            let out = s.kernel.boolean(op, &rough, &c)?;
+            let change = (s.kernel.mass_props(&out)?.volume - before) * if f.internal { -1.0 } else { 1.0 };
+            Ok((change, out))
+        });
+        match made {
+            // More than the whole tooth, or the other way: the kernel lost part of the body.
+            Ok((change, _)) if !(-whole * CLOSE..=whole * (1.0 + CLOSE)).contains(&change) => {}
+            Ok((change, out)) => {
+                let off = (change - expected).abs() / whole;
+                // Two ways that come out the same are right too: a wall with holes across it, or walls close by.
+                let agree = best.as_ref().is_some_and(|(o, _)| (off - o).abs() <= CLOSE);
+                if best.as_ref().is_none_or(|(o, _)| off < *o) {
+                    best = Some((off, out));
+                }
+                if off <= CLOSE || agree {
+                    break;
+                }
+            }
+            Err(e) => last = Some(e),
         }
-        out = s.kernel.boolean(BoolOp::Union, &out, &coil(s, f, &pr, spec.left, a, b)?)?;
     }
-    Ok(out)
+    match (best, last) {
+        (Some((_, out)), _) => Ok(out),
+        (None, Some(e)) => Err(e),
+        (None, None) => Err(EngineError::NotAvailable("the thread couldn't be built on this face".into())),
+    }
 }
 
 pub(super) fn thread(s: &mut Session, p: &Params) -> Result<Value> {

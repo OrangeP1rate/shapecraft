@@ -436,6 +436,18 @@ impl Kernel for OcctKernel {
         shape_out("revolve", |out| unsafe { ffi::sk_pipe_through(f, pts.as_ptr(), tangents.as_ptr(), path.len(), out) })
     }
 
+    fn helix_coil(&self, corners: &[DVec3], axis: Axis, angle: f64, height: f64, per_turn: u32) -> Result<Shape> {
+        let rails = shapecraft_kernel::helix::rails(corners, axis, angle, height, per_turn)?;
+        let n = rails.at.len();
+        let flat = |v: &[DVec3]| v.iter().flat_map(|p| p.to_array()).collect::<Vec<f64>>();
+        let (pts, derivs) = (flat(&rails.points), flat(&rails.derivatives));
+        let piece = per_turn.clamp(6, 96) as usize;
+        // SAFETY: the buffers hold 3 doubles per rail and point (one for `at`), and outlive the call.
+        shape_out("coil", |out| unsafe {
+            ffi::sk_ruled_rails(pts.as_ptr(), derivs.as_ptr(), rails.at.as_ptr(), corners.len(), n, piece, out)
+        })
+    }
+
     fn shell(&self, shape: &Shape, open_faces: &[u32], thickness: f64) -> Result<Shape> {
         finite("shell", &[thickness])?;
         if thickness <= 0.0 {

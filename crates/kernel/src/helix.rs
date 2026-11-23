@@ -75,6 +75,40 @@ pub fn path_with(mesh: &Mesh, axis: Axis, angle: f64, height: f64, per_turn: u32
         .collect())
 }
 
+/// The helices a flat polygon's corners run along, all through the same angles: `points` and their `derivatives` by the
+/// angle, rail after rail, and `at` (the angles turned).
+pub struct Rails {
+    pub points: Vec<DVec3>,
+    pub derivatives: Vec<DVec3>,
+    pub at: Vec<f64>,
+}
+
+/// [`Rails`] for `corners` turned `angle` radians around `axis` while they rise `height` along it.
+pub fn rails(corners: &[DVec3], axis: Axis, angle: f64, height: f64, per_turn: u32) -> Result<Rails> {
+    if !angle.is_finite() || !height.is_finite() || angle.abs() < 1e-9 || corners.len() < 3 {
+        return Err(KernelError::InvalidInput("a helical coil needs a polygon, an angle and a height".into()));
+    }
+    let d = axis.dir.try_normalize().ok_or_else(|| KernelError::InvalidInput("the axis has no direction".into()))?;
+    let turns = angle.abs() / std::f64::consts::TAU;
+    let n = ((turns * f64::from(per_turn.clamp(6, 96))).ceil() as usize + 1).clamp(9, 20_000);
+    let at: Vec<f64> = (0..n).map(|k| angle.abs() * k as f64 / (n - 1) as f64).collect();
+    let way = angle.signum();
+    let (mut points, mut derivatives) = (Vec::with_capacity(n * corners.len()), Vec::with_capacity(n * corners.len()));
+    for c in corners {
+        let foot = axis.origin + d * (*c - axis.origin).dot(d);
+        let x = *c - foot;
+        if x.length() < 1e-6 {
+            return Err(refuse("a helical revolve needs the profile clear of the axis"));
+        }
+        let y = d.cross(x) * way;
+        for &th in &at {
+            points.push(foot + x * th.cos() + y * th.sin() + d * (height * th / angle.abs()));
+            derivatives.push(y * th.cos() - x * th.sin() + d * (height / angle.abs()));
+        }
+    }
+    Ok(Rails { points, derivatives, at })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

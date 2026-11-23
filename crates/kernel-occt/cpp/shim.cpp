@@ -41,6 +41,11 @@
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GeomAPI_Interpolate.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <TColgp_Array2OfPnt.hxx>
+#include <TColStd_HArray1OfReal.hxx>
+#include <TColStd_Array1OfInteger.hxx>
 #include <TColgp_HArray1OfPnt.hxx>
 #include <TColgp_Array1OfPnt.hxx>
 #include <TColStd_Array1OfReal.hxx>
@@ -137,6 +142,7 @@
 #include <TCollection_ExtendedString.hxx>
 #include <STEPControl_Writer.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
+#include <Geom2d_Curve.hxx>
 #include <Geom_Surface.hxx>
 #include <XSControl_WorkSession.hxx>
 #include <DESTEP_Parameters.hxx>
@@ -204,6 +210,79 @@ int put_checked(SkShape** out, const TopoDS_Shape& result, const TopoDS_Shape& b
   if (!(v > 1e-9) || v > volume_of(before) * (may_grow ? 1.5 : 1.0 + 1e-9)) return fail(what);
   *out = new SkShape{result};
   return 0;
+}
+
+// The result of a boolean with the faces that ended up on the same surface merged, so no seams show where parts met.
+// Merging can throw on a result that is fine (threads of some sizes, #94): it then stays as cut.
+template <class Op>
+TopoDS_Shape merged_result(Op& op) {
+  const TopoDS_Shape plain = op.Shape();
+  try {
+    op.SimplifyResult();
+    return op.Shape();
+  } catch (const Standard_Failure&) {
+    return plain;
+  }
+}
+
+// Two straight-walled free-form faces that run on into each other over a straight edge, as a thread's walls do once a
+// turn: nothing to see there, like a seam. Both surfaces end there, so a line drawn on one wall isn't taken for this.
+bool runs_on(const TopoDS_Edge& edge, const TopTools_ListOfShape& faces) {
+  if (faces.Extent() != 2) return false;
+  struct Side {
+    Handle(Geom_Surface) surface;
+    Handle(Geom2d_Curve) curve;
+    double from = 0.0, to = 0.0;
+  } side[2];
+  int k = 0;
+  for (TopTools_ListIteratorOfListOfShape it(faces); it.More(); it.Next(), ++k) {
+    const TopoDS_Face& f = TopoDS::Face(it.Value());
+    Side& d = side[k];
+    // Moved bodies' faces carry their place in a location: this gives the surface where it is.
+    d.surface = BRep_Tool::Surface(f);
+    Handle(Geom_BSplineSurface) b = Handle(Geom_BSplineSurface)::DownCast(d.surface);
+    if (b.IsNull() || (b->UDegree() != 1 && b->VDegree() != 1)) return false;
+    d.curve = BRep_Tool::CurveOnSurface(edge, f, d.from, d.to);
+    if (d.curve.IsNull()) return false;
+  }
+  BRepAdaptor_Curve line(edge);
+  const gp_Pnt first = line.Value(line.FirstParameter()), last = line.Value(line.LastParameter());
+  const double length = first.Distance(last);
+  if (length < 1e-9) return false;
+  const gp_Pnt mid = line.Value((line.FirstParameter() + line.LastParameter()) / 2.0);
+  if (gp_Lin(first, gp_Dir(gp_Vec(first, last))).Distance(mid) > length * 1e-3) return false;
+  const gp_Vec along = gp_Vec(first, last) / length;
+  for (double t : {0.1, 0.5, 0.9}) {
+    gp_Vec normal[2];
+    double bend[2];
+    for (int n = 0; n < 2; ++n) {
+      const gp_Pnt2d uv = side[n].curve->Value(side[n].from + (side[n].to - side[n].from) * t);
+      const Handle(Geom_BSplineSurface) b = Handle(Geom_BSplineSurface)::DownCast(side[n].surface);
+      double u0, u1, v0, v1;
+      b->Bounds(u0, u1, v0, v1);
+      // Along the walls: the direction that isn't straight.
+      const bool by_u = b->VDegree() == 1;
+      const double here = by_u ? uv.X() : uv.Y(), low = by_u ? u0 : v0, high = by_u ? u1 : v1;
+      if (std::min(std::abs(here - low), std::abs(here - high)) > (high - low) * 1e-5) return false;
+      gp_Pnt p;
+      gp_Vec u, v, uu, vv, w;
+      side[n].surface->D2(uv.X(), uv.Y(), p, u, v, uu, vv, w);
+      normal[n] = u.Crossed(v);
+      const double size = normal[n].Magnitude();
+      if (size < 1e-12) return false;
+      normal[n] /= size;
+      // Which way is across the edge, and how the surface bends that way.
+      const gp_Vec across = normal[n].Crossed(along);
+      const double e = u * u, f = u * v, g = v * v, det = e * g - f * f;
+      const double du = (g * (across * u) - f * (across * v)) / det, dv = (e * (across * v) - f * (across * u)) / det;
+      bend[n] = (uu * normal[n]) * du * du + 2.0 * (w * normal[n]) * du * dv + (vv * normal[n]) * dv * dv;
+    }
+    const double dot = normal[0] * normal[1];
+    if (std::abs(dot) < 1.0 - 1e-6) return false;
+    if (dot < 0.0) bend[1] = -bend[1];
+    if (std::abs(bend[0] - bend[1]) > 0.05 * std::max(std::abs(bend[0]), std::abs(bend[1])) + 1e-6) return false;
+  }
+  return true;
 }
 
 int put(SkShape** out, const TopoDS_Shape& s) {
@@ -346,25 +425,19 @@ int sk_boolean(int op, const SkShape* a, const SkShape* b, SkShape** out) {
       BRepAlgoAPI_Fuse f(a->shape, b->shape);
       ok = f.IsDone() && !f.HasErrors();
       if (ok) {
-        // Merge faces that ended up on the same surface, so no seams show where parts met.
-        f.SimplifyResult();
-        r = f.Shape();
+        r = merged_result(f);
       }
     } else if (op == 1) {
       BRepAlgoAPI_Cut c(a->shape, b->shape);
       ok = c.IsDone() && !c.HasErrors();
       if (ok) {
-        // Merge faces that ended up on the same surface, so no seams show where parts met.
-        c.SimplifyResult();
-        r = c.Shape();
+        r = merged_result(c);
       }
     } else if (op == 2) {
       BRepAlgoAPI_Common c(a->shape, b->shape);
       ok = c.IsDone() && !c.HasErrors();
       if (ok) {
-        // Merge faces that ended up on the same surface, so no seams show where parts met.
-        c.SimplifyResult();
-        r = c.Shape();
+        r = merged_result(c);
       }
     } else {
       return fail("unknown boolean op");
@@ -532,7 +605,7 @@ int sk_tessellate(const SkShape* s, double deflection, double angle, int fresh, 
         bool seam = false;
         for (TopTools_ListIteratorOfListOfShape it(edge_to_faces.FindFromKey(edge)); it.More(); it.Next())
           seam |= BRep_Tool::IsClosed(edge, TopoDS::Face(it.Value()));
-        if (seam) continue;
+        if (seam || runs_on(edge, edge_to_faces.FindFromKey(edge))) continue;
         int k = 0;
         for (TopTools_ListIteratorOfListOfShape it(edge_to_faces.FindFromKey(edge)); it.More() && k < 2; it.Next()) {
           int fi = face_map.FindIndex(it.Value());
@@ -1065,13 +1138,11 @@ int sk_extrude_face(const SkShape* s, uint32_t face, double distance, SkShape** 
     if (distance > 0) {
       BRepAlgoAPI_Fuse op(s->shape, prism.Shape());
       if (!op.IsDone() || op.HasErrors()) return fail("extrude union failed");
-      op.SimplifyResult();
-      r = op.Shape();
+      r = merged_result(op);
     } else {
       BRepAlgoAPI_Cut op(s->shape, prism.Shape());
       if (!op.IsDone() || op.HasErrors()) return fail("extrude cut failed");
-      op.SimplifyResult();
-      r = op.Shape();
+      r = merged_result(op);
     }
     return put(out, r);
   });
@@ -1516,6 +1587,84 @@ int sk_prism(const SkShape* face, double dx, double dy, double dz, SkShape** out
     mk.Build();
     if (!mk.IsDone()) return fail("extrude failed");
     return put(out, mk.Shape());
+  });
+}
+
+// A solid between `rails` curves (a closed ring of them), each through `n` points at the parameters `at` with the given
+// derivatives there: straight (ruled) walls from each curve to the next, flat ends. The walls are cut at every
+// `piece` points (0: whole), where they stay smooth: many small surfaces, which booleans handle far better than one. A plain OCCT verb: the curves are worked out in Rust.
+int sk_ruled_rails(const double* pts, const double* derivs, const double* at, size_t rails, size_t n, size_t piece,
+                   SkShape** out) {
+  return guard([&] {
+    if (rails < 3 || rails > 64 || n < 2 || n > 100000) return fail("the rails don't fit");
+    BRepBuilderAPI_Sewing sew(1e-6);
+    const size_t step = piece == 0 ? n - 1 : piece;
+    for (size_t from = 0; from + 1 < n; from += step) {
+      const size_t to = std::min(from + step, n - 1);
+      const int m = int(to - from + 1);
+      std::vector<Handle(Geom_BSplineCurve)> curves;
+      for (size_t r = 0; r < rails; ++r) {
+        Handle(TColgp_HArray1OfPnt) p = new TColgp_HArray1OfPnt(1, m);
+        Handle(TColStd_HArray1OfReal) u = new TColStd_HArray1OfReal(1, m);
+        TColgp_Array1OfVec t(1, m);
+        Handle(TColStd_HArray1OfBoolean) use = new TColStd_HArray1OfBoolean(1, m);
+        for (int k = 0; k < m; ++k) {
+          const double* q = pts + 3 * (r * n + from + size_t(k));
+          const double* d = derivs + 3 * (r * n + from + size_t(k));
+          p->SetValue(k + 1, gp_Pnt(q[0], q[1], q[2]));
+          t.SetValue(k + 1, gp_Vec(d[0], d[1], d[2]));
+          use->SetValue(k + 1, Standard_True);
+          u->SetValue(k + 1, at[from + size_t(k)]);
+        }
+        GeomAPI_Interpolate interp(p, u, Standard_False, 1e-9);
+        interp.Load(t, use, Standard_False);
+        interp.Perform();
+        if (!interp.IsDone()) return fail("the path couldn't be made");
+        curves.push_back(interp.Curve());
+      }
+      for (size_t r = 0; r < rails; ++r) {
+        const Handle(Geom_BSplineCurve)& c0 = curves[r];
+        const Handle(Geom_BSplineCurve)& c1 = curves[(r + 1) % rails];
+        if (c0->NbPoles() != c1->NbPoles() || c0->NbKnots() != c1->NbKnots()) return fail("the rails don't match");
+        TColgp_Array2OfPnt poles(1, c0->NbPoles(), 1, 2);
+        for (int k = 1; k <= c0->NbPoles(); ++k) {
+          poles.SetValue(k, 1, c0->Pole(k));
+          poles.SetValue(k, 2, c1->Pole(k));
+        }
+        TColStd_Array1OfReal uk(1, c0->NbKnots()), vk(1, 2);
+        TColStd_Array1OfInteger um(1, c0->NbKnots()), vm(1, 2);
+        c0->Knots(uk);
+        c0->Multiplicities(um);
+        vk.SetValue(1, 0.0);
+        vk.SetValue(2, 1.0);
+        vm.SetValue(1, 2);
+        vm.SetValue(2, 2);
+        Handle(Geom_BSplineSurface) wall = new Geom_BSplineSurface(poles, uk, vk, um, vm, c0->Degree(), 1);
+        BRepBuilderAPI_MakeFace f(wall, 1e-7);
+        if (!f.IsDone()) return fail("a wall couldn't be made");
+        sew.Add(f.Face());
+      }
+    }
+    for (size_t k : {size_t(0), n - 1}) {
+      BRepBuilderAPI_MakePolygon poly;
+      for (size_t r = 0; r < rails; ++r) {
+        const double* q = pts + 3 * (r * n + k);
+        poly.Add(gp_Pnt(q[0], q[1], q[2]));
+      }
+      poly.Close();
+      if (!poly.IsDone()) return fail("an end couldn't be made");
+      BRepBuilderAPI_MakeFace f(poly.Wire(), Standard_True);
+      if (!f.IsDone()) return fail("an end couldn't be made");
+      sew.Add(f.Face());
+    }
+    sew.Perform();
+    TopExp_Explorer shell(sew.SewedShape(), TopAbs_SHELL);
+    if (!shell.More()) return fail("the walls don't join");
+    TopoDS_Solid solid = BRepBuilderAPI_MakeSolid(TopoDS::Shell(shell.Current()));
+    if (!BRepLib::OrientClosedSolid(solid)) return fail("the walls don't close");
+    BRepCheck_Analyzer check(solid);
+    if (!check.IsValid()) return fail("the walls made an invalid solid");
+    return put(out, solid);
   });
 }
 
@@ -3257,13 +3406,11 @@ int sk_wrap_emboss(const SkShape* body, int64_t face, const SkShape* const* regi
         if (depth > 0) {
           BRepAlgoAPI_Fuse op(result, solid);
           if (!op.IsDone() || op.HasErrors()) return fail("the emboss couldn't join the body");
-          op.SimplifyResult();
-          result = op.Shape();
+          result = merged_result(op);
         } else {
           BRepAlgoAPI_Cut op(result, solid);
           if (!op.IsDone() || op.HasErrors()) return fail("the engraving couldn't cut the body");
-          op.SimplifyResult();
-          result = op.Shape();
+          result = merged_result(op);
         }
       }
     }

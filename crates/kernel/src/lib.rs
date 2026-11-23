@@ -502,6 +502,14 @@ pub trait Kernel: Send + Sync {
         self.revolve_helix(face, axis, angle, height)
     }
 
+    /// A flat polygon (`corners`, in a plane through `axis`) carried along a helix around it, with straight walls between
+    /// the corners' helices: exact, and lighter for a kernel's booleans than a swept face. Each wall is
+    /// cut once a turn.
+    fn helix_coil(&self, corners: &[glam::DVec3], axis: Axis, angle: f64, height: f64, per_turn: u32) -> Result<Shape> {
+        let _ = (corners, axis, angle, height, per_turn);
+        Err(KernelError::InvalidInput("this kernel can't make helical coils".into()))
+    }
+
     /// Hollows a solid to `thickness` (inwards), leaving `open_faces` open.
     fn shell(&self, shape: &Shape, open_faces: &[u32], thickness: f64) -> Result<Shape>;
 

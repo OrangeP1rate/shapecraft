@@ -178,3 +178,47 @@ fn bigger_and_smaller_sizes_and_a_full_custom_length() {
         assert!((out - major / 2.0).abs() < 0.2, "{size} {extent}: crests at {out}");
     }
 }
+
+/// Everyday sizes the kernel's own pipe sweep made wrong, leaky or not at all (#94): each now has the volume worked out
+/// from the profile, and a mesh without a gap.
+#[test]
+fn everyday_sizes_are_whole() {
+    for (size, d, h, z, nut) in [
+        ("M6", 6.0, 10.0, 0.0, false),
+        ("M8", 8.0, 12.0, 0.0, false),
+        ("M8", 8.0, 20.0, 1.37, false),
+        ("M4", 4.0, 5.0, 1.37, false),
+        ("M4.5", 4.2, 10.0, 1.37, true),
+    ] {
+        let mut s = session();
+        let body = if nut { plate(&mut s, 0.0, z, h, d) } else { cylinder(&mut s, 0.0, z, d, h) };
+        let (face, f) = round_faces(&s, body)[0];
+        let r = s.execute("thread", &json!({"body": body.0, "faces": [face], "size": size}));
+        assert!(r.is_ok(), "{size} nut {nut}: {r:?}");
+        let pr =
+            crate::thread::profile(crate::thread::Standard::Iso, d_of(size), r.unwrap().value["pitch"].as_f64().unwrap(), f.internal, 0.0);
+        // The turned-down wall and the tooth on it (or the groove in it), over the whole length.
+        let steps = 2000;
+        let dr = (pr.major - pr.minor) / f64::from(steps);
+        let tooth: f64 = (0..steps)
+            .map(|k| pr.minor + dr * (f64::from(k) + 0.5))
+            .map(|r| std::f64::consts::TAU * r * pr.width_at(r, nut) / pr.pitch * dr)
+            .sum();
+        let round = (std::f64::consts::PI * pr.minor * pr.minor + tooth) * h;
+        let whole = if nut { 24.0 * 24.0 * h - round } else { round };
+        let b = s.doc.body(body).unwrap();
+        let exact = s.kernel.mass_props(&b.shape).unwrap().volume;
+        assert!((exact - whole).abs() < round * 0.005, "{size} nut {nut}: {exact} and not {whole}");
+        let mesh = crate::cmd::model::facets_of(&s, &b.shape).unwrap();
+        assert!(mesh.is_closed(), "{size} nut {nut}: gaps in the mesh");
+        assert!((s.kernel.mass_props_mesh(&b.shape).unwrap().volume - exact).abs() < round * 0.02, "{size} nut {nut}");
+        // Once a turn the walls run on into the next piece: no edge is drawn there (a short straight edge up the wall; the plate's
+        // corners are longer).
+        let seams = b.mesh.edges.iter().filter(|e| e.len() == 2 && (0.05..2.0).contains(&(e[0][2] - e[1][2]).abs())).count();
+        assert_eq!(seams, 0, "{size} nut {nut}");
+    }
+}
+
+fn d_of(size: &str) -> f64 {
+    crate::thread::Standard::Iso.size(size).unwrap().major
+}

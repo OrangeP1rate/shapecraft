@@ -3,8 +3,12 @@
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
 ## 0.12.7-alpha
-**Slot and Extend, and Trim on every curve.**
+**3MF files open, threads work in every size, and there's Slot and Extend.**
 ### New
+- **3MF import.** Every object on the plate comes in as a mesh body where it was placed, in a folder named after the
+  file, with its color. Files from Bambu Studio and OrcaSlicer bring their part names and filament colors along, and
+  their modifier and negative parts stay out. The README said we could already do this. Now it's true. Thanks
+  [@movh](https://github.com/movh) (#93).
 - **Slot** (Sketch ▸ Slot): click the two end centers, or the middle and one end, then pull out the radius. Type the length
   and the radius and they stay as dimensions. It's held together, so the sides stay tangent and the ends round.
 - **Extend** (Sketch ▸ Extend): click a line or an arc near an end and it grows to the next curve in its way; click again
@@ -16,12 +20,21 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
   follow Preferences ▸ Language (Slovak is complete; the other languages have the new text in English until someone
   translates it). Thanks [@Hardo12](https://github.com/Hardo12) (#23).
 ### Changed
+- **Return fixes a typed size and goes on to the next.** Type a slot's length or a rectangle's width and Return: it's
+  held while you aim and size the rest. Return once more finishes.
+- **One undo takes a drawn shape together with the sizes typed for it**, and the drawing tool stays in your hand.
 - **Failures say what's wrong in plain words** ("The walls don't fit at this thickness. Try 9.9 mm.") instead of the
   kernel's own.
 - Trim and Extend show the curves alone, without fills and points in the way.
 - Construction curves are drawn dash and dot, round circles and arcs too. They could look solid before.
 - A typed arc radius reads "R 2 mm" at the arc, not a diameter across it.
 ### Fixed
+- **Threads come out right.** Some everyday sizes failed (an M6 × 10 bolt), lost part of the body or had small gaps
+  in their mesh. The thread is now built directly and checked against its exact volume, in about half the time.
+  Thanks [@mhdthoriq14](https://github.com/mhdthoriq14) (#94).
+- **Union, Subtract and Intersect no longer fail when only merging the result's faces did.** You get the result, with
+  its faces as they were cut.
+- A rectangle's width fixed with Tab stays as a dimension when you click the corner.
 - **Low resolution exports are low resolution.** They used to write the same triangles as High.
 
 ## 0.12.6-alpha

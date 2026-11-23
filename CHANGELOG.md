@@ -12,6 +12,9 @@ How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest fi
 - **Trim cuts splines and ellipses.** What's left is a control-point spline on the same curve.
 - **Export ▸ Resolution ▸ Custom**: type how far the triangles may be off the real surface (STL, 3MF, OBJ, GLB and the
   other mesh formats).
+- **The whole interface can be translated**: menus, the projects screen, Preferences, hints, dialogs, export and drawings
+  follow Preferences ▸ Language (Slovak is complete; the other languages have the new text in English until someone
+  translates it). Thanks [@Hardo12](https://github.com/Hardo12) (#23).
 ### Changed
 - **Failures say what's wrong in plain words** ("The walls don't fit at this thickness. Try 9.9 mm.") instead of the
   kernel's own.

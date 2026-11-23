@@ -15,6 +15,7 @@
   <a href="https://jackharvest.com/shapecraft">🌐 Website</a> ·
   <a href="https://github.com/jackharvest/shapecraft/issues/new/choose">🐛 Report an issue</a> ·
   <a href="https://discord.gg/qHW22aC8Rn">💬 Discord</a> ·
+  <a href="https://www.reddit.com/r/ShapeCraft/">👽 r/ShapeCraft</a> ·
   <a href="https://www.buymeacoffee.com/jackharvest">☕ Prove my wife wrong</a>
 </p>
 

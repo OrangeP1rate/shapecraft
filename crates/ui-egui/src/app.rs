@@ -2741,6 +2741,10 @@ impl eframe::App for ShapeCraftApp {
         if let Some(url) = crate::landing::take_tablet_link() {
             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
         }
+        // Last: the projects screen and a project dissolve into each other, and popups that appeared or went away
+        // this frame grow out of / shrink into their point.
+        crate::motion::screen(ui.ctx(), u64::from(self.ws.is_some()), self.ws.is_some());
+        crate::motion::finish(ui.ctx());
     }
 
     fn on_exit(&mut self) {

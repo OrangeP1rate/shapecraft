@@ -9,16 +9,9 @@ use super::tools::{self, Tool};
 use super::{Workspace, area, shortcuts};
 
 impl Workspace {
-    pub(super) fn keyboard(&mut self, ui: &mut egui::Ui) {
-        // Tab while typing a value goes to the tool's next field (a rectangle's height), not to egui's focus
-        // traversal, which would hand the keyboard to some text field and swallow the rest of the value.
-        if self.numeric.is_some()
-            && ui.input(|i| i.key_pressed(egui::Key::Tab))
-            && let Some(id) = ui.memory(|m| m.focused())
-        {
-            ui.memory_mut(|m| m.surrender_focus(id));
-        }
-        if self.keys_blocked
+    /// Whether a popup or window that takes the keyboard is open.
+    pub(super) fn popup_takes_keys(&self) -> bool {
+        self.keys_blocked
             || self.importing.is_some()
             || self.working.is_some()
             || self.search.is_some()
@@ -30,8 +23,20 @@ impl Workspace {
             || self.nav_presets.is_some()
             || self.help_open
             || self.badge_menu.is_some()
-            || ui.ctx().egui_wants_keyboard_input()
+    }
+
+    pub(super) fn keyboard(&mut self, ui: &mut egui::Ui) {
+        // Tab while typing a value goes to the tool's next field (a rectangle's height), not to egui's focus
+        // traversal, which would hand the keyboard to some text field and swallow the rest of the value.
+        if self.numeric.is_some()
+            && ui.input(|i| i.key_pressed(egui::Key::Tab))
+            && let Some(id) = ui.memory(|m| m.focused())
         {
+            ui.memory_mut(|m| m.surrender_focus(id));
+        }
+        // (A popup open when the frame began had this frame's keys, even if one of them just closed it: the Escape
+        // that closes Search doesn't also leave the sketch.)
+        if self.popup_had_keys || self.popup_takes_keys() || ui.ctx().egui_wants_keyboard_input() {
             if let Some(t) = self.clip_out.take() {
                 ui.ctx().copy_text(t);
             }

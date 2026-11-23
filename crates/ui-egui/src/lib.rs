@@ -17,6 +17,7 @@ pub mod i18n;
 pub mod icons;
 mod landing;
 pub mod menubar;
+pub mod motion;
 pub(crate) mod onboarding;
 pub(crate) mod plugins;
 pub mod report;

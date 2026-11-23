@@ -364,7 +364,9 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
         }
     }
 
-    // Flyout from a category button.
+    // Flyout from a category button (it grows out of the button, crate::motion).
+    let flyout_begin = crate::motion::popup_begin(ui);
+    let flyout_shown = ws.flyout.is_some();
     if let Some((cat, at)) = ws.flyout {
         // A second toolbar column (and a third for a cascade), as observed; kept inside the viewport.
         let vp = ws.viewport_rect;
@@ -375,6 +377,7 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
         let defs: Vec<ToolDef> = if cat == toolbar::Category::Overflow { ws.overflow.clone() } else { toolbar::flyout(cat).to_vec() };
         let defs = &defs[..];
         let top = column(defs, at);
+        let mut sub_begin = None;
         let active: Vec<bool> = defs.iter().map(|d| is_active(ws, d)).collect();
         let mut hit = Rect::from_min_size(top, vec2(Tokens::tool_button() + 290.0, toolbar::group_height(defs.len())));
         if let Some(i) = toolbar::group(ui, top, defs, &active, ws.flyout_sub.is_none(), "flyout") {
@@ -387,6 +390,7 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
                 ws.act(d.action, d.label);
             }
         } else if let Some((sub, sat)) = ws.flyout_sub {
+            sub_begin = Some(crate::motion::popup_begin(ui));
             let sdefs = toolbar::flyout(sub);
             let stop = column(sdefs, sat);
             hit = hit.union(Rect::from_min_size(stop, vec2(Tokens::tool_button() + 330.0, toolbar::group_height(sdefs.len()))));
@@ -396,6 +400,8 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
                 ws.act(d.action, d.label);
             }
         }
+        let sub_shown = sub_begin.is_some();
+        crate::motion::popup_end(ui, "flyout-sub", sub_begin.unwrap_or_else(|| crate::motion::popup_begin(ui)), sub_shown);
         let outside = !ws.just_opened()
             && ui.input(|i| {
                 i.pointer.any_click()
@@ -408,6 +414,7 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
             ws.flyout_sub = None;
         }
     }
+    crate::motion::popup_end(ui, "flyout", flyout_begin, flyout_shown);
 
     if let Some((at, under, opened)) = ws.context_menu {
         context_menu(ws, ui, at, under, opened);
@@ -539,23 +546,38 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
         // A failed step's message ends with Report…, set off by a hairline.
         let extra = if t.failure.is_some() { 74.0 } else { 0.0 };
         let r = Rect::from_center_size(pos2(vp.center().x, y), vec2(g.size().x + 24.0 + extra, 30.0));
-        p.rect_filled(r, radius(8), Tokens::banner());
-        p.rect_stroke(r, radius(8), Stroke::new(1.0, Tokens::chip_border()), StrokeKind::Inside);
-        p.text(pos2(r.left() + 12.0 + g.size().x / 2.0, r.center().y), Align2::CENTER_CENTER, &t.text, theme::body(12.0), Tokens::text());
-        if let Some(f) = &t.failure {
-            let b = Rect::from_min_max(pos2(r.right() - extra, r.top()), r.max);
-            p.vline(b.left(), (b.top() + 7.0)..=(b.bottom() - 7.0), Stroke::new(1.0, Tokens::chip_border()));
-            let resp = ui.interact(b, ui.scope_id().with(("toast-report", k)), Sense::click());
-            if resp.hovered() {
-                hold = true;
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            p.text(b.center(), Align2::CENTER_CENTER, "Report…", theme::strong(12.0), Tokens::icon_blue());
-            if resp.clicked() {
-                report = Some((k, f.clone()));
-            }
-        }
         y -= 36.0;
+        // Each in an area of its own, so it grows in and shrinks away like any popup (crate::motion).
+        let area = egui::Area::new(ui.scope_id().with(("toast", &t.text, t.since.to_bits())))
+            .order(egui::Order::Foreground)
+            .fixed_pos(r.min)
+            .interactable(t.failure.is_some());
+        area.show(ui.ctx(), |ui| {
+            let p = ui.painter().clone();
+            let _ = ui.allocate_rect(r, Sense::hover());
+            p.rect_filled(r, radius(8), Tokens::banner());
+            p.rect_stroke(r, radius(8), Stroke::new(1.0, Tokens::chip_border()), StrokeKind::Inside);
+            p.text(
+                pos2(r.left() + 12.0 + g.size().x / 2.0, r.center().y),
+                Align2::CENTER_CENTER,
+                &t.text,
+                theme::body(12.0),
+                Tokens::text(),
+            );
+            if let Some(f) = &t.failure {
+                let b = Rect::from_min_max(pos2(r.right() - extra, r.top()), r.max);
+                p.vline(b.left(), (b.top() + 7.0)..=(b.bottom() - 7.0), Stroke::new(1.0, Tokens::chip_border()));
+                let resp = ui.interact(b, ui.scope_id().with(("toast-report", k)), Sense::click());
+                if resp.hovered() {
+                    hold = true;
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                p.text(b.center(), Align2::CENTER_CENTER, "Report…", theme::strong(12.0), Tokens::icon_blue());
+                if resp.clicked() {
+                    report = Some((k, f.clone()));
+                }
+            }
+        });
     }
     // A message under the pointer stays until the pointer leaves it.
     if hold {

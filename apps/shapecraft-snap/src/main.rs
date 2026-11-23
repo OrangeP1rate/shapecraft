@@ -119,6 +119,8 @@ fn run(lines: &[Value], out: Option<&Path>, outcome: &mut Outcome) -> Result<()>
         hosted: false,
     };
     shapecraft_ui::app_log::install_in_memory();
+    // Shots show things at rest; a script turns motion on with {"motion": true} to look at it frame by frame.
+    shapecraft_ui::motion::set_enabled(false);
     // SHAPECRAFT_KERNEL picks the geometry kernel, as in the app (OCCT by default).
     let kernel = shapecraft_kernels::chosen(&[]).map_err(anyhow::Error::msg)?;
     let mut h = Harness::builder()
@@ -271,6 +273,9 @@ fn steps(h: &mut App<'_>, lines: &[Value], out: Option<&Path>, outcome: &mut Out
             let r = (|| Some(egui::Rect::from_min_size(egui::pos2(at(0)?, at(1)?), egui::vec2(at(2)?, at(3)?))))();
             shapecraft_ui::tablet::set_side_bar(r);
             h.run_steps(2);
+        } else if let Some(on) = step.get("motion").and_then(Value::as_bool) {
+            // Popups grow and columns slide (off by default, so shots show things at rest).
+            shapecraft_ui::motion::set_enabled(on);
         } else if let Some(on) = step.get("small_screen").and_then(Value::as_bool) {
             // An Android phone (under 600 dp across).
             shapecraft_ui::tablet::set_small_screen(on);

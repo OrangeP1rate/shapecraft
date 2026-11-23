@@ -170,8 +170,10 @@ pub(super) fn modals(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
     }
 }
 
+/// Escape closes the window, and only the window: the key is used up, so the workspace behind (a sketch, a tool)
+/// doesn't take the same press too.
 fn close_on_escape(ui: &Ui) -> bool {
-    ui.input(|i| i.key_pressed(egui::Key::Escape))
+    ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
 }
 
 /// The ? popover under the title bar: What's New, the manual (shortcuts, navigation) and command search.
@@ -381,15 +383,15 @@ fn window_in(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings, shortcu
         ("Advanced", Icon::Construct, true),
     ];
     let middle = (tabs.len() as f32 - 1.0) / 2.0;
+    // The selected tab's highlight glides to a newly picked tab (crate::motion).
+    let lit_x = crate::motion::tween(ui.ctx(), "prefs-tab", (*tab as f32 - middle) * 58.0, 0.2);
+    p.rect_filled(Rect::from_center_size(pos2(r.center().x + lit_x, r.top() + 48.0), vec2(56.0, 36.0)), radius(5), Tokens::button());
     for (k, (label, icon, enabled)) in tabs.into_iter().enumerate() {
         let c = pos2(r.center().x + (k as f32 - middle) * 58.0, r.top() + 44.0);
         let cell = Rect::from_center_size(c + vec2(0.0, 4.0), vec2(56.0, 36.0));
         let on = enabled && *tab == k;
         if enabled && ui.interact(cell, ui.scope_id().with(("pref-tab", k)), Sense::click()).clicked() {
             *tab = k;
-        }
-        if on {
-            p.rect_filled(cell, radius(5), Tokens::button());
         }
         let col = if on {
             Tokens::icon_blue()
@@ -403,6 +405,8 @@ fn window_in(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings, shortcu
     }
     p.line_segment([pos2(r.left(), r.top() + 70.0), pos2(r.right(), r.top() + 70.0)], Stroke::new(1.0, Tokens::chip_border()));
     let (mut customize, mut presets, mut report) = (false, false, false);
+    // A newly picked tab's page fades in (crate::motion).
+    let page = crate::motion::swap_begin(ui);
     match *tab {
         1 => shapecraft_tab(ui, r, s),
         2 => tablet_tab(ui, r, s),
@@ -411,6 +415,7 @@ fn window_in(ui: &mut Ui, full: Rect, tab: &mut usize, s: &mut Settings, shortcu
         5 => report = advanced_tab(ui, r, s),
         _ => (customize, presets) = general_tab(ui, r, s, shortcuts),
     }
+    crate::motion::swap_end(ui, "prefs-tab", page, *tab as u64);
     let footer = Rect::from_min_max(pos2(r.left(), r.bottom() - 52.0), r.max);
     p.rect_filled(footer, egui::CornerRadius { nw: 0, ne: 0, sw: 11, se: 11 }, theme::c(0x232325));
     let done = button(ui, Rect::from_min_size(pos2(r.right() - 86.0, r.bottom() - 36.0), vec2(70.0, 20.0)), "Done", true, "pref-done");

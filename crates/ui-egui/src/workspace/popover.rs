@@ -346,6 +346,7 @@ pub fn pill_select(ui: &mut Ui, id: &str, right_center: Pos2, min_width: f32, op
                 }
             }
         });
+    crate::motion::include(ui.ctx(), shown.response.layer_id);
     let outside = ui.input(|i| {
         i.pointer.any_click() && i.pointer.interact_pos().is_some_and(|q| !shown.response.rect.contains(q) && !pill.contains(q))
     });

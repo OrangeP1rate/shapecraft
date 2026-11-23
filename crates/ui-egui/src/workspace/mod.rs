@@ -73,6 +73,8 @@ pub(crate) struct Anim {
 pub struct Toast {
     pub text: String,
     pub until: f64,
+    /// When it went up (with the text, it names the toast while it's shown).
+    pub since: f64,
     /// A failed step's message carries what failed, and a Report… button.
     pub failure: Option<shapecraft_report::draft::Failure>,
 }
@@ -524,6 +526,8 @@ pub struct Workspace {
     pub(super) clip_out: Option<String>,
     /// A window of the app's own (the first-run questions) is over the workspace: keys aren't ours.
     pub keys_blocked: bool,
+    /// A popup that takes the keyboard was open when this frame began (its closing key isn't ours too).
+    popup_had_keys: bool,
     pub(crate) now: f64,
     /// What the running tool would produce, shown in place while you drag or type (live geometry).
     pub(crate) preview: Option<Preview>,
@@ -859,6 +863,7 @@ impl Workspace {
             clipboard: (Vec::new(), String::new()),
             clip_out: None,
             keys_blocked: false,
+            popup_had_keys: false,
             now: 0.0,
             preview: None,
         }
@@ -887,7 +892,7 @@ impl Workspace {
     pub fn toast(&mut self, text: impl Into<String>) {
         let text = text.into();
         log::info!("shown: {text}");
-        self.toasts.push(Toast { text, until: self.now + 3.0, failure: None });
+        self.toasts.push(Toast { text, until: self.now + 3.0, since: self.now, failure: None });
     }
 
     /// A failed step's message: it stays a little longer and offers Report…, which opens a report about it.
@@ -900,7 +905,7 @@ impl Workspace {
             error: text.clone(),
         };
         self.toasts.retain(|t| t.text != text);
-        self.toasts.push(Toast { text, until: self.now + 6.0, failure: Some(failure) });
+        self.toasts.push(Toast { text, until: self.now + 6.0, since: self.now, failure: Some(failure) });
     }
 
     /// Move/Rotate's Auto-orientation (on unless switched off; remembered like a variant).
@@ -1062,6 +1067,7 @@ impl Workspace {
     pub fn ui(&mut self, ui: &mut egui::Ui, render_state: Option<&egui_wgpu::RenderState>) {
         shapecraft_doc::set_display_formats(self.feet_architectural, self.degrees_fractional);
         self.now = ui.input(|i| i.time);
+        self.popup_had_keys = self.popup_takes_keys();
         self.poll_import(ui.ctx());
         self.poll_working(ui.ctx());
         if self.preview_pending() {
@@ -1141,8 +1147,12 @@ impl Workspace {
                 pos2(full.right() - gap, crate::tablet::right_bottom(full.bottom(), full.right()) - 8.0),
             )
         });
-        let vp_left = items_rect.map_or(full.left(), |r| r.right() + 3.0);
-        let vp_right = history_rect.map_or(full.right(), |r| r.left() - 3.0);
+        // The columns slide in and out (crate::motion), and the view's edges ride with them: the tools docked beside
+        // a column are carried along, overshoot and all.
+        let items_edge = crate::motion::column(ui.ctx(), "items", items_rect, crate::motion::Edge::Left);
+        let side_edge = crate::motion::column(ui.ctx(), "side", history_rect, crate::motion::Edge::Right);
+        let vp_left = items_edge.map_or(full.left(), |x| x.max(full.left() - 3.0) + 3.0);
+        let vp_right = side_edge.map_or(full.right(), |x| x.min(full.right() + 3.0) - 3.0);
         self.viewport_rect = Rect::from_min_max(pos2(vp_left, body_top), pos2(vp_right, full.bottom()));
         // The 3D view runs under the status bar, home bar and rounded corners (the safe-area insets a phone or
         // tablet page reports) as on a tablet app; the controls above stay inside `full`. Same rect on a computer.
@@ -1170,6 +1180,8 @@ impl Workspace {
         } else {
             panels::titlebar(self, ui, title);
         }
+        // What's drawn between begin and end is the column (it slides; crate::motion).
+        let items_begin = crate::motion::column_begin(ui);
         if let Some(r) = items_rect {
             panels::items_sidebar(self, ui, r);
             // Its right edge resizes it.
@@ -1193,7 +1205,18 @@ impl Workspace {
                 }
             }
         }
+        crate::motion::column_end(ui, "items", items_begin);
+        let side_begin = crate::motion::column_begin(ui);
         if let Some(r) = history_rect {
+            // History, Visualize and a drawing's properties take turns here: the new one fades in.
+            let page = crate::motion::swap_begin(ui);
+            let which = if self.drawings.is_some() {
+                2
+            } else if self.visualizing {
+                1
+            } else {
+                0
+            };
             if self.drawings.is_some() {
                 drawings::properties(self, ui, r);
             } else if self.visualizing {
@@ -1204,7 +1227,9 @@ impl Workspace {
             } else {
                 history::sidebar(self, ui, r);
             }
+            crate::motion::swap_end(ui, "side-page", page, which);
         }
+        crate::motion::column_end(ui, "side", side_begin);
         step_card::show(self, ui);
         panels::popups(self, ui);
         if self.switcher {

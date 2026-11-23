@@ -508,11 +508,12 @@ fn touch_more_menu(ws: &mut Workspace, ui: &mut Ui, more: Rect, more_c: Pos2, be
             vec2(236.0, 16.0 + rows.len() as f32 * ROW),
         );
         rects.push(frame);
-        egui::Area::new(ui.scope_id().with("title-sub")).fixed_pos(frame.min).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
+        let sub = egui::Area::new(ui.scope_id().with("title-sub")).fixed_pos(frame.min).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
             if let Some(p) = paint_rows(ui, frame, rows, None, "title-sub-row", None) {
                 picked = Some(p);
             }
         });
+        crate::motion::include(ui.ctx(), sub.response.layer_id);
     }
     let outside = ui.input(|i| {
         i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|at| !rects.iter().any(|r| r.contains(at)) && !more.contains(at))

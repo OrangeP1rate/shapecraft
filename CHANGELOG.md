@@ -2,6 +2,22 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.12.1-alpha
+**Everything moves now: popups grow in and out, the side columns slide.**
+### Changed
+- **Popups open and close with motion.** Every menu, popover, card, toast and sheet grows out of the spot that
+  opened it and shrinks back into it when it closes, quick and decelerating in, accelerating away. A sheet over a
+  dimmed window (Preferences, Keyboard Shortcuts) grows out of its middle while the dim fades in under it.
+- **The side columns slide.** Hiding Items or History throws the column off the side after a small lean the other
+  way; showing it springs it back in with a few points of overshoot, and the tools beside it ride along.
+- Opening a project dissolves the projects screen into it (and closing one dissolves back). A newly picked
+  Preferences tab fades in while the highlight glides over to it; History, Visualize and a drawing's properties
+  fade into each other.
+- All of it turns off with the system's Reduce Motion (macOS; Animation effects on Windows).
+### Fixed
+- The Escape that closes Preferences, Search or another popup no longer also reaches the workspace behind it (it
+  used to leave the sketch too).
+
 ## 0.12.0-alpha
 **Open the parts other CAD systems save: SolidWorks, NX, Solid Edge and JT. Export FBX and VRML.**
 ### New

@@ -178,24 +178,34 @@ pub fn bundle(args: &[String]) -> Result<()> {
     applications_link(&stage)?;
     let dmg = target().join(format!("shapecraft-{version}-macos-{arch}.dmg"));
     let _ = std::fs::remove_file(&dmg);
-    run(
-        "hdiutil",
-        &[
-            "create",
-            "-quiet",
-            "-volname",
-            &format!("ShapeCraft {version}"),
-            "-srcfolder",
-            s(&stage),
-            "-fs",
-            "HFS+",
-            "-format",
-            "UDZO",
-            "-imagekey",
-            "zlib-level=9",
-            s(&dmg),
-        ],
-    )?;
+    // hdiutil now and then fails for no reason of ours on a busy machine ("Resource busy"): a few tries.
+    let volume = format!("ShapeCraft {version}");
+    let args = [
+        "create",
+        "-quiet",
+        "-volname",
+        &volume,
+        "-srcfolder",
+        s(&stage),
+        "-fs",
+        "HFS+",
+        "-format",
+        "UDZO",
+        "-imagekey",
+        "zlib-level=9",
+        s(&dmg),
+    ];
+    for left in (0..4).rev() {
+        match run("hdiutil", &args) {
+            Ok(()) => break,
+            Err(e) if left == 0 => return Err(e),
+            Err(e) => {
+                eprintln!("{e:#}; trying again");
+                let _ = std::fs::remove_file(&dmg);
+                std::thread::sleep(std::time::Duration::from_secs(10));
+            }
+        }
+    }
     println!("{}  ({libraries} libraries inside, {})", dmg.display(), mb(&dmg));
     Ok(())
 }

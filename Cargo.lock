@@ -4251,6 +4251,7 @@ dependencies = [
  "shapecraft-shapr",
  "shapecraft-xt",
  "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]

@@ -489,3 +489,36 @@ fn sample_mesh_exports() {
         s.execute(cmd, &json!({"path": format!("{dir}/{f}")})).unwrap();
     }
 }
+
+/// 3MF (#93): what we export comes back as mesh bodies in a folder named after the file, with names and colors.
+#[test]
+fn a_3mf_comes_back_with_names_and_colors() {
+    let mut s = session();
+    let id = super::holed_block(&mut s).0;
+    s.execute("rename", &json!({"item": id, "name": "Lid & hinge"})).unwrap();
+    s.execute(
+        "set_appearance",
+        &json!({"items": [id], "appearance": {"name": "Red", "color": [1.0, 0.0, 0.0], "metal": 0.0, "gloss": 0.5}}),
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!("shapecraft-3mf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("part.3mf");
+    s.execute("export_3mf", &json!({"path": path})).unwrap();
+    let mut t = session();
+    let v = t.execute("import_file", &json!({"path": path})).unwrap().value;
+    assert_eq!(v["mesh"], json!(true));
+    let b = &t.doc.bodies[0];
+    assert_eq!(b.name, "Lid & hinge");
+    assert!(b.is_mesh() && b.facets.as_ref().unwrap().is_closed());
+    let c = b.appearance.as_ref().unwrap().color;
+    assert!(c[0] > 0.99 && c[1] < 0.01 && c[2] < 0.01, "{c:?}");
+    assert_eq!(t.doc.folders[0].name, "part.3mf");
+    // Told by its contents when the name doesn't say, and taken back in one undo.
+    let bare = dir.join("part");
+    std::fs::copy(&path, &bare).unwrap();
+    t.execute("undo", &json!({})).unwrap();
+    assert!(t.doc.bodies.is_empty());
+    t.execute("import_file", &json!({"path": bare})).unwrap();
+    assert_eq!(t.doc.bodies.len(), 1);
+}

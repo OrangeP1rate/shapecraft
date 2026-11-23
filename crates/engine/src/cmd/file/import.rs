@@ -87,8 +87,8 @@ pub(super) fn commands() -> Vec<CommandSpec> {
             label: "Import File…",
             menu: "File/Import File…",
             shortcut: Some("⇧⌘I"),
-            help: "Import STEP, IGES, Parasolid, SolidWorks, NX, Solid Edge or JT bodies, STL or OBJ meshes as bodies, or DXF or SVG drawings as a sketch",
-            params: r#"{"path": "/in.step|.stp|.iges|.igs|.x_t|.x_b|.sldprt|.prt (NX)|.par|.psm|.jt|.stl|.obj|.dxf|.svg", "config": n? (SolidWorks: which configuration, default the first), "plane": "top"|"front"|"right"? (DXF/SVG: the sketch plane, default top), "units": "mm"|"cm"|"m"|"in"|"ft"? (STL/OBJ: what the file's numbers are in, default mm), "heal": "quality"|"speed"|{"repair": bool, "edges": bool, "sew": bool, "simplify": bool}? (STEP/IGES/Parasolid clean-up, default speed = none)}"#,
+            help: "Import STEP, IGES, Parasolid, SolidWorks, NX, Solid Edge or JT bodies, STL, OBJ or 3MF meshes as bodies, or DXF or SVG drawings as a sketch",
+            params: r#"{"path": "/in.step|.stp|.iges|.igs|.x_t|.x_b|.sldprt|.prt (NX)|.par|.psm|.jt|.stl|.obj|.3mf|.dxf|.svg", "config": n? (SolidWorks: which configuration, default the first), "plane": "top"|"front"|"right"? (DXF/SVG: the sketch plane, default top), "units": "mm"|"cm"|"m"|"in"|"ft"? (STL/OBJ: what the file's numbers are in, default mm), "heal": "quality"|"speed"|{"repair": bool, "edges": bool, "sew": bool, "simplify": bool}? (STEP/IGES/Parasolid clean-up, default speed = none)}"#,
             modifies: true,
             enabled: always,
             run: import_file,
@@ -334,6 +334,31 @@ fn import_any(s: &mut Session, p: &Params) -> Result<Value> {
             s.selection.clear();
             Ok(json!({ "bodies": [id.0], "folder": folder, "mesh": true }))
         }
+        "3mf" => {
+            s.stage("Reading the 3MF file…", 0);
+            let bytes = read_capped(&path)?;
+            let parts = formats::read_3mf(&bytes).map_err(bad)?;
+            s.stage("Adding the parts…", parts.len() as u64);
+            let mut ids = Vec::new();
+            for part in parts {
+                s.progress_step();
+                let (pts, idx) = formats::weld(&part.points, &part.triangles);
+                // A part with nothing but collapsed triangles adds nothing.
+                let Some(facets) = shapecraft_doc::Facets::new(pts, &idx) else { continue };
+                let name = part.name.unwrap_or_else(|| format!("Mesh body {:02}", ids.len() + 1));
+                let id = crate::cmd::model::add_mesh_body(s, facets, name)?;
+                if let (Some(color), Some(b)) = (part.color, s.doc.body_mut(id)) {
+                    b.appearance = Some(shapecraft_doc::Appearance { name: "Imported Color".into(), color, ..Default::default() });
+                }
+                ids.push(id);
+            }
+            if ids.is_empty() {
+                return Err(EngineError::BadParams(format!("{} has no usable triangles", path.display())));
+            }
+            let folder = file_folder(s, &path, &ids);
+            s.selection.clear();
+            Ok(json!({ "bodies": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "folder": folder, "mesh": true }))
+        }
         "dxf" | "svg" => {
             let text = String::from_utf8_lossy(&read_capped(&path)?).into_owned();
             let entities = if ext == "dxf" { formats::read_dxf(&text) } else { formats::read_svg(&text) }.map_err(bad)?;
@@ -489,7 +514,7 @@ fn file_folder(s: &mut Session, path: &std::path::Path, items: &[shapecraft_doc:
 
 const KNOWN_IMPORTS: &[&str] = &[
     "step", "stp", "shapr", "x_t", "x_b", "xmt_txt", "xmt_bin", "sldprt", "prt", "par", "psm", "pwd", "jt", "iges", "igs", "stl", "obj",
-    "dxf", "svg",
+    "3mf", "dxf", "svg",
 ];
 
 /// The import kind of a file from its first bytes: a Shapr3D project (a ZIP holding `workspace`), Parasolid
@@ -505,7 +530,9 @@ fn sniff(path: &std::path::Path) -> Option<String> {
     }
     let head = &head[..];
     let has = |needle: &[u8]| head.windows(needle.len()).any(|w| w == needle);
-    let kind = if head.starts_with(b"PK\x03\x04") && (has(b"workspace") || has(b".metadata")) {
+    let kind = if head.starts_with(b"PK\x03\x04") && (has(b"3D/3dmodel.model") || has(b"[Content_Types].xml") && has(b"3D/")) {
+        "3mf"
+    } else if head.starts_with(b"PK\x03\x04") && (has(b"workspace") || has(b".metadata")) {
         "shapr"
     } else if shapecraft_xt::sldprt::is_solidworks(head) {
         "sldprt"

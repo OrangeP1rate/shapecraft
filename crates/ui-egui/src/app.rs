@@ -879,7 +879,7 @@ impl ShapeCraftApp {
                 "All Supported Files",
                 &[
                     "shapr", "step", "stp", "x_t", "x_b", "sldprt", "SLDPRT", "prt", "par", "psm", "pwd", "jt", "iges", "igs", "stl",
-                    "obj", "dxf", "svg",
+                    "obj", "3mf", "3MF", "dxf", "svg",
                 ],
             ),
             (".shapr project", &["shapr"]),
@@ -890,7 +890,7 @@ impl ShapeCraftApp {
             ("Solid Edge part", &["par", "psm", "pwd"]),
             ("JT", &["jt"]),
             ("IGES", &["iges", "igs"]),
-            ("Meshes (STL, OBJ)", &["stl", "obj"]),
+            ("Meshes (STL, OBJ, 3MF)", &["stl", "obj", "3mf", "3MF"]),
             ("2D (DXF, SVG)", &["dxf", "svg"]),
         ];
         self.open_path(Wanted::Import, "Import", &filters, |app, path| {

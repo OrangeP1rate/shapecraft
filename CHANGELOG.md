@@ -2,6 +2,25 @@
 
 How versions are numbered: [`docs/versioning.md`](docs/versioning.md). Newest first.
 
+## 0.12.8-alpha
+**A hovering stylus lights what it's over on Android, and Spanish is complete.**
+### New
+- **Plane squares on touch screens** (Preferences ▸ Tablet ▸ Show the plane squares when starting a sketch): tap one with
+  the pen to sketch on that plane, upright ones too. Off, the pen's first stroke picks the floor or a face, as before.
+  Thanks [@Capdan83](https://github.com/Capdan83) (#95).
+- **The interface is in Spanish throughout**: settings, tips and suggestions included. Corrections are very welcome.
+### Changed
+- **A sketch hides once all its curves have been used.** Extrude a ring and the circle inside it goes along; extrude every
+  letter of a text and their holes do. Separate profiles still wait their turn, and Preferences ▸ General ▸ Sketches ▸
+  Stay shown until every region is used keeps it until the very last one.
+- Hints on a touch screen follow your language. Reworded for the pen, they used to fall back to English.
+### Fixed
+- **A stylus hovering over the screen on Android lights corners, middles, centers and faces**, before it touches. The view
+  wasn't redrawn until something else moved. A mouse's hover, buttons and wheel answer at once there too.
+  Thanks [@Capdan83](https://github.com/Capdan83) (#95).
+- A ring counted as used once the circle inside it was (they share a center), so the sketch could hide too early.
+- The Project button said "to project" in languages that tell the two apart.
+
 ## 0.12.7-alpha
 **3MF files open, threads come out right, and there are two new sketch tools: Slot and Extend.**
 ### New

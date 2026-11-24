@@ -42,7 +42,7 @@ pub(in crate::workspace) fn popups(ws: &mut Workspace, ui: &mut Ui) {
     let predicted = if ws.tutorial.is_some() { None } else { predicted };
     // A touch screen with no keyboard: the pencil's words, and no keys to press (as on iPad).
     let touch_words: Option<(String, String)> = (!crate::tablet::shows_shortcuts())
-        .then(|| predicted.map(|(t, b)| (t.to_string(), touch_hint(&ws.tool, ws.pending_tool, b))))
+        .then(|| predicted.map(|(t, b)| (t.to_string(), translated_touch_hint(&ws.tool, ws.pending_tool, b))))
         .flatten();
     let predicted: Option<(&str, &str)> = match &touch_words {
         Some((t, b)) => Some((t.as_str(), b.as_str())),
@@ -778,18 +778,38 @@ pub(crate) fn touch_hint(tool: &Tool, pending: Option<crate::workspace::toolbar:
     if line {
         return "Draw lines with the pen. A round stroke draws a circle.".to_string();
     }
-    let keys = ["Return", "Escape", "Esc ", "Tab", "Shift", "⌘", "⌥", "Space", "Press ", "press ", "Delete key", "arrow keys"];
-    let mut kept: Vec<String> = Vec::new();
-    for sentence in body.split_inclusive(['.', ';']) {
-        let s = sentence.trim();
-        if s.is_empty() || keys.iter().any(|k| s.contains(k)) {
-            continue;
-        }
-        let s = s.trim_end_matches(';').to_string();
-        kept.push(if s.ends_with('.') || s.ends_with('!') || s.ends_with('?') { s } else { format!("{s}.") });
-    }
+    let kept: Vec<String> = sentences(body).into_iter().filter(|s| !names_keys(s)).map(full_stop).collect();
     let out = if kept.is_empty() { body.to_string() } else { kept.join(" ") };
     out.replace("Click", "Tap").replace("click", "tap")
+}
+
+fn names_keys(sentence: &str) -> bool {
+    let keys = ["Return", "Escape", "Esc ", "Tab", "Shift", "⌘", "⌥", "Space", "Press ", "press ", "Delete key", "arrow keys"];
+    keys.iter().any(|k| sentence.contains(k))
+}
+
+fn sentences(body: &str) -> Vec<&str> {
+    body.split_inclusive(['.', ';', '。', '；']).map(str::trim).filter(|s| !s.is_empty()).collect()
+}
+
+fn full_stop(sentence: &str) -> String {
+    let s = sentence.trim_end_matches([';', '；']);
+    if s.ends_with(['.', '!', '?', '。']) { s.to_string() } else { format!("{s}.") }
+}
+
+/// [`touch_hint`] in the interface's language. Where the reworded hint has no translation of its own, the whole
+/// hint's is used, with the same sentences about keys left out (all of it when the sentences don't line up).
+fn translated_touch_hint(tool: &Tool, pending: Option<crate::workspace::toolbar::ToolKind>, body: &str) -> String {
+    let hint = touch_hint(tool, pending, body);
+    let local = crate::i18n::tr(body);
+    if crate::i18n::tr(&hint) != hint || local == body {
+        return hint;
+    }
+    let (en, theirs) = (sentences(body), sentences(local));
+    if en.len() != theirs.len() || en.iter().all(|s| names_keys(s)) {
+        return local.to_string();
+    }
+    en.iter().zip(theirs).filter(|(e, _)| !names_keys(e)).map(|(_, t)| full_stop(t)).collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -803,5 +823,15 @@ mod touch_hint_tests {
         let idle = Tool::Idle;
         assert_eq!(touch_hint(&idle, None, "Click a face to start. Return finishes; Escape cancels."), "Tap a face to start.");
         assert_eq!(touch_hint(&idle, None, "Press E to extrude"), "Press E to extrude", "nothing left: the original stays");
+    }
+
+    #[test]
+    fn sentences_and_keys() {
+        assert_eq!(sentences("Click a face. Return ends; Escape cancels."), ["Click a face.", "Return ends;", "Escape cancels."]);
+        assert!(names_keys("Return ends;") && !names_keys("Click a face."));
+        assert_eq!(full_stop("Click a face;"), "Click a face.");
+        // No translation (English): the same as the reworded hint.
+        let idle = Tool::Idle;
+        assert_eq!(translated_touch_hint(&idle, None, "Click a face to start. Return finishes; Escape cancels."), "Tap a face to start.");
     }
 }

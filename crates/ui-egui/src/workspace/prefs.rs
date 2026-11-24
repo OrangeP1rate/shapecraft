@@ -434,7 +434,7 @@ fn radio(ui: &mut Ui, at: Pos2, id: &str, on: bool, enabled: bool, name: &str, d
     if on {
         p.circle_filled(dot, 2.5, Color32::WHITE);
     }
-    p.text(pos2(at.x + 22.0, at.y), Align2::LEFT_CENTER, name, theme::body(12.5), text);
+    p.text(pos2(at.x + 22.0, at.y), Align2::LEFT_CENTER, crate::i18n::tr(name), theme::body(12.5), text);
     let dim = if enabled { Tokens::text_dim() } else { Tokens::text_faint() };
     p.text(pos2(at.x + 22.0, at.y + 15.0), Align2::LEFT_CENTER, crate::i18n::tr_s(detail), theme::body(10.0), dim);
     enabled && resp.clicked()
@@ -801,6 +801,8 @@ fn tablet_tab(ui: &mut Ui, r: Rect, s: &mut Settings) {
     // How the pen draws, wherever there is one (a browser on a tablet, an Android tablet).
     row_label(&p, col, y, "Pen:");
     check(ui, pos2(col, y), "pref-pen-circles", &mut s.pen_circles, "A quick round stroke with Line draws a circle");
+    y += 22.0;
+    check(ui, pos2(col, y), "pref-plane-squares", &mut s.touch_plane_squares, "Show the plane squares when starting a sketch");
     y += 22.0;
     sep(y);
     y += 24.0;
@@ -1358,6 +1360,9 @@ fn general_tab(ui: &mut Ui, r: Rect, s: &mut Settings, shortcuts: bool) -> (bool
     y += pitch;
     row_label(&p, col, y, "Selection Extension:");
     check(ui, pos2(col, y), "pref-ext", &mut s.extend_needs_shift, "Require holding shift");
+    y += pitch;
+    row_label(&p, col, y, "Sketches:");
+    check(ui, pos2(col, y), "pref-keep-sketches", &mut s.keep_sketches, "Stay shown until every region is used");
     y += pitch;
     // Everything in `crate::motion`: off for the slowest machines (the camera has its own switch in View).
     row_label(&p, col, y, "Animations:");

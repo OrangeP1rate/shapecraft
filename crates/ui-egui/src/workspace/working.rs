@@ -261,7 +261,7 @@ pub(super) fn card(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
     let b = Rect::from_min_max(pos2(r.right() - 96.0, r.bottom() - 38.0), pos2(r.right() - 14.0, r.bottom() - 12.0));
     let resp = ui.interact(b, ui.scope_id().with("working-cancel"), Sense::click());
     p.rect_filled(b, radius(7), if resp.hovered() { Tokens::button_hover() } else { Tokens::button() });
-    p.text(b.center(), Align2::CENTER_CENTER, "Cancel", theme::strong(13.0), Tokens::text_strong());
+    p.text(b.center(), Align2::CENTER_CENTER, crate::i18n::tr("Cancel"), theme::strong(13.0), Tokens::text_strong());
     ui.ctx().request_repaint();
     if resp.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         ws.cancel_working();

@@ -77,6 +77,8 @@ pub struct Session {
     pub(crate) replayed: Arc<Vec<history::Replayed>>,
     /// Where a long command says what it is doing, when something is waiting to show it.
     pub progress: Option<Arc<progress::Progress>>,
+    /// A sketch stays shown until every one of its regions has been used (off: until every curve has).
+    pub keep_sketches: bool,
 }
 
 #[derive(Clone)]
@@ -119,6 +121,7 @@ impl Session {
             log_params: None,
             replayed: Arc::new(Vec::new()),
             progress: None,
+            keep_sketches: false,
         }
     }
 
@@ -158,6 +161,7 @@ impl Session {
             log_params: None,
             replayed: self.replayed.clone(),
             progress: None,
+            keep_sketches: self.keep_sketches,
         }
     }
 
@@ -188,6 +192,7 @@ impl Session {
             log_params: None,
             replayed: self.replayed.clone(),
             progress: None,
+            keep_sketches: self.keep_sketches,
         }
     }
 

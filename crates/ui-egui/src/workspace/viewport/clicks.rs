@@ -414,10 +414,15 @@ impl Workspace {
             && !self.touch_drag
             && let Some(origin) = ui.input(|i| i.pointer.press_origin())
         {
+            let on_square = self.touch_square_under(origin);
             let now = self.cursor;
             self.cursor = Some(origin);
             self.click_at(origin, false);
             self.cursor = now;
+            // A pen that wobbled on a plane square picked the plane; nothing is drawn from there.
+            if on_square {
+                return true;
+            }
             self.sketch_drag = Some(origin);
             self.pen_stroke = PenStroke::start(origin, self.now);
             return true;
@@ -842,9 +847,10 @@ impl Workspace {
                 };
                 // Picked after the Sketch button (no tool waiting): the sketch opens on that
                 // plane, the camera turns to face it (a face is also framed) and Line is armed, but this click only
-                // picks the plane: no line starts from it.
+                // picks the plane: no line starts from it. So does a pen on a plane square (a touch screen's Sketch
+                // button arms Line at once).
                 if let Some(params) = params.clone()
-                    && self.pending_tool.is_none()
+                    && (self.pending_tool.is_none() || self.touch_square_under(c))
                 {
                     self.start_sketch_on(params);
                 } else if let Some(params) = params

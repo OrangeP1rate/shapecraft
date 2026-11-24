@@ -707,7 +707,13 @@ fn sheet(ui: &mut Ui, id: &str, rows: &[Row]) -> (Option<(usize, usize)>, Rect) 
                         p.text(pos2(tx, r.center().y), Align2::LEFT_CENTER, *label, body.clone(), if *saved { ink } else { dim });
                         if !saved {
                             // No hover on glass: an empty slot always offers Save.
-                            p.text(pos2(r.right() - INSET, r.center().y), Align2::RIGHT_CENTER, "Save", body.clone(), Tokens::accent());
+                            p.text(
+                                pos2(r.right() - INSET, r.center().y),
+                                Align2::RIGHT_CENTER,
+                                crate::i18n::tr("Save"),
+                                body.clone(),
+                                Tokens::accent(),
+                            );
                         }
                         if resp.clicked() {
                             clicked = Some((i, usize::from(!saved)));

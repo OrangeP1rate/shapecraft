@@ -489,6 +489,25 @@ pub fn region_nesting(regions: &[Region]) -> Vec<(usize, Option<u32>)> {
         .collect()
 }
 
+/// Points along an outline: the middles of its pieces, or of sixteenths of them where they are few (straight sides).
+fn outline_samples(o: &[DVec2]) -> Vec<DVec2> {
+    let parts = if o.len() <= 9 { 16 } else { 1 };
+    o.windows(2).flat_map(|w| (0..parts).map(move |k| w[0].lerp(w[1], (f64::from(k) + 0.5) / f64::from(parts)))).collect()
+}
+
+/// Whether any of the points lies on the boundary polylines.
+fn runs_along(points: &[DVec2], boundary: &[Vec<DVec2>], tol: f64) -> bool {
+    points.iter().any(|q| {
+        boundary.iter().any(|line| {
+            line.windows(2).any(|w| {
+                let d = w[1] - w[0];
+                let t = if d.length_squared() > 0.0 { ((*q - w[0]).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+                (w[0] + d * t).distance(*q) < tol
+            })
+        })
+    })
+}
+
 fn tri_area(t: &[DVec2; 3]) -> f64 {
     (t[1] - t[0]).perp_dot(t[2] - t[0]).abs()
 }
@@ -522,9 +541,9 @@ pub struct Sketch {
     /// Derived from the entities by the engine (see [`Sketch::regions_key`]); not saved.
     pub regions: Arc<Vec<Region>>,
     pub regions_for: u64,
-    /// Centers (sketch coordinates) of the regions a feature has used; the sketch hides once none is left. Not
-    /// saved: a reopened project starts counting again.
-    pub used: Vec<DVec2>,
+    /// Centers (sketch coordinates) and areas of the regions a feature has used (a ring and the circle in it share
+    /// their center); the sketch hides once none is left. Not saved: a reopened project starts counting again.
+    pub used: Vec<(DVec2, f64)>,
 }
 
 impl PartialEq for Sketch {
@@ -563,12 +582,36 @@ impl Sketch {
         &self.regions
     }
 
-    /// Marks these regions used, and says whether every region of the sketch has been.
-    pub fn use_regions(&mut self, regions: &[u32]) -> bool {
-        let centers: Vec<DVec2> = regions.iter().filter_map(|i| self.region(*i)).map(|r| r.centroid).collect();
-        self.used.extend(centers);
-        let near = |a: DVec2, b: DVec2| a.distance(b) <= 1e-6 * (1.0 + a.length());
-        self.regions.iter().all(|r| self.used.iter().any(|u| near(*u, r.centroid)))
+    /// Marks these regions used, and says whether the sketch is used up: every curve that bounds a region bounds a
+    /// used one (a ring uses up the circle inside it, a letter its holes), or, with `every_region`,
+    /// each single region has been used.
+    pub fn use_regions(&mut self, regions: &[u32], every_region: bool) -> bool {
+        let these: Vec<(DVec2, f64)> = regions.iter().filter_map(|i| self.region(*i)).map(|r| (r.centroid, r.area)).collect();
+        self.used.extend(these);
+        let same = |u: &(DVec2, f64), r: &Region| {
+            u.0.distance(r.centroid) <= 1e-6 * (1.0 + u.0.length()) && (u.1 - r.area).abs() <= 1e-6 * (1.0 + u.1.abs())
+        };
+        let (used, unused): (Vec<&Region>, Vec<&Region>) = self.regions.iter().partition(|r| self.used.iter().any(|u| same(u, r)));
+        if unused.is_empty() || every_region {
+            return unused.is_empty();
+        }
+        let edges = |rs: &[&Region]| -> Vec<Vec<DVec2>> { rs.iter().flat_map(|r| self.region_boundary(r)).collect() };
+        let (used, unused) = (edges(&used), edges(&unused));
+        let tol = unused.iter().flatten().fold(1.0f64, |m, p| m.max(p.length())) * 1e-4;
+        let mut curves = self
+            .entities
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !self.construction.contains(&(*i as u32)))
+            .flat_map(|(_, e)| e.outlines())
+            .map(|o| outline_samples(&o));
+        curves.all(|c| !runs_along(&c, &unused, tol) || runs_along(&c, &used, tol))
+    }
+
+    /// A region's boundary polylines, in sketch coordinates.
+    fn region_boundary(&self, r: &Region) -> Vec<Vec<DVec2>> {
+        let local = |p: &[f32; 3]| self.plane.to_local(DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64));
+        r.mesh.edges.iter().map(|line| line.iter().map(local).collect()).collect()
     }
 
     pub fn region(&self, index: u32) -> Option<&Region> {
@@ -655,25 +698,12 @@ impl Sketch {
 
     pub fn region_entities(&self, region: u32) -> Vec<u32> {
         let Some(r) = self.region(region) else { return Vec::new() };
-        let boundary: Vec<Vec<DVec2>> = r
-            .mesh
-            .edges
-            .iter()
-            .map(|line| line.iter().map(|p| self.plane.to_local(DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64))).collect())
-            .collect();
+        let boundary = self.region_boundary(r);
         let size = boundary.iter().flatten().fold(0.0f64, |m, p| m.max(p.length())).max(1.0);
         let tol = size * 1e-4;
-        let near = |q: DVec2| {
-            boundary.iter().any(|line| {
-                line.windows(2).any(|w| {
-                    let d = w[1] - w[0];
-                    let t = if d.length_squared() > 0.0 { ((q - w[0]).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
-                    (w[0] + d * t).distance(q) < tol
-                })
-            })
-        };
+        let mids = |o: &[DVec2]| -> Vec<DVec2> { o.windows(2).map(|w| (w[0] + w[1]) / 2.0).collect() };
         (0..self.entities.len() as u32)
-            .filter(|&i| self.entities[i as usize].outlines().iter().any(|o| o.windows(2).any(|w| near((w[0] + w[1]) / 2.0))))
+            .filter(|&i| self.entities[i as usize].outlines().iter().any(|o| runs_along(&mids(o), &boundary, tol)))
             .collect()
     }
 

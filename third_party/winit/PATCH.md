@@ -32,3 +32,7 @@ before and after (`pointers::changed_button`) instead of calling `MotionEvent::a
 `AMotionEvent_getActionButton`, which only Android 13 (API 33) has, and the app says it runs from Android 8: the
 library then failed to load on anything older. `cargo xtask android-apk` now checks every system symbol the library
 needs exists at the oldest API it supports.
+
+Android (later, #95): those records alone never drew a frame. Hover, mouse buttons and scrolling send no window event
+and the app takes the records as it draws, so a pen hovering over a still view lit nothing. `handle_input_event` now
+sets the redraw flag for them.

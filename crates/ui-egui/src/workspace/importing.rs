@@ -172,7 +172,7 @@ pub(super) fn card(ws: &mut Workspace, ui: &mut Ui, full: Rect) {
     let cancel = Rect::from_center_size(mid + vec2(0.0, 92.0), g.size() + vec2(16.0, 8.0));
     let cr = ui.interact(cancel, ui.scope_id().with("import-running-cancel"), Sense::click());
     let ink = if cr.hovered() { Color32::WHITE } else { theme::c(0x8e8e93) };
-    p.text(cancel.center(), Align2::CENTER_CENTER, "Cancel", theme::body(13.0), ink);
+    p.text(cancel.center(), Align2::CENTER_CENTER, crate::i18n::tr("Cancel"), theme::body(13.0), ink);
     if cr.hovered() {
         p.line_segment(
             [pos2(cancel.left() + 8.0, cancel.bottom() - 3.0), pos2(cancel.right() - 8.0, cancel.bottom() - 3.0)],

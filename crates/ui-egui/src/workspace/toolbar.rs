@@ -844,7 +844,12 @@ pub fn chip_full(ui: &Ui, anchor: Pos2, def: &ToolDef, sub_text: Option<&str>, l
     let tr = crate::i18n::tr;
     // Touch screens: labels about 1.15× bigger ("Sketch" 49.5 pt wide on iPad, 41 on a desktop).
     let (label_px, sub_px, half) = if crate::tablet::touch_ui() { (15.5, 11.0, 7.0) } else { (13.5, 9.5, 6.0) };
-    let label = painter.layout_no_wrap(tr(title).to_string(), theme::strong(label_px), Tokens::text_strong());
+    // "Project" the thing (Project ▸ Modeling), which many languages don't spell like Project the tool.
+    let title = match (title, def.icon) {
+        ("Project", Icon::Modeling | Icon::Merged) => tr("Project…").trim_end_matches('…'),
+        _ => tr(title),
+    };
+    let label = painter.layout_no_wrap(title.to_string(), theme::strong(label_px), Tokens::text_strong());
     let sub = sub_text.map(|s| painter.layout_no_wrap(tr(s).to_string(), theme::body(sub_px), Tokens::text_dim()));
     let caps_w: f32 = theme::key_caps(def.keys)
         .into_iter()
@@ -865,7 +870,7 @@ pub fn chip_full(ui: &Ui, anchor: Pos2, def: &ToolDef, sub_text: Option<&str>, l
     let (label_y, sub_y) = if sub.is_some() { (rect.center().y - half, rect.center().y + half + 1.0) } else { (rect.center().y, 0.0) };
     // A chip left of its button (right column, constraints) mirrors: key caps first, text right-aligned (L05, 12).
     let (text_x, align) = if left_side { (rect.right() - 8.0, Align2::RIGHT_CENTER) } else { (rect.left() + 8.0, Align2::LEFT_CENTER) };
-    painter.text(pos2(text_x, label_y), align, tr(title), theme::strong(label_px), text_color);
+    painter.text(pos2(text_x, label_y), align, title, theme::strong(label_px), text_color);
     if let Some(s) = sub_text {
         painter.text(pos2(text_x, sub_y), align, tr(s), theme::body(sub_px), Tokens::text_dim());
     }

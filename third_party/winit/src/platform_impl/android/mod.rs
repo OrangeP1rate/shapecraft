@@ -386,7 +386,10 @@ impl<T: 'static> EventLoop<T> {
                     MotionAction::Move => Some(event::TouchPhase::Moved),
                     MotionAction::Cancel => Some(event::TouchPhase::Cancelled),
                     _ => {
-                        None // TODO mouse events
+                        // ShapeCraft patch: hover, mouse buttons and scrolling reach the app only through the
+                        // recorded pointers, which it reads as it draws, so ask for a frame (#95).
+                        self.redraw_flag.setter().set();
+                        None
                     },
                 };
                 if let Some(phase) = phase {

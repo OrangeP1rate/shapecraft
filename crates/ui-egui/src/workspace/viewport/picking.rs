@@ -162,8 +162,9 @@ impl Workspace {
         }
         let hovered = match (self.tool.clone(), self.section_pick) {
             (_, Some(h)) => h,
-            // On a touch screen the pencil draws straight onto the floor grid or a face (iPad): no tiles.
-            (Tool::PickPlane { .. }, _) if crate::tablet::touch_ui() => return Vec::new(),
+            // On a touch screen the pencil draws straight onto the floor grid or a face (iPad): no tiles, unless
+            // asked for (#95).
+            (Tool::PickPlane { .. }, _) if crate::tablet::touch_ui() && !self.settings.touch_plane_squares => return Vec::new(),
             (Tool::PickPlane { hovered }, _) => hovered,
             _ => return Vec::new(),
         };
@@ -189,6 +190,11 @@ impl Workspace {
             }
         }
         best.map(|(_, i)| i)
+    }
+
+    /// On a touch screen, whether a plane square is under the pen (Preferences ▸ Tablet shows them, #95).
+    pub(super) fn touch_square_under(&self, cursor: Pos2) -> bool {
+        crate::tablet::touch_ui() && matches!(self.tool, Tool::PickPlane { .. }) && self.tile_under(cursor).is_some()
     }
 
     /// A mesh body's triangle under the cursor: a point on it and its outward normal (Sketch on Face on a mesh).

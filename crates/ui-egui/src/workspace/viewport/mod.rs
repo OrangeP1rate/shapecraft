@@ -65,6 +65,7 @@ impl Workspace {
 
     /// Draws the 3D view and handles input over it.
     pub(in crate::workspace) fn viewport(&mut self, ui: &mut Ui, render_state: Option<&egui_wgpu::RenderState>) {
+        self.session.keep_sketches = self.settings.keep_sketches;
         self.confirm_seen = self.confirm.take();
         self.seen_bottom.clear();
         if self.confirm_seen.is_none() {

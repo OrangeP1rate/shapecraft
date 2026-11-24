@@ -123,6 +123,11 @@ pub struct Settings {
     pub setup_done: bool,
     /// Preferences ▸ Tablet: a quick round pen stroke with Line draws a circle.
     pub pen_circles: bool,
+    /// Preferences ▸ General: a sketch stays shown until every one of its regions has been used, not just every curve.
+    pub keep_sketches: bool,
+    /// Preferences ▸ Tablet: on a touch screen, starting a sketch also shows the plane squares, as with a mouse
+    /// (off: the pen's first stroke picks the floor or the face under it).
+    pub touch_plane_squares: bool,
     /// Preferences ▸ Advanced ▸ Geometry Kernel: "occt" or "rust". Read at startup.
     pub kernel: String,
 }
@@ -195,6 +200,8 @@ impl Default for Settings {
             backup_after_change: false,
             setup_done: false,
             pen_circles: true,
+            keep_sketches: false,
+            touch_plane_squares: false,
             kernel: "occt".into(),
             import_mode: "Quality".into(),
             import_custom: [true; 4],

@@ -494,6 +494,45 @@ fn sketch_hides_only_once_every_profile_is_used() {
     assert!(s.doc.sketches[0].visible, "region 2 still unused");
 }
 
+/// A sketch is used up when all of its curves are (a ring takes its hole's circle along, a lens both circles);
+/// `keep_sketches` waits for every region instead.
+#[test]
+fn a_sketch_hides_once_its_curves_are_used() {
+    for (second, regions) in [(json!({"center": [0, 0], "radius": 3}), 2), (json!({"center": [7, 0], "radius": 5}), 3)] {
+        for keep in [false, true] {
+            let mut s = session();
+            s.keep_sketches = keep;
+            s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+            s.execute("circle", &json!({"center": [0, 0], "radius": 5})).unwrap();
+            s.execute("circle", &second).unwrap();
+            let sketch = s.active_sketch.unwrap();
+            assert_eq!(s.doc.sketches[0].regions().len(), regions);
+            // The region both circles bound: the ring, the lens.
+            let both = s.doc.sketches[0].regions().iter().map(|r| r.index).find(|&i| s.doc.sketches[0].region_entities(i).len() == 2);
+            let lens = s.doc.sketches[0].regions().iter().min_by(|a, b| a.area.total_cmp(&b.area)).unwrap().index;
+            let pick = if regions == 3 { lens } else { both.unwrap() };
+            s.execute("extrude", &json!({"sketch": sketch.0, "region": pick, "distance": 5})).unwrap();
+            assert_eq!(s.doc.sketches[0].visible, keep, "{regions} regions, keep {keep}");
+        }
+    }
+}
+
+/// Every letter extruded: the sketch hides, though the holes of A and B are regions nobody used.
+#[test]
+fn a_text_sketch_hides_once_its_letters_are_used() {
+    let mut s = session();
+    s.execute("sketch", &json!({"plane": "xy"})).unwrap();
+    s.execute("text", &json!({"text": "AIB", "at": [0, 0], "size": 10})).unwrap();
+    let sketch = s.active_sketch.unwrap();
+    let first = s.doc.sketches[0].regions()[0].index;
+    let letters = s.doc.sketches[0].text_regions(first).unwrap();
+    assert!(letters.len() == 3 && s.doc.sketches[0].regions().len() == 6, "{letters:?}");
+    s.execute("extrude", &json!({"sketch": sketch.0, "regions": &letters[..2], "distance": 2})).unwrap();
+    assert!(s.doc.sketches[0].visible, "a letter left");
+    s.execute("extrude", &json!({"sketch": sketch.0, "region": letters[2], "distance": 2})).unwrap();
+    assert!(!s.doc.sketches[0].visible, "every letter used");
+}
+
 /// #50: extruding text, letter by letter or all at once, never leaves a body without extent behind, and a
 /// circle extruded after it still works ("bounds failed: shape has no extent").
 #[test]

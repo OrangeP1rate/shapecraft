@@ -176,7 +176,7 @@ pub(in crate::workspace) fn touch_title(ws: &mut Workspace, ui: &mut Ui, bar: Re
     if ws.pen_bubble() {
         // Measured on iPad: a red-tinted capsule 10 pt under the pill, 27.5 tall. A tap opens its card.
         let text = if crate::tablet::on_tablet() { "Apple Pencil may not be connected" } else { "Stylus may not be connected" };
-        let g = ui.painter().layout_no_wrap(text.into(), theme::body(13.0), theme::c(0xff6961));
+        let g = ui.painter().layout_no_wrap(crate::i18n::tr_s(text), theme::body(13.0), theme::c(0xff6961));
         let r = Rect::from_center_size(pos2(frame.center().x, frame.bottom() + 10.0 + 14.0), vec2(g.size().x + 28.0, 27.5));
         // On a phone it sits beside the corner title, on its row (the column starts right under it).
         let r = if compact { r.translate(vec2(frame.right() + 10.0 - r.left(), frame.center().y - r.center().y)) } else { r };

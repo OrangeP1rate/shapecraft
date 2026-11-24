@@ -10557,7 +10557,7 @@ pub const PT_BR: &[(&str, &str)] = &[
 ];
 
 pub const RU: &[(&str, &str)] = &[
-    ("   Date Modified", "   Date Modified"),
+    ("   Date Modified", "   Дата изменения"),
     ("   Name", "   Name"),
     (" (On)", " (On)"),
     (" - Auto", " - Auto"),
